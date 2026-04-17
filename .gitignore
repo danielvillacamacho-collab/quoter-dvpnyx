@@ -3,3 +3,6 @@ node_modules/
 client/build/
 *.log
 .DS_Store
+# Runtime / server-local state (never commit)
+letsencrypt/
+deploy-history.log

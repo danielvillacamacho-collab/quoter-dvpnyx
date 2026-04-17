@@ -41,7 +41,18 @@ jobs:
             set -e
             cd ~/dvpnyx-quoter
 
-            git pull origin main
+            # Fetch latest, then remove any locally-untracked files that
+            # are about to become tracked by the incoming commits
+            # (e.g. a stale pre-existing .gitignore on the server).
+            # Finally hard-reset so the working tree matches origin/main exactly.
+            git fetch origin main
+            git ls-files --others --exclude-standard | while IFS= read -r f; do
+              if [ -n "$f" ] && git cat-file -e "origin/main:$f" 2>/dev/null; then
+                echo "==> Removing incoming-but-untracked file: $f"
+                rm -f "$f"
+              fi
+            done
+            git reset --hard origin/main
             export GIT_SHA=$(git rev-parse --short HEAD)
             export DEPLOY_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
