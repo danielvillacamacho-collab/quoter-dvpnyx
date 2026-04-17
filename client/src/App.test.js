@@ -406,8 +406,9 @@ describe('Wiki — niveles y stack (informativo)', () => {
     expect(screen.getByText(/🎓 Niveles por especialidad/)).toBeInTheDocument();
     // default landing: stack multiplier table visible
     expect(screen.getByText(/Categorías de Stack Tecnológico/i)).toBeInTheDocument();
-    expect(screen.getByText(/×0.90/)).toBeInTheDocument();
-    expect(screen.getByText(/×1.20/)).toBeInTheDocument();
+    // Multiplier values appear both in the tier table (td) and the grid headers (th)
+    expect(screen.getAllByText(/×0.90/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/×1.20/).length).toBeGreaterThan(0);
   });
 
   it('shows stack multiplier tiers with correct criteria', async () => {
