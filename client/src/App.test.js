@@ -208,3 +208,110 @@ describe('Layout — hamburger sidebar', () => {
     expect(document.querySelector('.sidebar')).not.toHaveClass('open');
   });
 });
+
+/* ===== PROJECT EDITOR (fixed_scope stepper) ===== */
+describe('ProjectEditor — fixed_scope stepper', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    localStorage.setItem('dvpnyx_token', 'valid-token');
+    jest.resetAllMocks();
+    api.getMe.mockResolvedValue(mockUser);
+    api.getParams.mockResolvedValue(mockParams);
+    api.getQuotations.mockResolvedValue([]);
+    window.history.pushState({}, '', '/quotation/new/fixed_scope');
+  });
+
+  afterEach(() => { window.history.pushState({}, '', '/'); });
+
+  it('renders 6-step stepper when type=fixed_scope', async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByText(/Nuevo Proyecto/i)).toBeInTheDocument());
+    // stepper nav contains all 6 step labels
+    expect(screen.getAllByText(/Proyecto/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Equipo/)).toBeInTheDocument();
+    expect(screen.getByText(/Fases/)).toBeInTheDocument();
+    expect(screen.getByText(/Asignación/)).toBeInTheDocument();
+    expect(screen.getByText(/Épicas/)).toBeInTheDocument();
+    expect(screen.getByText(/Resumen/)).toBeInTheDocument();
+  });
+
+  it('starts on Step 1 with project data form', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
+    expect(screen.getByPlaceholderText(/Plataforma de analítica/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Acme SA/i)).toBeInTheDocument();
+  });
+
+  it('disables Next button until project name and client are filled', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
+    const next = screen.getByRole('button', { name: /Siguiente paso/i });
+    expect(next).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Proyecto Alpha' } });
+    expect(next).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
+    expect(next).toBeEnabled();
+  });
+
+  it('navigates to Step 2 (Team) once name and client are provided', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
+    fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Proyecto Alpha' } });
+    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
+    fireEvent.click(screen.getByRole('button', { name: /Siguiente paso/i }));
+    await waitFor(() => expect(screen.getByText(/Composición del Equipo/i)).toBeInTheDocument());
+  });
+
+  it('"Guardar borrador" in header calls createQuotation with type=fixed_scope', async () => {
+    api.createQuotation.mockResolvedValue({ id: 'new-q-1' });
+    api.getQuotation.mockResolvedValue({ id: 'new-q-1', type: 'fixed_scope', project_name: 'Draft P', client_name: 'Acme', lines: [], phases: [], epics: [], milestones: [], metadata: {} });
+    const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
+    render(<App />);
+    await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
+    fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Draft P' } });
+    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
+    fireEvent.click(screen.getByRole('button', { name: /Guardar borrador/i }));
+    await waitFor(() => expect(api.createQuotation).toHaveBeenCalled());
+    const payload = api.createQuotation.mock.calls[0][0];
+    expect(payload.type).toBe('fixed_scope');
+    expect(payload.project_name).toBe('Draft P');
+    expect(payload.phases.length).toBe(5);
+    alertSpy.mockRestore();
+  });
+
+  it('back button returns to previous step', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
+    fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'P' } });
+    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'A' } });
+    fireEvent.click(screen.getByRole('button', { name: /Siguiente paso/i }));
+    await waitFor(() => screen.getByText(/Composición del Equipo/i));
+    fireEvent.click(screen.getByRole('button', { name: /Anterior/i }));
+    await waitFor(() => expect(screen.getByText(/📝 Datos del Proyecto/i)).toBeInTheDocument());
+  });
+});
+
+/* ===== Dashboard — US-9.1 badge ===== */
+describe('Dashboard — fixed_scope badge says "Proyecto"', () => {
+  beforeEach(() => {
+    localStorage.setItem('dvpnyx_token', 'valid-token');
+    jest.resetAllMocks();
+    api.getMe.mockResolvedValue(mockUser);
+    api.getParams.mockResolvedValue(mockParams);
+    window.history.pushState({}, '', '/');
+  });
+
+  it('shows "Proyecto" (not "Alcance Fijo") for fixed_scope rows', async () => {
+    api.getQuotations.mockResolvedValue([{
+      id: 'qp', project_name: 'Plataforma X', client_name: 'Cliente Y',
+      type: 'fixed_scope', status: 'draft', line_count: 3,
+      created_at: '2026-02-10T00:00:00Z',
+    }]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Plataforma X')).toBeInTheDocument());
+    expect(screen.getByText('Proyecto')).toBeInTheDocument();
+    expect(screen.queryByText('Alcance Fijo')).toBeNull();
+  });
+});

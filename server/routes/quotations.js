@@ -66,6 +66,15 @@ router.post('/', async (req, res) => {
           [quot.id, i, m.name, m.phase, m.percentage, m.amount, m.expected_date]);
       }
     }
+    if (epics?.length) {
+      for (let i = 0; i < epics.length; i++) {
+        const e = epics[i];
+        await client.query(
+          'INSERT INTO quotation_epics (quotation_id, sort_order, name, priority, hours_by_profile, total_hours) VALUES ($1,$2,$3,$4,$5,$6)',
+          [quot.id, i, e.name, e.priority || 'Media', JSON.stringify(e.hours_by_profile || {}), e.total_hours || 0]
+        );
+      }
+    }
     await client.query(`INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES ($1, 'create_quotation', 'quotation', $2, $3)`,
       [req.user.id, quot.id, JSON.stringify({ type, project_name, client_name })]);
     await client.query('COMMIT');
@@ -80,7 +89,7 @@ router.put('/:id', async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { project_name, client_name, commercial_name, preventa_name, status, discount_pct, notes, lines, phases, milestones, metadata } = req.body;
+    const { project_name, client_name, commercial_name, preventa_name, status, discount_pct, notes, lines, phases, epics, milestones, metadata } = req.body;
     const { rows: [quot] } = await client.query(
       `UPDATE quotations SET project_name=COALESCE($1,project_name), client_name=COALESCE($2,client_name),
        commercial_name=COALESCE($3,commercial_name), preventa_name=COALESCE($4,preventa_name),
@@ -116,6 +125,16 @@ router.put('/:id', async (req, res) => {
           [quot.id, i, m.name, m.phase, m.percentage, m.amount, m.expected_date]);
       }
     }
+    if (epics) {
+      await client.query('DELETE FROM quotation_epics WHERE quotation_id=$1', [req.params.id]);
+      for (let i = 0; i < epics.length; i++) {
+        const e = epics[i];
+        await client.query(
+          'INSERT INTO quotation_epics (quotation_id, sort_order, name, priority, hours_by_profile, total_hours) VALUES ($1,$2,$3,$4,$5,$6)',
+          [quot.id, i, e.name, e.priority || 'Media', JSON.stringify(e.hours_by_profile || {}), e.total_hours || 0]
+        );
+      }
+    }
     await client.query('COMMIT');
     res.json(quot);
   } catch (err) {
@@ -136,6 +155,7 @@ router.post('/:id/duplicate', async (req, res) => {
     await pool.query(`INSERT INTO quotation_lines (quotation_id, sort_order, specialty, role_title, level, country, bilingual, tools, stack, modality, quantity, duration_months, hours_per_week, phase, cost_hour, rate_hour, rate_month, total) SELECT $1, sort_order, specialty, role_title, level, country, bilingual, tools, stack, modality, quantity, duration_months, hours_per_week, phase, cost_hour, rate_hour, rate_month, total FROM quotation_lines WHERE quotation_id=$2`, [newq.id, req.params.id]);
     await pool.query(`INSERT INTO quotation_phases (quotation_id, sort_order, name, weeks, description) SELECT $1, sort_order, name, weeks, description FROM quotation_phases WHERE quotation_id=$2`, [newq.id, req.params.id]);
     await pool.query(`INSERT INTO quotation_milestones (quotation_id, sort_order, name, phase, percentage, amount, expected_date) SELECT $1, sort_order, name, phase, percentage, amount, expected_date FROM quotation_milestones WHERE quotation_id=$2`, [newq.id, req.params.id]);
+    await pool.query(`INSERT INTO quotation_epics (quotation_id, sort_order, name, priority, hours_by_profile, total_hours) SELECT $1, sort_order, name, priority, hours_by_profile, total_hours FROM quotation_epics WHERE quotation_id=$2`, [newq.id, req.params.id]);
     res.status(201).json(newq);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
 });

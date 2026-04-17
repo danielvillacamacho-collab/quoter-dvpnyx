@@ -6,9 +6,15 @@ import {
   calcModalityFactor,
   calcStaffAugLine,
   calcProjectFinancials,
+  calcProjectCostHour,
+  calcProjectProfile,
+  calcAllocation,
+  calcProjectSummary,
   formatUSD,
   formatUSD2,
   formatPct,
+  DEFAULT_PHASES,
+  EMPTY_PROFILE,
 } from './calc';
 
 const mockParams = {
@@ -207,6 +213,172 @@ describe('calcProjectFinancials', () => {
     ]};
     const result = calcProjectFinancials(1000, paramsMaxMargin);
     expect(result.salePrice).toBe(0);
+  });
+});
+
+/* ===== calcProjectCostHour (project — no modality) ===== */
+describe('calcProjectCostHour', () => {
+  it('returns 0 for empty profile', () => {
+    expect(calcProjectCostHour(null, mockParams)).toBe(0);
+  });
+
+  it('does NOT apply modality factor (unlike staff aug)', () => {
+    // staff aug with Remoto multiplies by 0.95; project must not
+    const profile = { level: 5, country: 'Colombia', bilingual: false, stack: 'Especializada' };
+    expect(calcProjectCostHour(profile, mockParams)).toBeCloseTo(25);
+  });
+
+  it('still applies geo, bilingual and stack multipliers', () => {
+    const profile = { level: 5, country: 'México', bilingual: true, stack: 'Premium' };
+    // (4000/160) * 1.1 * 1.2 * 1.3 = 42.9
+    expect(calcProjectCostHour(profile, mockParams)).toBeCloseTo(42.9);
+  });
+});
+
+/* ===== calcProjectProfile ===== */
+describe('calcProjectProfile', () => {
+  it('enriches profile with cost_hour and rate_hour', () => {
+    const profile = { level: 5, country: 'Colombia', bilingual: false, stack: 'Especializada' };
+    const result = calcProjectProfile(profile, mockParams);
+    expect(result.cost_hour).toBeCloseTo(25);
+    expect(result.rate_hour).toBeCloseTo(25 / 0.65, 1);
+  });
+
+  it('returns 0 cost/rate when level missing', () => {
+    const result = calcProjectProfile({ country: 'Colombia' }, mockParams);
+    expect(result.cost_hour).toBe(0);
+    expect(result.rate_hour).toBe(0);
+  });
+
+  it('preserves all original fields', () => {
+    const profile = { role_title: 'Senior Dev', specialty: 'Desarrollo', level: 5, country: 'Colombia', bilingual: false, stack: 'Especializada' };
+    const result = calcProjectProfile(profile, mockParams);
+    expect(result.role_title).toBe('Senior Dev');
+    expect(result.specialty).toBe('Desarrollo');
+  });
+});
+
+/* ===== calcAllocation ===== */
+describe('calcAllocation', () => {
+  const lines = [
+    { role_title: 'Dev', cost_hour: 25 },
+    { role_title: 'PM',  cost_hour: 40 },
+  ];
+  const phases = [
+    { name: 'Planning', weeks: 2 },
+    { name: 'Dev', weeks: 10 },
+    { name: 'QA', weeks: 2 },
+  ];
+
+  it('returns zeros when no allocation given', () => {
+    const r = calcAllocation(lines, phases, {});
+    expect(r.totalHours).toBe(0);
+    expect(r.totalCost).toBe(0);
+  });
+
+  it('computes totalHours = Σ hoursPerWeek × weeks', () => {
+    const allocation = {
+      0: { 0: 10, 1: 40, 2: 10 },   // Dev: 20 + 400 + 20 = 440 hrs
+      1: { 0: 20, 1: 5,  2: 5 },    // PM:  40 + 50 + 10 = 100 hrs
+    };
+    const r = calcAllocation(lines, phases, allocation);
+    expect(r.totalHours).toBe(540);
+  });
+
+  it('computes totalCost = Σ hours × cost_hour', () => {
+    const allocation = {
+      0: { 0: 10, 1: 40, 2: 10 },   // Dev 440 hrs × $25 = $11,000
+      1: { 0: 20, 1: 5,  2: 5 },    // PM  100 hrs × $40 = $4,000
+    };
+    const r = calcAllocation(lines, phases, allocation);
+    expect(r.totalCost).toBe(15000);
+  });
+
+  it('tracks per-profile totals', () => {
+    const allocation = { 0: { 1: 40 }, 1: { 1: 10 } };  // only phase Dev
+    const r = calcAllocation(lines, phases, allocation);
+    expect(r.byProfile[0].hours).toBe(400);
+    expect(r.byProfile[0].cost).toBe(10000);
+    expect(r.byProfile[1].hours).toBe(100);
+    expect(r.byProfile[1].cost).toBe(4000);
+  });
+
+  it('tracks per-phase totals', () => {
+    const allocation = { 0: { 1: 40 }, 1: { 1: 10 } };
+    const r = calcAllocation(lines, phases, allocation);
+    expect(r.byPhase[1].hrWeek).toBe(50);
+    expect(r.byPhase[1].hours).toBe(500);
+    expect(r.byPhase[1].cost).toBe(14000);
+    expect(r.byPhase[0].hours).toBe(0);
+  });
+
+  it('handles empty arrays gracefully', () => {
+    expect(calcAllocation([], [], {}).totalHours).toBe(0);
+    expect(calcAllocation(null, null, null).totalHours).toBe(0);
+  });
+});
+
+/* ===== calcProjectSummary ===== */
+describe('calcProjectSummary', () => {
+  const lines = [{ role_title: 'Dev', cost_hour: 25 }];
+  const phases = [{ name: 'Dev', weeks: 10 }];
+
+  it('runs the full cascade through to final price', () => {
+    const alloc = { 0: { 0: 40 } };  // 400 hrs × $25 = $10,000 base cost
+    const r = calcProjectSummary(lines, phases, alloc, 0, mockParams);
+    expect(r.totalCost).toBe(10000);
+    expect(r.costWithBuffer).toBeCloseTo(11000);
+    expect(r.costProtected).toBeCloseTo(11550);
+    expect(r.salePrice).toBeCloseTo(23100);
+    expect(r.finalPrice).toBeCloseTo(23100);
+  });
+
+  it('applies discount on top of salePrice', () => {
+    const alloc = { 0: { 0: 40 } };
+    const r = calcProjectSummary(lines, phases, alloc, 0.10, mockParams);
+    expect(r.finalPrice).toBeCloseTo(23100 * 0.9);
+    expect(r.discount).toBe(0.10);
+  });
+
+  it('computes blend rates', () => {
+    const alloc = { 0: { 0: 40 } };
+    const r = calcProjectSummary(lines, phases, alloc, 0, mockParams);
+    // 400 hrs total, salePrice/hrs
+    expect(r.blendRateCost).toBeCloseTo(25);
+    expect(r.blendRateSale).toBeCloseTo(23100 / 400);
+  });
+
+  it('sums totalWeeks', () => {
+    const r = calcProjectSummary(lines, [{ weeks: 2 }, { weeks: 10 }, { weeks: 3 }], {}, 0, mockParams);
+    expect(r.totalWeeks).toBe(15);
+  });
+
+  it('returns 0 blend rates when no hours', () => {
+    const r = calcProjectSummary(lines, phases, {}, 0, mockParams);
+    expect(r.blendRateCost).toBe(0);
+    expect(r.blendRateSale).toBe(0);
+  });
+
+  it('computes real margin as (finalPrice - costProtected) / finalPrice', () => {
+    const alloc = { 0: { 0: 40 } };
+    const r = calcProjectSummary(lines, phases, alloc, 0, mockParams);
+    const expected = (23100 - 11550) / 23100;
+    expect(r.realMargin).toBeCloseTo(expected);
+  });
+});
+
+/* ===== DEFAULT_PHASES / EMPTY_PROFILE ===== */
+describe('project constants', () => {
+  it('ships 5 default phases including Garantía', () => {
+    expect(DEFAULT_PHASES).toHaveLength(5);
+    expect(DEFAULT_PHASES[4].name).toBe('Garantía');
+  });
+
+  it('EMPTY_PROFILE has no modality/tools/quantity by convention', () => {
+    // These fields exist (for DB schema compatibility) but default to neutral
+    expect(EMPTY_PROFILE.modality).toBe('');
+    expect(EMPTY_PROFILE.tools).toBe('');
+    expect(EMPTY_PROFILE.quantity).toBe(1);
   });
 });
 

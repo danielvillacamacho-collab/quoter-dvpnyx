@@ -114,6 +114,193 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* ===== STEPPER (Proyecto wizard) ===== */
+.stepper {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-bottom: 24px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.stepper-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-family: 'Montserrat', system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text-light);
+  transition: background .15s, color .15s;
+}
+.stepper-item:disabled { cursor: default; }
+.stepper-item:hover:not(:disabled) { background: rgba(86, 35, 77, 0.05); }
+.stepper-bullet {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--border);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.stepper-active .stepper-bullet {
+  background: var(--purple-dark);
+  box-shadow: 0 0 0 3px rgba(86, 35, 77, 0.2);
+}
+.stepper-active { color: var(--purple-dark); }
+.stepper-done .stepper-bullet { background: var(--teal-mid); }
+.stepper-done { color: var(--teal-mid); }
+.stepper-pending { color: var(--text-light); }
+.stepper-line {
+  flex: 1 0 20px;
+  min-width: 20px;
+  height: 2px;
+  background: var(--border);
+  align-self: center;
+  margin: 0 4px;
+  border-radius: 1px;
+}
+.stepper-line.done { background: var(--teal-mid); }
+
+.stepper-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  margin-top: 16px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ===== ALLOCATION MATRIX (Step 4) ===== */
+.allocation-wrapper {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.allocation-matrix {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+  font-size: 12px;
+}
+.allocation-matrix th,
+.allocation-matrix td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: center;
+  white-space: nowrap;
+}
+.allocation-matrix thead th {
+  color: #fff;
+  font-weight: 700;
+  font-size: 11px;
+  background: var(--purple-dark);
+}
+.alloc-sticky-0 {
+  position: sticky;
+  left: 0;
+  background: #fff;
+  z-index: 2;
+  text-align: left !important;
+  min-width: 160px;
+  box-shadow: 2px 0 3px rgba(0,0,0,0.04);
+}
+.alloc-sticky-1 {
+  position: sticky;
+  left: 160px;
+  background: #fff;
+  z-index: 2;
+  min-width: 80px;
+  box-shadow: 2px 0 3px rgba(0,0,0,0.04);
+}
+.allocation-matrix thead .alloc-sticky-0,
+.allocation-matrix thead .alloc-sticky-1 {
+  background: var(--purple-dark);
+  color: #fff;
+  z-index: 3;
+}
+.allocation-matrix tfoot .alloc-sticky-0,
+.allocation-matrix tfoot .alloc-sticky-1 {
+  background: var(--bg);
+}
+.alloc-input-cell {
+  background: #fef9c3;
+  padding: 2px !important;
+}
+.alloc-input-cell input {
+  width: 60px;
+  padding: 4px 6px;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  font-size: 12px;
+  text-align: center;
+  background: #fffbeb;
+  outline: none;
+}
+.alloc-input-cell input:focus {
+  border-color: var(--orange);
+  box-shadow: 0 0 0 2px rgba(242, 156, 51, 0.2);
+}
+.alloc-calc-cell {
+  background: #f3f4f6;
+  color: var(--text);
+}
+.alloc-cost-cell {
+  background: #f5f3ff;
+  color: var(--purple-dark);
+  font-weight: 500;
+}
+.alloc-total-cell {
+  background: #ecfeff;
+  font-weight: 600;
+}
+.alloc-total-header {
+  background: var(--purple-mid) !important;
+  min-width: 100px;
+}
+.alloc-sub-header {
+  color: #fff !important;
+  font-weight: 600;
+  font-size: 10px;
+}
+.alloc-foot-cell {
+  background: var(--bg);
+  font-weight: 700;
+}
+
+/* ===== CASCADE TABLE (Step 6) ===== */
+.cascade-table {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.cascade-row:last-child {
+  border-bottom: none !important;
+}
+.cascade-label { flex: 1; }
+.cascade-value { text-align: right; }
+
 .login-card {
   background: #fff;
   border-radius: 16px;
@@ -166,6 +353,21 @@
   .hamburger {
     display: block;
   }
+  .stepper {
+    padding: 10px 8px;
+    gap: 4px;
+  }
+  .stepper-item { padding: 4px 6px; font-size: 11px; }
+  .stepper-bullet { width: 22px; height: 22px; font-size: 11px; }
+  .stepper-label { display: none; }
+  .stepper-active .stepper-label { display: inline; font-size: 11px; }
+  .stepper-line { min-width: 8px; margin: 0 2px; }
+  .alloc-sticky-0 { min-width: 120px; }
+  .alloc-sticky-1 { left: 120px; min-width: 70px; }
+  .allocation-matrix th,
+  .allocation-matrix td { padding: 4px 6px; }
+  .alloc-input-cell input { width: 48px; font-size: 11px; }
+  .cascade-row { font-size: 13px !important; padding: 8px 10px !important; }
   .sidebar {
     transform: translateX(-100%);
   }

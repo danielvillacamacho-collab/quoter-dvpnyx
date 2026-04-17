@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link, useParams } from 'react-router-dom';
 import * as api from './utils/api';
-import { calcStaffAugLine, calcProjectFinancials, formatUSD, formatUSD2, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
+import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
+import ProjectEditor from './ProjectEditor';
 import './App.css';
 
 /* ========== AUTH CONTEXT ========== */
@@ -107,8 +108,8 @@ function Layout() {
       <div className="main-content">
         <Routes>
           <Route path="/" element={<Dashboard />} />
-          <Route path="/quotation/new/:type" element={<QuotationEditor />} />
-          <Route path="/quotation/:id" element={<QuotationEditor />} />
+          <Route path="/quotation/new/:type" element={<QuotationRouter />} />
+          <Route path="/quotation/:id" element={<QuotationRouter />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
           {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
         </Routes>
@@ -246,7 +247,7 @@ function Dashboard() {
                 <tr key={q.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/quotation/${q.id}`)}>
                   <td style={{ ...css.td, fontWeight: 600 }}>{q.project_name}</td>
                   <td style={css.td}>{q.client_name}</td>
-                  <td style={css.td}><span style={css.badge(q.type === 'staff_aug' ? 'var(--teal-mid)' : 'var(--orange)')}>{q.type === 'staff_aug' ? 'Staff Aug' : 'Alcance Fijo'}</span></td>
+                  <td style={css.td}><span style={css.badge(q.type === 'staff_aug' ? 'var(--teal-mid)' : 'var(--orange)')}>{q.type === 'staff_aug' ? 'Staff Aug' : 'Proyecto'}</span></td>
                   <td style={css.td}><span style={css.badge(statusColor[q.status])}>{statusLabel[q.status]}</span></td>
                   <td style={{ ...css.td, textAlign: 'center' }}>{q.line_count}</td>
                   <td style={css.td}>{new Date(q.created_at).toLocaleDateString('es-CO')}</td>
@@ -263,19 +264,38 @@ function Dashboard() {
   );
 }
 
-/* ========== QUOTATION EDITOR ========== */
-function QuotationEditor() {
+/* ========== QUOTATION ROUTER ========== */
+// Dispatches to the correct editor based on type (fixed_scope → stepper, staff_aug → linear)
+function QuotationRouter() {
   const { params } = useAuth();
   const nav = useNavigate();
+  const { id: quotId, type: newType } = useParams();
+  const isNew = !!newType;
 
-  const pathParts = window.location.pathname.split('/');
-  const isNew = pathParts.includes('new');
-  const quotId = !isNew ? pathParts[2] : null;
-  const quotType = isNew ? pathParts[3] : null;
+  const [loading, setLoading] = useState(!!quotId);
+  const [type, setType] = useState(newType || 'staff_aug');
+
+  useEffect(() => {
+    if (isNew) { setType(newType); setLoading(false); return; }
+    if (quotId) {
+      api.getQuotation(quotId).then(q => { setType(q.type); setLoading(false); }).catch(() => nav('/'));
+    }
+  }, [quotId, newType, isNew, nav]);
+
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-light)' }}>Cargando...</div>;
+  if (type === 'fixed_scope') return <ProjectEditor params={params} />;
+  return <StaffAugEditor params={params} />;
+}
+
+/* ========== STAFF AUG EDITOR (linear table) ========== */
+function StaffAugEditor({ params }) {
+  const nav = useNavigate();
+  const { id: quotId, type: newType } = useParams();
+  const isNew = !!newType;
 
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState({
-    type: quotType || 'staff_aug', project_name: '', client_name: '', commercial_name: '', preventa_name: '',
+    type: newType || 'staff_aug', project_name: '', client_name: '', commercial_name: '', preventa_name: '',
     discount_pct: 0, notes: '', status: 'draft', lines: [{ ...EMPTY_LINE }], metadata: {}
   });
 

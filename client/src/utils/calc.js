@@ -52,6 +52,64 @@ export const calcProjectFinancials = (totalCost, params) => {
   return { totalCost, buffer: Number(buffer), warranty: Number(warranty), margin: Number(margin), costWithBuffer, costProtected, salePrice };
 };
 
+/* ========== PROJECT (FIXED SCOPE) HELPERS ========== */
+
+/**
+ * Cost/hour for a project profile — does NOT include modality factor
+ * (en proyectos la dedicación ya se define por fase).
+ */
+export const calcProjectCostHour = (profile, params) => {
+  if (!profile) return 0;
+  return calcCostHour(profile.level, profile.country, profile.bilingual, profile.stack, params);
+};
+
+/** Enrich a profile object with recalculated cost_hour + rate_hour. */
+export const calcProjectProfile = (profile, params) => {
+  const cost = calcProjectCostHour(profile, params);
+  return { ...profile, cost_hour: cost, rate_hour: params ? calcRateHour(cost, params) : 0 };
+};
+
+/**
+ * Walk the allocation matrix and produce totals per profile, per phase, and global.
+ * allocation shape: { [profileIdx]: { [phaseIdx]: hoursPerWeek } }
+ */
+export const calcAllocation = (lines, phases, allocation) => {
+  const byProfile = {};
+  const byPhase = {};
+  let totalHours = 0;
+  let totalCost = 0;
+  (lines || []).forEach((_, pIdx) => { byProfile[pIdx] = { hours: 0, cost: 0 }; });
+  (phases || []).forEach((_, fIdx) => { byPhase[fIdx] = { hrWeek: 0, hours: 0, cost: 0 }; });
+  (lines || []).forEach((profile, pIdx) => {
+    (phases || []).forEach((phase, fIdx) => {
+      const hw = Number(allocation?.[pIdx]?.[fIdx] || 0);
+      const h = hw * Number(phase.weeks || 0);
+      const c = h * Number(profile.cost_hour || 0);
+      totalHours += h;
+      totalCost += c;
+      byProfile[pIdx].hours += h;
+      byProfile[pIdx].cost += c;
+      byPhase[fIdx].hrWeek += hw;
+      byPhase[fIdx].hours += h;
+      byPhase[fIdx].cost += c;
+    });
+  });
+  return { totalHours, totalCost, byProfile, byPhase };
+};
+
+/** Full financial cascade for a fixed-scope project. */
+export const calcProjectSummary = (lines, phases, allocation, discountPct, params) => {
+  const alloc = calcAllocation(lines, phases, allocation);
+  const fin = params ? calcProjectFinancials(alloc.totalCost, params) : { totalCost: alloc.totalCost, buffer: 0, warranty: 0, margin: 0, costWithBuffer: alloc.totalCost, costProtected: alloc.totalCost, salePrice: 0 };
+  const discount = Number(discountPct || 0);
+  const finalPrice = fin.salePrice * (1 - discount);
+  const blendRateCost = alloc.totalHours > 0 ? alloc.totalCost / alloc.totalHours : 0;
+  const blendRateSale = alloc.totalHours > 0 ? finalPrice / alloc.totalHours : 0;
+  const totalWeeks = (phases || []).reduce((s, p) => s + Number(p.weeks || 0), 0);
+  const realMargin = finalPrice > 0 ? (finalPrice - fin.costProtected) / finalPrice : 0;
+  return { ...alloc, ...fin, discount, finalPrice, blendRateCost, blendRateSale, totalWeeks, realMargin };
+};
+
 export const formatUSD = (n) => {
   if (n == null || isNaN(n)) return '—';
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
@@ -69,3 +127,23 @@ export const formatPct = (n) => {
 
 export const SPECIALTIES = ['Desarrollo','Infra & Seg','Testing','Product Mgmt','Project Mgmt','Data+AI','UX/UI','Análisis Func','DevOps/SRE'];
 export const EMPTY_LINE = { specialty:'', role_title:'', level:null, country:'Colombia', bilingual:false, tools:'Básico', stack:'Especializada', modality:'Remoto', quantity:1, duration_months:6, hours_per_week:40, phase:'', cost_hour:0, rate_hour:0, rate_month:0, total:0 };
+
+export const EMPTY_PROFILE = {
+  specialty: '', role_title: '', level: null,
+  country: 'Colombia', bilingual: false, stack: 'Especializada',
+  cost_hour: 0, rate_hour: 0,
+  // legacy fields kept so the row shape matches quotation_lines for persistence
+  tools: '', modality: '', quantity: 1, duration_months: 0, hours_per_week: 0, phase: '',
+  rate_month: 0, total: 0,
+};
+
+export const DEFAULT_PHASES = [
+  { name: 'Planeación', weeks: 2, description: 'Discovery, arquitectura, plan de trabajo' },
+  { name: 'Desarrollo', weeks: 10, description: 'Construcción iterativa del producto' },
+  { name: 'QA / Estabilización', weeks: 2, description: 'Pruebas integrales y bug bash' },
+  { name: 'Transferencia de Conocimiento', weeks: 1, description: 'Capacitación y handover' },
+  { name: 'Garantía', weeks: 2, description: 'Soporte post-entrega' },
+];
+
+/** Color palette rotation for phase column headers (CSS variables). */
+export const PHASE_COLORS = ['var(--purple-dark)', 'var(--teal-mid)', 'var(--orange)', 'var(--purple-mid)', 'var(--teal)', 'var(--purple-light)'];
