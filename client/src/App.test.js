@@ -136,10 +136,15 @@ describe('Dashboard', () => {
       { id: '3', project_name: 'P3', client_name: 'C3', type: 'staff_aug', status: 'approved', line_count: 3, created_at: '2026-01-01T00:00:00Z' },
     ]);
     render(<App />);
-    await waitFor(() => screen.getByText('Cotizaciones'));
-    const metricValues = document.querySelectorAll('[style*="Montserrat"]');
-    const values = Array.from(metricValues).map(el => el.textContent);
-    expect(values).toContain('3'); // Total
+    // Wait until Total metric shows 3 (proves api.getQuotations resolved and state updated)
+    await waitFor(() => {
+      const totalLabel = screen.getByText('Total');
+      expect(totalLabel.previousElementSibling).toHaveTextContent('3');
+    });
+    // Verify per-status counts via DOM traversal (label → previous sibling = value)
+    expect(screen.getByText('Borradores').previousElementSibling).toHaveTextContent('1');
+    expect(screen.getByText('Enviadas').previousElementSibling).toHaveTextContent('1');
+    expect(screen.getByText('Aprobadas').previousElementSibling).toHaveTextContent('1');
   });
 });
 
