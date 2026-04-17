@@ -25,6 +25,7 @@ export const changePassword = (current_password, new_password) => api('/auth/cha
 export const getUsers = () => api('/users');
 export const createUser = (data) => api('/users', { method: 'POST', body: data });
 export const updateUser = (id, data) => api(`/users/${id}`, { method: 'PUT', body: data });
+export const deleteUser = (id) => api(`/users/${id}`, { method: 'DELETE' });
 export const resetUserPassword = (id) => api(`/users/${id}/reset-password`, { method: 'POST' });
 export const getParams = () => api('/parameters');
 export const updateParam = (id, data) => api(`/parameters/${id}`, { method: 'PUT', body: data });

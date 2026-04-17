@@ -11,6 +11,7 @@ const mockUser = {
   role: 'preventa', must_change_password: false,
 };
 const mockAdmin = { ...mockUser, role: 'admin' };
+const mockSuperadmin = { ...mockUser, id: 'su1', role: 'superadmin', name: 'Super' };
 const mockParams = {
   level: [{ id: 1, key: 'L5', value: 4000, label: 'Nivel 5', sort_order: 5 }],
   geo: [{ id: 2, key: 'Colombia', value: 1.0, label: 'Colombia', sort_order: 1 }],
@@ -315,5 +316,96 @@ describe('Dashboard — fixed_scope badge says "Proyecto"', () => {
     // Match the badge span specifically (the table header also says "Proyecto")
     expect(screen.getByText('Proyecto', { selector: 'span' })).toBeInTheDocument();
     expect(screen.queryByText('Alcance Fijo')).toBeNull();
+  });
+});
+
+/* ===== AdminUsers — role change + delete (superadmin) ===== */
+describe('AdminUsers — superadmin: change role & delete user', () => {
+  const otherUser = { id: 'u2', name: 'Alice', email: 'alice@dvpnyx.com', role: 'preventa', active: true, created_at: '2026-01-01T00:00:00Z' };
+  const otherAdmin = { id: 'u3', name: 'Bob', email: 'bob@dvpnyx.com', role: 'admin', active: true, created_at: '2026-01-02T00:00:00Z' };
+  const superadminRow = { ...mockSuperadmin, active: true, created_at: '2026-01-01T00:00:00Z' };
+
+  beforeEach(() => {
+    localStorage.setItem('dvpnyx_token', 'valid-token');
+    jest.resetAllMocks();
+    api.getMe.mockResolvedValue(mockSuperadmin);
+    api.getParams.mockResolvedValue(mockParams);
+    api.getQuotations.mockResolvedValue([]);
+    api.getUsers.mockResolvedValue([superadminRow, otherUser, otherAdmin]);
+    window.history.pushState({}, '', '/admin/users');
+  });
+
+  afterEach(() => { window.history.pushState({}, '', '/'); });
+
+  it('renders role dropdowns only for non-superadmin, non-self rows', async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+    // Alice (preventa) and Bob (admin) rows get a dropdown; superadmin row keeps the badge.
+    expect(screen.getByLabelText('Rol de Alice')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rol de Bob')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Rol de Super')).toBeNull();
+  });
+
+  it('changes role via dropdown and calls updateUser', async () => {
+    api.updateUser.mockResolvedValue({ ...otherUser, role: 'admin' });
+    render(<App />);
+    await waitFor(() => screen.getByText('Alice'));
+    fireEvent.change(screen.getByLabelText('Rol de Alice'), { target: { value: 'admin' } });
+    await waitFor(() => expect(api.updateUser).toHaveBeenCalledWith('u2', { role: 'admin' }));
+  });
+
+  it('shows Eliminar button for deletable rows (not for self or superadmin)', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText('Alice'));
+    expect(screen.getByLabelText('Eliminar Alice')).toBeInTheDocument();
+    expect(screen.getByLabelText('Eliminar Bob')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Eliminar Super')).toBeNull();
+  });
+
+  it('deletes user after confirm and removes row from table', async () => {
+    api.deleteUser.mockResolvedValue({ message: 'Usuario eliminado' });
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<App />);
+    await waitFor(() => screen.getByText('Alice'));
+    fireEvent.click(screen.getByLabelText('Eliminar Alice'));
+    await waitFor(() => expect(api.deleteUser).toHaveBeenCalledWith('u2'));
+    await waitFor(() => expect(screen.queryByText('Alice')).toBeNull());
+    confirmSpy.mockRestore();
+  });
+
+  it('does NOT delete when confirm is cancelled', async () => {
+    api.deleteUser.mockResolvedValue({ message: 'ok' });
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    render(<App />);
+    await waitFor(() => screen.getByText('Alice'));
+    fireEvent.click(screen.getByLabelText('Eliminar Alice'));
+    // No call + row still visible
+    expect(api.deleteUser).not.toHaveBeenCalled();
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+});
+
+/* ===== AdminUsers — non-superadmin: NO role dropdown, NO delete ===== */
+describe('AdminUsers — admin (not superadmin) cannot change roles or delete', () => {
+  const other = { id: 'u2', name: 'Alice', email: 'alice@dvpnyx.com', role: 'preventa', active: true, created_at: '2026-01-01T00:00:00Z' };
+
+  beforeEach(() => {
+    localStorage.setItem('dvpnyx_token', 'valid-token');
+    jest.resetAllMocks();
+    api.getMe.mockResolvedValue(mockAdmin);
+    api.getParams.mockResolvedValue(mockParams);
+    api.getQuotations.mockResolvedValue([]);
+    api.getUsers.mockResolvedValue([{ ...mockAdmin, active: true, created_at: '2026-01-01T00:00:00Z' }, other]);
+    window.history.pushState({}, '', '/admin/users');
+  });
+
+  afterEach(() => { window.history.pushState({}, '', '/'); });
+
+  it('shows role as badge (no dropdown) and no Eliminar button', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText('Alice'));
+    expect(screen.queryByLabelText('Rol de Alice')).toBeNull();
+    expect(screen.queryByLabelText('Eliminar Alice')).toBeNull();
   });
 });

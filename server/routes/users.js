@@ -36,13 +36,59 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { name, role, active } = req.body;
+
+    // Load target user for role-change safety checks
+    const { rows: [target] } = await pool.query('SELECT id, role FROM users WHERE id=$1', [req.params.id]);
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    if (role !== undefined) {
+      if (!['admin', 'preventa'].includes(role))
+        return res.status(400).json({ error: 'Rol inválido (solo admin o preventa)' });
+      if (req.user.role !== 'superadmin')
+        return res.status(403).json({ error: 'Solo el superadmin puede cambiar roles' });
+      if (target.role === 'superadmin')
+        return res.status(403).json({ error: 'No se puede cambiar el rol del superadmin' });
+      if (target.id === req.user.id)
+        return res.status(403).json({ error: 'No puedes cambiar tu propio rol' });
+    }
+
     const { rows } = await pool.query(
       'UPDATE users SET name=COALESCE($1,name), role=COALESCE($2,role), active=COALESCE($3,active), updated_at=NOW() WHERE id=$4 RETURNING id, email, name, role, active',
       [name, role, active, req.params.id]
     );
-    if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (role !== undefined) {
+      await pool.query(`INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES ($1, 'change_role', 'user', $2, $3)`,
+        [req.user.id, req.params.id, JSON.stringify({ new_role: role, old_role: target.role })]);
+    }
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    if (req.user.role !== 'superadmin')
+      return res.status(403).json({ error: 'Solo el superadmin puede eliminar usuarios' });
+    if (req.params.id === req.user.id)
+      return res.status(403).json({ error: 'No puedes eliminarte a ti mismo' });
+
+    const { rows: [target] } = await pool.query('SELECT id, email, role FROM users WHERE id=$1', [req.params.id]);
+    if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+    if (target.role === 'superadmin')
+      return res.status(403).json({ error: 'No se puede eliminar al superadmin' });
+
+    // Prevent orphaning: quotations.created_by is NOT NULL FK → refuse if user owns data
+    const { rows: [{ count }] } = await pool.query('SELECT COUNT(*)::int AS count FROM quotations WHERE created_by=$1', [req.params.id]);
+    if (count > 0) {
+      return res.status(409).json({
+        error: `Este usuario tiene ${count} cotización(es). Desactívalo en lugar de eliminarlo para preservar la historia.`
+      });
+    }
+
+    await pool.query('DELETE FROM users WHERE id=$1', [req.params.id]);
+    await pool.query(`INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES ($1, 'delete_user', 'user', $2, $3)`,
+      [req.user.id, req.params.id, JSON.stringify({ email: target.email })]);
+    res.json({ message: 'Usuario eliminado' });
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
 });
 
 router.post('/:id/reset-password', async (req, res) => {

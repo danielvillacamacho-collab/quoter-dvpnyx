@@ -520,6 +520,23 @@ function AdminUsers() {
     setUsers(users.map(u => u.id === id ? { ...u, active: !active } : u));
   };
 
+  const handleRoleChange = async (id, role) => {
+    try {
+      const updated = await api.updateUser(id, { role });
+      setUsers(users.map(u => u.id === id ? { ...u, role: updated.role } : u));
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
+  const handleDelete = async (u) => {
+    if (!window.confirm(`¿Eliminar permanentemente a ${u.name} (${u.email})? Esta acción no se puede deshacer.`)) return;
+    try {
+      await api.deleteUser(u.id);
+      setUsers(users.filter(x => x.id !== u.id));
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
+  const isSuperadmin = user.role === 'superadmin';
+
   return (
     <div>
       <div className="page-header">
@@ -552,21 +569,46 @@ function AdminUsers() {
         <div className="table-wrapper">
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead><tr>{['Nombre', 'Email', 'Rol', 'Estado', 'Creado', 'Acciones'].map(h => <th key={h} style={css.th}>{h}</th>)}</tr></thead>
-            <tbody>{users.map(u => (
+            <tbody>{users.map(u => {
+              // A superadmin row, the current user's own row, can't have role changed / be deleted
+              const isProtected = u.role === 'superadmin' || u.id === user.id;
+              const canEditRole = isSuperadmin && !isProtected;
+              return (
               <tr key={u.id}>
                 <td style={{ ...css.td, fontWeight: 600 }}>{u.name}</td>
                 <td style={css.td}>{u.email}</td>
-                <td style={css.td}><span style={css.badge(u.role === 'superadmin' ? 'var(--purple-dark)' : u.role === 'admin' ? 'var(--teal-mid)' : 'var(--orange)')}>{u.role}</span></td>
+                <td style={css.td}>
+                  {canEditRole ? (
+                    <select
+                      style={{ ...css.select, fontSize: 12, padding: '4px 8px' }}
+                      value={u.role}
+                      onChange={e => handleRoleChange(u.id, e.target.value)}
+                      aria-label={`Rol de ${u.name}`}
+                    >
+                      <option value="preventa">Pre-venta</option>
+                      <option value="admin">Administrador</option>
+                    </select>
+                  ) : (
+                    <span style={css.badge(u.role === 'superadmin' ? 'var(--purple-dark)' : u.role === 'admin' ? 'var(--teal-mid)' : 'var(--orange)')}>{u.role}</span>
+                  )}
+                </td>
                 <td style={css.td}><span style={css.badge(u.active ? 'var(--success)' : 'var(--danger)')}>{u.active ? 'Activo' : 'Inactivo'}</span></td>
                 <td style={css.td}>{new Date(u.created_at).toLocaleDateString('es-CO')}</td>
                 <td style={css.td}>
-                  <div style={{ display: 'flex', gap: 4 }}>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                     <button style={{ ...css.btnOutline, padding: '4px 8px', fontSize: 10 }} onClick={() => handleReset(u.id)}>Reset clave</button>
                     <button style={{ ...css.btn(u.active ? 'var(--danger)' : 'var(--success)'), padding: '4px 8px', fontSize: 10 }} onClick={() => handleToggle(u.id, u.active)}>{u.active ? 'Desactivar' : 'Activar'}</button>
+                    {isSuperadmin && !isProtected && (
+                      <button
+                        style={{ ...css.btn('var(--danger)'), padding: '4px 8px', fontSize: 10 }}
+                        onClick={() => handleDelete(u)}
+                        aria-label={`Eliminar ${u.name}`}
+                      >Eliminar</button>
+                    )}
                   </div>
                 </td>
               </tr>
-            ))}</tbody>
+            );})}</tbody>
           </table>
         </div>
       </div>
