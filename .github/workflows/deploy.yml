@@ -48,7 +48,8 @@ jobs:
             echo "==> Deploying $GIT_SHA at $DEPLOY_DATE"
 
             # Run DB migrations (idempotent — always safe)
-            docker compose run --rm server node database/migrate.js
+            # Server files live at /app/server/ inside the container (WORKDIR=/app)
+            docker compose run --rm server sh -c "cd server && node database/migrate.js"
 
             # Build and tag image with git SHA for rollback
             docker compose build server
