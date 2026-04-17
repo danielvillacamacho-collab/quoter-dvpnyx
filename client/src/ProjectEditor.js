@@ -276,10 +276,16 @@ function StepAllocation({ data, onChange, params }) {
   const phases = data.phases || [];
   const allocation = data.metadata?.allocation || {};
 
+  // Hard cap: nobody works more than 40 hours a week
+  const MAX_HRS_PER_WEEK = 40;
+
   const setCell = useCallback((pIdx, fIdx, value) => {
     const next = { ...(data.metadata?.allocation || {}) };
     const row = { ...(next[pIdx] || {}) };
-    row[fIdx] = Number(value) || 0;
+    // Clamp to [0, MAX_HRS_PER_WEEK] so pasted values or programmatic edits
+    // can't exceed the weekly limit even if the native input is bypassed.
+    const raw = Number(value) || 0;
+    row[fIdx] = Math.max(0, Math.min(MAX_HRS_PER_WEEK, raw));
     next[pIdx] = row;
     onChange({ ...data, metadata: { ...(data.metadata || {}), allocation: next } });
   }, [data, onChange]);
@@ -301,7 +307,7 @@ function StepAllocation({ data, onChange, params }) {
     <div style={s.card}>
       <h3 style={{ fontSize: 15, color: 'var(--purple-dark)', fontFamily: 'Montserrat', marginBottom: 6 }}>🧮 Asignación por Fase (Hr/Semana)</h3>
       <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 14 }}>
-        Las celdas <b style={{ background: '#fef9c3', padding: '0 4px', borderRadius: 3 }}>amarillas</b> son editables (horas/semana). Las grises y lilas se calculan solas.
+        Las celdas <b style={{ background: '#fef9c3', padding: '0 4px', borderRadius: 3 }}>amarillas</b> son editables (horas/semana, máx {MAX_HRS_PER_WEEK}). Las grises y lilas se calculan solas.
       </div>
 
       <div className="allocation-wrapper">
@@ -349,10 +355,12 @@ function StepAllocation({ data, onChange, params }) {
                         <input
                           type="number"
                           min={0}
+                          max={MAX_HRS_PER_WEEK}
                           step={1}
                           value={hw}
                           aria-label={`Horas por semana perfil ${pIdx + 1} fase ${fIdx + 1}`}
                           onChange={e => setCell(pIdx, fIdx, e.target.value)}
+                          title={`Máximo ${MAX_HRS_PER_WEEK} hr/semana`}
                         />
                       </td>
                       <td className="alloc-calc-cell">{hours || 0}</td>
