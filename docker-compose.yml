@@ -1,0 +1,73 @@
+services:
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    command:
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      # Redirección global de HTTP a HTTPS
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      # SSL con Let's Encrypt
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=admin@doublevpartners.com"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - web_public
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: dvpnyx_quoter
+      POSTGRES_USER: dvpnyx
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dvpnyx"]
+      interval: 5s
+      retries: 5
+    networks:
+      - db_internal
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: dvpnyx_quoter
+      DB_USER: dvpnyx
+      DB_PASSWORD: ${DB_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      CLIENT_URL: ${CLIENT_URL}
+      NODE_ENV: production
+      PORT: 4000
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - web_public
+      - db_internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.quoter.rule=Host(`quoter.doublevpartners.com`)"
+      - "traefik.http.routers.quoter.entrypoints=websecure"
+      - "traefik.http.routers.quoter.tls.certresolver=myresolver"
+      - "traefik.http.services.quoter.loadbalancer.server.port=4000"
+
+networks:
+  web_public:
+  db_internal:
+
+volumes:
+  pgdata:

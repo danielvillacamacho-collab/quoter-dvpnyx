@@ -1,0 +1,31 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const path = require('path');
+
+const app = express();
+app.use(helmet());
+app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000', credentials: true }));
+app.use(express.json({ limit: '5mb' }));
+
+const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
+app.use('/api/', limiter);
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Demasiados intentos. Intente en 15 minutos.' } });
+app.use('/api/auth/login', loginLimiter);
+
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/parameters', require('./routes/parameters'));
+app.use('/api/quotations', require('./routes/quotations'));
+
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, '../client/build')));
+  app.get('*', (_, res) => res.sendFile(path.join(__dirname, '../client/build/index.html')));
+}
+
+app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Error interno del servidor' }); });
+
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`DVPNYX Quoter API running on port ${PORT}`));

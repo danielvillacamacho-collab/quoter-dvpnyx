@@ -1,0 +1,17 @@
+{
+  "name": "dvpnyx-quoter",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm start",
+    "build": "cd client && npm run build",
+    "start": "cd server && npm start",
+    "db:migrate": "cd server && node database/migrate.js",
+    "db:seed": "cd server && node database/seed.js"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
