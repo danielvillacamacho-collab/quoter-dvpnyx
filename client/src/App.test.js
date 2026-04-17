@@ -225,8 +225,9 @@ describe('ProjectEditor — fixed_scope stepper', () => {
 
   it('renders 6-step stepper when type=fixed_scope', async () => {
     render(<App />);
-    await waitFor(() => expect(screen.getByText(/Nuevo Proyecto/i)).toBeInTheDocument());
-    // stepper nav contains all 6 step labels
+    // Use the unique Step-1 heading to confirm the project editor mounted
+    await waitFor(() => expect(screen.getByText(/📝 Datos del Proyecto/)).toBeInTheDocument());
+    // stepper nav contains all 6 step labels (multiple "Proyecto" matches expected)
     expect(screen.getAllByText(/Proyecto/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Equipo/)).toBeInTheDocument();
     expect(screen.getByText(/Fases/)).toBeInTheDocument();
