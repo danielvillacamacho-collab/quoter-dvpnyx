@@ -63,7 +63,7 @@ const seed = async () => {
       await client.query(`
         INSERT INTO parameters (category, key, value, label, note, sort_order)
         VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (category, key) DO UPDATE SET value=$3, label=$4, note=$5
+        ON CONFLICT (category, key) DO NOTHING
       `, [cat, key, val, label, note, sort]);
     }
     await client.query('COMMIT');

@@ -1,0 +1,61 @@
+name: Rollback Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: 'Git SHA to roll back to (e.g. a1b2c3d). Leave blank to see history.'
+        required: false
+        default: ''
+
+jobs:
+  rollback:
+    name: Rollback to SHA
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Rollback via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/dvpnyx-quoter
+            TARGET_SHA="${{ github.event.inputs.target_sha }}"
+
+            # If no SHA given, just print history and exit
+            if [ -z "$TARGET_SHA" ]; then
+              echo "==> Deploy history (last 10):"
+              tail -10 ~/deploy-history.log 2>/dev/null || echo "No history found."
+              exit 0
+            fi
+
+            echo "==> Rolling back to $TARGET_SHA"
+
+            # Try using cached Docker image first (fast path)
+            if docker image inspect dvpnyx-quoter-server:$TARGET_SHA > /dev/null 2>&1; then
+              echo "==> Found cached image dvpnyx-quoter-server:$TARGET_SHA — using it"
+              docker compose stop server
+              docker tag dvpnyx-quoter-server:$TARGET_SHA dvpnyx-quoter-server:latest
+              docker compose up -d server
+            else
+              # Image was pruned — rebuild from git (slow path)
+              echo "==> Image not cached — rebuilding from git $TARGET_SHA"
+              git fetch origin
+              git checkout $TARGET_SHA
+
+              # Run migrations for that version
+              docker compose run --rm server node database/migrate.js
+
+              docker compose build server
+              docker compose up -d server
+
+              # Return to main so next git pull works
+              git checkout main
+            fi
+
+            export ROLLBACK_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            echo "ROLLBACK $TARGET_SHA $ROLLBACK_DATE" >> ~/deploy-history.log
+            echo "==> Rollback to $TARGET_SHA completed at $ROLLBACK_DATE"

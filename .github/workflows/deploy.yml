@@ -23,7 +23,7 @@ jobs:
         working-directory: client
         run: npm ci
 
-      - name: Run tests
+      - name: Run tests with coverage
         working-directory: client
         run: npm test -- --watchAll=false --ci --coverage
 
@@ -33,7 +33,7 @@ jobs:
     needs: test
 
     steps:
-      - name: Deploy via SSH
+      - name: Deploy with versioning via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_HOST }}
@@ -42,10 +42,33 @@ jobs:
           script: |
             set -e
             cd ~/dvpnyx-quoter
-            git pull origin main
 
-            # Run DB migrations (idempotent — safe to always run)
+            git pull origin main
+            export GIT_SHA=$(git rev-parse --short HEAD)
+            export DEPLOY_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+            echo "==> Deploying $GIT_SHA at $DEPLOY_DATE"
+
+            # Run DB migrations (idempotent — always safe)
             docker compose run --rm server node database/migrate.js
 
-            # Rebuild and restart server
-            docker compose up -d --build server
+            # Build and tag image with git SHA for rollback
+            docker compose build server
+            docker tag dvpnyx-quoter-server:latest dvpnyx-quoter-server:$GIT_SHA
+
+            # Start new version
+            docker compose up -d server
+
+            # Log deployment history
+            echo "$GIT_SHA $DEPLOY_DATE" >> ~/deploy-history.log
+
+            # Keep last 5 versioned images, remove older ones
+            docker images dvpnyx-quoter-server --format "{{.Tag}}" \
+              | grep -v latest \
+              | sort -r \
+              | tail -n +6 \
+              | xargs -I{} docker rmi dvpnyx-quoter-server:{} 2>/dev/null || true
+
+            echo "==> Deploy completed: $GIT_SHA"
+            echo "==> Last 5 deployments:"
+            tail -5 ~/deploy-history.log
