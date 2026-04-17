@@ -43,6 +43,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: dvpnyx-quoter-server:latest
+    restart: unless-stopped
     environment:
       DB_HOST: db
       DB_PORT: 5432

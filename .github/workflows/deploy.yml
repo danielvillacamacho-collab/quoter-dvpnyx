@@ -58,6 +58,27 @@ jobs:
             # Start new version
             docker compose up -d server
 
+            # Wait for server to be healthy (up to 60 s)
+            echo "==> Waiting for server to be healthy..."
+            for i in $(seq 1 12); do
+              sleep 5
+              STATUS=$(docker compose ps server --format "{{.Status}}" 2>/dev/null || true)
+              if echo "$STATUS" | grep -qi "up"; then
+                echo "==> Server is up (${STATUS})"
+                break
+              fi
+              if [ "$i" -eq 12 ]; then
+                echo "==> ERROR: server did not come up in 60s. Last logs:"
+                docker compose logs server --tail=60
+                exit 1
+              fi
+              echo "==> Still waiting... attempt $i/12 (status: ${STATUS:-none})"
+            done
+
+            # Always print last 20 lines of server logs for visibility
+            echo "==> Server startup logs:"
+            docker compose logs server --tail=20
+
             # Log deployment history
             echo "$GIT_SHA $DEPLOY_DATE" >> ~/deploy-history.log
 
