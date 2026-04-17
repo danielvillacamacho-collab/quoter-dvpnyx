@@ -312,7 +312,8 @@ describe('Dashboard — fixed_scope badge says "Proyecto"', () => {
     }]);
     render(<App />);
     await waitFor(() => expect(screen.getByText('Plataforma X')).toBeInTheDocument());
-    expect(screen.getByText('Proyecto')).toBeInTheDocument();
+    // Match the badge span specifically (the table header also says "Proyecto")
+    expect(screen.getByText('Proyecto', { selector: 'span' })).toBeInTheDocument();
     expect(screen.queryByText('Alcance Fijo')).toBeNull();
   });
 });
