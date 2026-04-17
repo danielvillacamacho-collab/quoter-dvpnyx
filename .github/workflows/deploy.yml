@@ -58,26 +58,38 @@ jobs:
             # Start new version
             docker compose up -d server
 
-            # Wait for server to be healthy (up to 60 s)
-            echo "==> Waiting for server to be healthy..."
-            for i in $(seq 1 12); do
+            echo "==> All service statuses immediately after up:"
+            docker compose ps
+
+            # Real health check: poll HTTP on port 4000 (not just container status,
+            # which can show "Up" even during a crash-restart loop)
+            echo "==> Waiting for server to serve HTTP on :4000 (up to 90s)..."
+            SERVER_OK=0
+            for i in $(seq 1 18); do
               sleep 5
-              STATUS=$(docker compose ps server --format "{{.Status}}" 2>/dev/null || true)
-              if echo "$STATUS" | grep -qi "up"; then
-                echo "==> Server is up (${STATUS})"
+              HTTP_STATUS=$(curl -sf --max-time 3 -o /dev/null -w "%{http_code}" \
+                http://localhost:4000/api/auth/login \
+                -X POST -H "Content-Type: application/json" \
+                -d '{"email":"probe@health.check","password":"probe"}' 2>/dev/null || true)
+              CONTAINER=$(docker compose ps server --format "{{.Status}}" 2>/dev/null || true)
+              echo "==> Attempt $i/18 — container: [${CONTAINER}]  HTTP: [${HTTP_STATUS}]"
+              # 400 (bad request) or 401 (unauthorized) both mean the server is alive
+              if echo "$HTTP_STATUS" | grep -qE "^(200|400|401|422)$"; then
+                echo "==> Server is healthy! HTTP $HTTP_STATUS received."
+                SERVER_OK=1
                 break
               fi
-              if [ "$i" -eq 12 ]; then
-                echo "==> ERROR: server did not come up in 60s. Last logs:"
-                docker compose logs server --tail=60
-                exit 1
-              fi
-              echo "==> Still waiting... attempt $i/12 (status: ${STATUS:-none})"
             done
 
-            # Always print last 20 lines of server logs for visibility
-            echo "==> Server startup logs:"
-            docker compose logs server --tail=20
+            echo "==> Final service statuses:"
+            docker compose ps
+            echo "==> Server logs (last 40 lines):"
+            docker compose logs server --tail=40
+
+            if [ "$SERVER_OK" -eq 0 ]; then
+              echo "==> FATAL: server never responded on HTTP after 90s — aborting deploy"
+              exit 1
+            fi
 
             # Log deployment history
             echo "$GIT_SHA $DEPLOY_DATE" >> ~/deploy-history.log
