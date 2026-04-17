@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link,
 import * as api from './utils/api';
 import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
 import ProjectEditor from './ProjectEditor';
+import Wiki from './Wiki';
 import './App.css';
 
 /* ========== AUTH CONTEXT ========== */
@@ -74,6 +75,7 @@ function Layout() {
     { path: '/', label: '📊 Dashboard' },
     { path: '/quotation/new/staff_aug', label: '👥 Nueva Staff Aug' },
     { path: '/quotation/new/fixed_scope', label: '📋 Nuevo Proyecto' },
+    { path: '/wiki', label: '📚 Wiki' },
   ];
   if (isAdmin) {
     items.push({ path: '/admin/params', label: '⚙️ Parámetros' });
@@ -110,6 +112,7 @@ function Layout() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
           <Route path="/quotation/:id" element={<QuotationRouter />} />
+          <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
           {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
         </Routes>

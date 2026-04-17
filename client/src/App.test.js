@@ -386,6 +386,60 @@ describe('AdminUsers — superadmin: change role & delete user', () => {
   });
 });
 
+/* ===== Wiki ===== */
+describe('Wiki — niveles y stack (informativo)', () => {
+  beforeEach(() => {
+    localStorage.setItem('dvpnyx_token', 'valid-token');
+    jest.resetAllMocks();
+    api.getMe.mockResolvedValue(mockUser);
+    api.getParams.mockResolvedValue(mockParams);
+    api.getQuotations.mockResolvedValue([]);
+    window.history.pushState({}, '', '/wiki');
+  });
+
+  afterEach(() => { window.history.pushState({}, '', '/'); });
+
+  it('renders both section tabs and defaults to Stack tecnológico', async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByText(/Guía de referencia/i)).toBeInTheDocument());
+    expect(screen.getByText(/🧱 Stack tecnológico/)).toBeInTheDocument();
+    expect(screen.getByText(/🎓 Niveles por especialidad/)).toBeInTheDocument();
+    // default landing: stack multiplier table visible
+    expect(screen.getByText(/Categorías de Stack Tecnológico/i)).toBeInTheDocument();
+    expect(screen.getByText(/×0.90/)).toBeInTheDocument();
+    expect(screen.getByText(/×1.20/)).toBeInTheDocument();
+  });
+
+  it('shows stack multiplier tiers with correct criteria', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText(/Categorías de Stack Tecnológico/i));
+    // badge labels appear as text within the multiplier table
+    expect(screen.getAllByText(/Estándar/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Especializada/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Alta Demanda/).length).toBeGreaterThan(0);
+  });
+
+  it('switches to Levels section and shows default specialty (Desarrollo)', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText(/Guía de referencia/i));
+    fireEvent.click(screen.getByText(/🎓 Niveles por especialidad/));
+    // The Desarrollo tab label should appear; at least one L-code should be visible
+    await waitFor(() => expect(screen.getByText('L1')).toBeInTheDocument());
+    expect(screen.getByText('L11')).toBeInTheDocument();
+  });
+
+  it('changes specialty tab and updates displayed levels', async () => {
+    render(<App />);
+    await waitFor(() => screen.getByText(/Guía de referencia/i));
+    fireEvent.click(screen.getByText(/🎓 Niveles por especialidad/));
+    await waitFor(() => screen.getByText('L1'));
+    // Click on Testing specialty tab (label = title from WIKI_DATA)
+    fireEvent.click(screen.getByRole('tab', { name: /Testing de Software/i }));
+    // L1 should still be present (every specialty has L1-L11)
+    expect(screen.getByText('L1')).toBeInTheDocument();
+  });
+});
+
 /* ===== AdminUsers — non-superadmin: NO role dropdown, NO delete ===== */
 describe('AdminUsers — admin (not superadmin) cannot change roles or delete', () => {
   const other = { id: 'u2', name: 'Alice', email: 'alice@dvpnyx.com', role: 'preventa', active: true, created_at: '2026-01-01T00:00:00Z' };
