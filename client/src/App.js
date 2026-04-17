@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link } from 'react-router-dom';
 import * as api from './utils/api';
 import { calcStaffAugLine, calcProjectFinancials, formatUSD, formatUSD2, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
+import './App.css';
 
 /* ========== AUTH CONTEXT ========== */
 const AuthCtx = createContext();
@@ -37,12 +38,10 @@ function AuthProvider({ children }) {
 
 /* ========== STYLES ========== */
 const css = {
-  sidebar: { width: 240, background: 'var(--purple-dark)', color: '#fff', height: '100vh', position: 'fixed', left: 0, top: 0, display: 'flex', flexDirection: 'column', zIndex: 10 },
   logo: { padding: '24px 20px 8px', fontFamily: 'Montserrat', fontWeight: 800, fontSize: 22, color: 'var(--teal)', letterSpacing: 1 },
   tagline: { padding: '0 20px 24px', fontSize: 10, color: '#998899', fontStyle: 'italic' },
   nav: { flex: 1, padding: '0 12px' },
   navItem: (active) => ({ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 500, marginBottom: 2, textDecoration: 'none', color: active ? '#fff' : '#ccbbcc', background: active ? 'rgba(0,216,212,0.15)' : 'transparent', transition: 'all .15s' }),
-  main: { marginLeft: 240, minHeight: '100vh', padding: '24px 32px' },
   card: { background: '#fff', borderRadius: 12, border: '1px solid var(--border)', padding: '24px', marginBottom: 20 },
   btn: (color = 'var(--purple-dark)') => ({ background: color, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'opacity .15s' }),
   btnOutline: { background: 'transparent', color: 'var(--purple-dark)', border: '1px solid var(--purple-dark)', borderRadius: 8, padding: '9px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
@@ -62,23 +61,34 @@ function Layout() {
   const { user, doLogout, isAdmin } = useAuth();
   const loc = useLocation();
   const nav = useNavigate();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   const items = [
-    { path: '/', label: '📊 Dashboard', icon: '' },
-    { path: '/quotation/new/staff_aug', label: '👥 Nueva Staff Aug', icon: '' },
-    { path: '/quotation/new/fixed_scope', label: '📋 Nuevo Proyecto', icon: '' },
+    { path: '/', label: '📊 Dashboard' },
+    { path: '/quotation/new/staff_aug', label: '👥 Nueva Staff Aug' },
+    { path: '/quotation/new/fixed_scope', label: '📋 Nuevo Proyecto' },
   ];
   if (isAdmin) {
-    items.push({ path: '/admin/params', label: '⚙️ Parámetros', icon: '' });
-    items.push({ path: '/admin/users', label: '👤 Usuarios', icon: '' });
+    items.push({ path: '/admin/params', label: '⚙️ Parámetros' });
+    items.push({ path: '/admin/users', label: '👤 Usuarios' });
   }
+
+  const closeSidebar = () => setSidebarOpen(false);
+
   if (!user) return <Navigate to="/login" />;
   return (
     <div>
-      <div style={css.sidebar}>
+      <button className="hamburger" onClick={() => setSidebarOpen(o => !o)} aria-label="Menú">☰</button>
+
+      <div className={`sidebar-overlay${sidebarOpen ? ' open' : ''}`} onClick={closeSidebar} />
+
+      <div className={`sidebar${sidebarOpen ? ' open' : ''}`}>
         <div style={css.logo}>DVPNYX</div>
         <div style={css.tagline}>Unconventional People. Disruptive Tech.</div>
         <nav style={css.nav}>
-          {items.map(i => <Link key={i.path} to={i.path} style={css.navItem(loc.pathname === i.path)}>{i.label}</Link>)}
+          {items.map(i => (
+            <Link key={i.path} to={i.path} style={css.navItem(loc.pathname === i.path)} onClick={closeSidebar}>{i.label}</Link>
+          ))}
         </nav>
         <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,.1)' }}>
           <div style={{ fontSize: 12, color: '#ccbbcc' }}>{user.name}</div>
@@ -87,13 +97,16 @@ function Layout() {
           <button onClick={() => { doLogout(); nav('/login'); }} style={{ ...css.btn('transparent'), padding: '6px 0', color: '#998899', fontSize: 11, marginTop: 8 }}>Cerrar sesión →</button>
         </div>
       </div>
-      <div style={css.main}><Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/quotation/new/:type" element={<QuotationEditor />} />
-        <Route path="/quotation/:id" element={<QuotationEditor />} />
-        {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
-        {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
-      </Routes></div>
+
+      <div className="main-content">
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/quotation/new/:type" element={<QuotationEditor />} />
+          <Route path="/quotation/:id" element={<QuotationEditor />} />
+          {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
+          {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
+        </Routes>
+      </div>
     </div>
   );
 }
@@ -130,7 +143,7 @@ function Login() {
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #56234d 0%, #1e0f1c 100%)' }}>
-      <div style={{ background: '#fff', borderRadius: 16, padding: 40, width: 400, boxShadow: '0 20px 60px rgba(0,0,0,.3)' }}>
+      <div className="login-card">
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
           <div style={{ fontFamily: 'Montserrat', fontSize: 32, fontWeight: 800, color: 'var(--teal)' }}>DVPNYX</div>
           <div style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4 }}>Cotizador de Servicios</div>
@@ -182,15 +195,15 @@ function Dashboard() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+      <div className="page-header">
         <h1 style={{ fontSize: 24, color: 'var(--purple-dark)' }}>Cotizaciones</h1>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="page-header-actions">
           <button style={css.btn('var(--teal-mid)')} onClick={() => nav('/quotation/new/staff_aug')}>+ Staff Augmentation</button>
           <button style={css.btn('var(--orange)')} onClick={() => nav('/quotation/new/fixed_scope')}>+ Proyecto Alcance Fijo</button>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 24 }}>
+      <div className="metrics-grid">
         {[
           { label: 'Total', value: quots.length, color: 'var(--purple-dark)' },
           { label: 'Borradores', value: quots.filter(q => q.status === 'draft').length, color: 'var(--text-light)' },
@@ -212,24 +225,26 @@ function Dashboard() {
             <div style={{ fontSize: 13, color: '#999', marginTop: 4 }}>Crea tu primera cotización con los botones de arriba</div>
           </div>
         ) : (
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr>
-              {['Proyecto', 'Cliente', 'Tipo', 'Estado', 'Líneas', 'Creada', 'Acciones'].map(h => <th key={h} style={css.th}>{h}</th>)}
-            </tr></thead>
-            <tbody>{quots.map(q => (
-              <tr key={q.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/quotation/${q.id}`)}>
-                <td style={{ ...css.td, fontWeight: 600 }}>{q.project_name}</td>
-                <td style={css.td}>{q.client_name}</td>
-                <td style={css.td}><span style={css.badge(q.type === 'staff_aug' ? 'var(--teal-mid)' : 'var(--orange)')}>{q.type === 'staff_aug' ? 'Staff Aug' : 'Alcance Fijo'}</span></td>
-                <td style={css.td}><span style={css.badge(statusColor[q.status])}>{statusLabel[q.status]}</span></td>
-                <td style={{ ...css.td, textAlign: 'center' }}>{q.line_count}</td>
-                <td style={css.td}>{new Date(q.created_at).toLocaleDateString('es-CO')}</td>
-                <td style={css.td} onClick={e => e.stopPropagation()}>
-                  <button style={{ ...css.btnOutline, padding: '4px 10px', fontSize: 11, marginRight: 4 }} onClick={() => handleDuplicate(q.id)}>Duplicar</button>
-                </td>
-              </tr>
-            ))}</tbody>
-          </table>
+          <div className="table-wrapper">
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
+              <thead><tr>
+                {['Proyecto', 'Cliente', 'Tipo', 'Estado', 'Líneas', 'Creada', 'Acciones'].map(h => <th key={h} style={css.th}>{h}</th>)}
+              </tr></thead>
+              <tbody>{quots.map(q => (
+                <tr key={q.id} style={{ cursor: 'pointer' }} onClick={() => nav(`/quotation/${q.id}`)}>
+                  <td style={{ ...css.td, fontWeight: 600 }}>{q.project_name}</td>
+                  <td style={css.td}>{q.client_name}</td>
+                  <td style={css.td}><span style={css.badge(q.type === 'staff_aug' ? 'var(--teal-mid)' : 'var(--orange)')}>{q.type === 'staff_aug' ? 'Staff Aug' : 'Alcance Fijo'}</span></td>
+                  <td style={css.td}><span style={css.badge(statusColor[q.status])}>{statusLabel[q.status]}</span></td>
+                  <td style={{ ...css.td, textAlign: 'center' }}>{q.line_count}</td>
+                  <td style={css.td}>{new Date(q.created_at).toLocaleDateString('es-CO')}</td>
+                  <td style={css.td} onClick={e => e.stopPropagation()}>
+                    <button style={{ ...css.btnOutline, padding: '4px 10px', fontSize: 11, marginRight: 4 }} onClick={() => handleDuplicate(q.id)}>Duplicar</button>
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
         )}
       </div>
     </div>
@@ -240,8 +255,6 @@ function Dashboard() {
 function QuotationEditor() {
   const { params } = useAuth();
   const nav = useNavigate();
-  const loc = useLocation();
-  const { id, type: urlType } = Object.fromEntries([...new URL(window.location.href).pathname.matchAll(/\/quotation\/(?:new\/)?(\w+)?/g)].map(m => ['segment', m[1]])) || {};
 
   const pathParts = window.location.pathname.split('/');
   const isNew = pathParts.includes('new');
@@ -290,14 +303,14 @@ function QuotationEditor() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+      <div className="editor-header">
         <div>
           <button onClick={() => nav('/')} style={{ ...css.btnOutline, padding: '6px 12px', fontSize: 11, marginRight: 12 }}>← Volver</button>
           <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--purple-dark)', fontFamily: 'Montserrat' }}>
             {isNew ? 'Nueva Cotización' : 'Editar Cotización'} — {data.type === 'staff_aug' ? 'Staff Augmentation' : 'Alcance Fijo'}
           </span>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div className="editor-actions">
           <button style={css.btnOutline} onClick={() => save()} disabled={saving}>{saving ? 'Guardando...' : 'Guardar borrador'}</button>
           <button style={css.btn('var(--teal-mid)')} onClick={() => save('sent')} disabled={saving}>Guardar como Enviada</button>
         </div>
@@ -306,7 +319,7 @@ function QuotationEditor() {
       {/* Project info */}
       <div style={css.card}>
         <h3 style={{ fontSize: 14, color: 'var(--purple-dark)', marginBottom: 16 }}>Datos del Proyecto</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+        <div className="project-info-grid">
           {[
             ['project_name', 'Nombre del Proyecto'],
             ['client_name', 'Cliente'],
@@ -337,7 +350,7 @@ function QuotationEditor() {
           <h3 style={{ fontSize: 14, color: 'var(--purple-dark)' }}>Recursos ({data.lines.length})</h3>
           <button style={css.btn('var(--teal-mid)')} onClick={addLine}>+ Agregar recurso</button>
         </div>
-        <div style={{ overflowX: 'auto' }}>
+        <div className="table-wrapper">
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1200 }}>
             <thead><tr>
               {['#', 'Especialidad', 'Rol / Título', 'Nivel', 'País', 'Bilingüe', 'Herramientas', 'Stack', 'Modalidad', 'Cant', 'Meses', 'Tarifa/Mes', 'Total', ''].map(h => <th key={h} style={{ ...css.th, fontSize: 10, padding: '8px 6px' }}>{h}</th>)}
@@ -365,7 +378,7 @@ function QuotationEditor() {
       </div>
 
       {/* Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+      <div className="summary-grid">
         <div style={{ ...css.card, ...css.metric }}>
           <div style={css.metricValue}>{formatUSD(totalMonthly)}</div>
           <div style={css.metricLabel}>Valor mensual total</div>
@@ -405,36 +418,38 @@ function AdminParams() {
       {params && Object.entries(params).map(([cat, items]) => (
         <div key={cat} style={css.card}>
           <h3 style={{ fontSize: 14, color: 'var(--purple-dark)', marginBottom: 12 }}>{categoryLabels[cat] || cat}</h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead><tr>
-              {['Parámetro', 'Valor', 'Descripción', 'Acción'].map(h => <th key={h} style={{ ...css.th, background: 'var(--teal-mid)' }}>{h}</th>)}
-            </tr></thead>
-            <tbody>{items.sort((a, b) => a.sort_order - b.sort_order).map(p => (
-              <tr key={p.id}>
-                <td style={{ ...css.td, fontWeight: 600 }}>{p.key}</td>
-                <td style={{ ...css.td, minWidth: 120 }}>
-                  {editing === p.id ? (
-                    <input style={{ ...css.input, width: 100, padding: 6 }} type="number" step="any" value={newVal} onChange={e => setNewVal(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && handleSave(p)} />
-                  ) : (
-                    <span style={{ color: 'var(--purple-dark)', fontWeight: 600, fontFamily: 'monospace' }}>
-                      {['level', 'tools'].includes(cat) ? formatUSD(p.value) : ['margin', 'project'].includes(cat) && p.value < 1000 && p.key !== 'hours_month' ? formatPct(p.value) : p.value}
-                    </span>
-                  )}
-                </td>
-                <td style={{ ...css.td, color: 'var(--text-light)', fontSize: 12 }}>{p.label} {p.note && `— ${p.note}`}</td>
-                <td style={css.td}>
-                  {editing === p.id ? (
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      <button style={css.btn('var(--success)')} onClick={() => handleSave(p)}>✓</button>
-                      <button style={css.btnOutline} onClick={() => setEditing(null)}>✕</button>
-                    </div>
-                  ) : (
-                    <button style={{ ...css.btnOutline, padding: '4px 12px', fontSize: 11 }} onClick={() => { setEditing(p.id); setNewVal(p.value); }}>Editar</button>
-                  )}
-                </td>
-              </tr>
-            ))}</tbody>
-          </table>
+          <div className="table-wrapper">
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                {['Parámetro', 'Valor', 'Descripción', 'Acción'].map(h => <th key={h} style={{ ...css.th, background: 'var(--teal-mid)' }}>{h}</th>)}
+              </tr></thead>
+              <tbody>{items.sort((a, b) => a.sort_order - b.sort_order).map(p => (
+                <tr key={p.id}>
+                  <td style={{ ...css.td, fontWeight: 600 }}>{p.key}</td>
+                  <td style={{ ...css.td, minWidth: 120 }}>
+                    {editing === p.id ? (
+                      <input style={{ ...css.input, width: 100, padding: 6 }} type="number" step="any" value={newVal} onChange={e => setNewVal(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && handleSave(p)} />
+                    ) : (
+                      <span style={{ color: 'var(--purple-dark)', fontWeight: 600, fontFamily: 'monospace' }}>
+                        {['level', 'tools'].includes(cat) ? formatUSD(p.value) : ['margin', 'project'].includes(cat) && p.value < 1000 && p.key !== 'hours_month' ? formatPct(p.value) : p.value}
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ ...css.td, color: 'var(--text-light)', fontSize: 12 }}>{p.label} {p.note && `— ${p.note}`}</td>
+                  <td style={css.td}>
+                    {editing === p.id ? (
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button style={css.btn('var(--success)')} onClick={() => handleSave(p)}>✓</button>
+                        <button style={css.btnOutline} onClick={() => setEditing(null)}>✕</button>
+                      </div>
+                    ) : (
+                      <button style={{ ...css.btnOutline, padding: '4px 12px', fontSize: 11 }} onClick={() => { setEditing(p.id); setNewVal(p.value); }}>Editar</button>
+                    )}
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
         </div>
       ))}
     </div>
@@ -475,7 +490,7 @@ function AdminUsers() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+      <div className="page-header">
         <h1 style={{ fontSize: 24, color: 'var(--purple-dark)' }}>👤 Gestión de Usuarios</h1>
         <button style={css.btn('var(--teal-mid)')} onClick={() => setShowNew(true)}>+ Nuevo usuario</button>
       </div>
@@ -483,7 +498,7 @@ function AdminUsers() {
       {showNew && (
         <div style={{ ...css.card, border: '2px solid var(--teal)', marginBottom: 20 }}>
           <h3 style={{ fontSize: 14, color: 'var(--teal-mid)', marginBottom: 12 }}>Nuevo Usuario</h3>
-          <form onSubmit={handleCreate} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr auto', gap: 12, alignItems: 'end' }}>
+          <form onSubmit={handleCreate} className="users-form-grid">
             <div><label style={css.label}>Nombre</label><input style={css.input} required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
             <div><label style={css.label}>Email</label><input style={css.input} type="email" required value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
             <div><label style={css.label}>Rol</label>
@@ -502,24 +517,26 @@ function AdminUsers() {
       )}
 
       <div style={css.card}>
-        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-          <thead><tr>{['Nombre', 'Email', 'Rol', 'Estado', 'Creado', 'Acciones'].map(h => <th key={h} style={css.th}>{h}</th>)}</tr></thead>
-          <tbody>{users.map(u => (
-            <tr key={u.id}>
-              <td style={{ ...css.td, fontWeight: 600 }}>{u.name}</td>
-              <td style={css.td}>{u.email}</td>
-              <td style={css.td}><span style={css.badge(u.role === 'superadmin' ? 'var(--purple-dark)' : u.role === 'admin' ? 'var(--teal-mid)' : 'var(--orange)')}>{u.role}</span></td>
-              <td style={css.td}><span style={css.badge(u.active ? 'var(--success)' : 'var(--danger)')}>{u.active ? 'Activo' : 'Inactivo'}</span></td>
-              <td style={css.td}>{new Date(u.created_at).toLocaleDateString('es-CO')}</td>
-              <td style={css.td}>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button style={{ ...css.btnOutline, padding: '4px 8px', fontSize: 10 }} onClick={() => handleReset(u.id)}>Reset clave</button>
-                  <button style={{ ...css.btn(u.active ? 'var(--danger)' : 'var(--success)'), padding: '4px 8px', fontSize: 10 }} onClick={() => handleToggle(u.id, u.active)}>{u.active ? 'Desactivar' : 'Activar'}</button>
-                </div>
-              </td>
-            </tr>
-          ))}</tbody>
-        </table>
+        <div className="table-wrapper">
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>{['Nombre', 'Email', 'Rol', 'Estado', 'Creado', 'Acciones'].map(h => <th key={h} style={css.th}>{h}</th>)}</tr></thead>
+            <tbody>{users.map(u => (
+              <tr key={u.id}>
+                <td style={{ ...css.td, fontWeight: 600 }}>{u.name}</td>
+                <td style={css.td}>{u.email}</td>
+                <td style={css.td}><span style={css.badge(u.role === 'superadmin' ? 'var(--purple-dark)' : u.role === 'admin' ? 'var(--teal-mid)' : 'var(--orange)')}>{u.role}</span></td>
+                <td style={css.td}><span style={css.badge(u.active ? 'var(--success)' : 'var(--danger)')}>{u.active ? 'Activo' : 'Inactivo'}</span></td>
+                <td style={css.td}>{new Date(u.created_at).toLocaleDateString('es-CO')}</td>
+                <td style={css.td}>
+                  <div style={{ display: 'flex', gap: 4 }}>
+                    <button style={{ ...css.btnOutline, padding: '4px 8px', fontSize: 10 }} onClick={() => handleReset(u.id)}>Reset clave</button>
+                    <button style={{ ...css.btn(u.active ? 'var(--danger)' : 'var(--success)'), padding: '4px 8px', fontSize: 10 }} onClick={() => handleToggle(u.id, u.active)}>{u.active ? 'Desactivar' : 'Activar'}</button>
+                  </div>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
