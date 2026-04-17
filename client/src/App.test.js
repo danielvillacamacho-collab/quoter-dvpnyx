@@ -26,7 +26,7 @@ const mockParams = {
 describe('Login', () => {
   beforeEach(() => {
     localStorage.clear();
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   it('renders login form fields and brand', async () => {
@@ -81,7 +81,7 @@ describe('Login', () => {
 describe('Dashboard', () => {
   beforeEach(() => {
     localStorage.setItem('dvpnyx_token', 'valid-token');
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     api.getMe.mockResolvedValue(mockUser);
     api.getParams.mockResolvedValue(mockParams);
   });
@@ -147,7 +147,7 @@ describe('Dashboard', () => {
 describe('Layout — hamburger sidebar', () => {
   beforeEach(() => {
     localStorage.setItem('dvpnyx_token', 'valid-token');
-    jest.clearAllMocks();
+    jest.resetAllMocks();
     api.getMe.mockResolvedValue(mockUser);
     api.getParams.mockResolvedValue(mockParams);
     api.getQuotations.mockResolvedValue([]);
