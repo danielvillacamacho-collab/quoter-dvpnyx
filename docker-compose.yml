@@ -54,6 +54,10 @@ services:
       CLIENT_URL: ${CLIENT_URL}
       NODE_ENV: production
       PORT: 4000
+    # Expose port to loopback only so the deploy health-check can probe it
+    # without opening it to the internet (Traefik handles all external traffic)
+    ports:
+      - "127.0.0.1:4000:4000"
     depends_on:
       db:
         condition: service_healthy
@@ -62,6 +66,9 @@ services:
       - db_internal
     labels:
       - "traefik.enable=true"
+      # Explicitly tell Traefik which network to use so it doesn't accidentally
+      # pick db_internal (which Traefik is not on) for the backend IP
+      - "traefik.docker.network=dvpnyx-quoter_web_public"
       - "traefik.http.routers.quoter.rule=Host(`quoter.doublevpartners.com`)"
       - "traefik.http.routers.quoter.entrypoints=websecure"
       - "traefik.http.routers.quoter.tls.certresolver=myresolver"
@@ -69,7 +76,9 @@ services:
 
 networks:
   web_public:
+    name: dvpnyx-quoter_web_public   # pin the name so the label above always matches
   db_internal:
+    name: dvpnyx-quoter_db_internal
 
 volumes:
   pgdata:
