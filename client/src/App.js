@@ -16,24 +16,30 @@ function AuthProvider({ children }) {
   useEffect(() => {
     const token = localStorage.getItem('dvpnyx_token');
     if (token) {
-      api.getMe().then(u => { setUser(u); return api.getParams(); }).then(setParams).catch(() => localStorage.removeItem('dvpnyx_token')).finally(() => setLoading(false));
+      // Fetch user and params concurrently, then set both in the same state update
+      Promise.all([api.getMe(), api.getParams()])
+        .then(([u, p]) => { setUser(u); setParams(p); })
+        .catch(() => localStorage.removeItem('dvpnyx_token'))
+        .finally(() => setLoading(false));
     } else setLoading(false);
   }, []);
 
+  // Returns { user, params } — caller is responsible for calling commitLogin
+  // so all state (user, params, changePw) is set in the same React batch.
   const doLogin = async (email, pw) => {
     const { token, user: u } = await api.login(email, pw);
     localStorage.setItem('dvpnyx_token', token);
-    setUser(u);
     const p = await api.getParams();
-    setParams(p);
-    return u;
+    return { user: u, params: p };
   };
+  // Commit user + params atomically (called by Login after doLogin resolves)
+  const commitLogin = (u, p) => { setUser(u); setParams(p); };
   const doLogout = () => { localStorage.removeItem('dvpnyx_token'); setUser(null); setParams(null); };
   const refreshParams = async () => { const p = await api.getParams(); setParams(p); };
   const isAdmin = user && ['admin', 'superadmin'].includes(user.role);
 
   if (loading) return <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center' }}><div style={{ color: 'var(--purple-dark)', fontSize: 18 }}>Cargando...</div></div>;
-  return <AuthCtx.Provider value={{ user, params, doLogin, doLogout, refreshParams, isAdmin }}>{children}</AuthCtx.Provider>;
+  return <AuthCtx.Provider value={{ user, params, doLogin, commitLogin, doLogout, refreshParams, isAdmin }}>{children}</AuthCtx.Provider>;
 }
 
 /* ========== STYLES ========== */
@@ -119,15 +125,21 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const [changePw, setChangePw] = useState(false);
   const [newPw, setNewPw] = useState('');
-  const { doLogin, user } = useAuth();
+  const { doLogin, commitLogin, user } = useAuth();
   const nav = useNavigate();
 
-  if (user) return <Navigate to="/" />;
+  // Only redirect when user is set AND we are NOT waiting for a password change.
+  // This prevents premature redirect during the 'must_change_password' flow.
+  if (user && !changePw) return <Navigate to="/" />;
 
   const handleLogin = async (e) => {
     e.preventDefault(); setErr(''); setLoading(true);
     try {
-      const u = await doLogin(email, pw);
+      const { user: u, params: p } = await doLogin(email, pw);
+      // Set all state in the same microtask → single React render batch.
+      // If we set user first (via doLogin internally) React would re-render
+      // and redirect to "/" before setChangePw(true) runs.
+      commitLogin(u, p);
       if (u.must_change_password) setChangePw(true);
       else nav('/');
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
