@@ -1,0 +1,22 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/dvpnyx.ts",
+  "context": {
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/core:target-partitions": ["aws"],
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
+    "dvpnyx:envs": {
+      "dev": {
+        "account": "REPLACE_WITH_DEV_ACCOUNT",
+        "region": "us-east-1",
+        "domainName": "dev.quoter.doublevpartners.com"
+      },
+      "prod": {
+        "account": "REPLACE_WITH_PROD_ACCOUNT",
+        "region": "us-east-1",
+        "domainName": "quoter.doublevpartners.com"
+      }
+    }
+  }
+}

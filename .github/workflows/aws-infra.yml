@@ -1,0 +1,59 @@
+# AWS infrastructure deploy (CDK).
+#
+# INTENTIONAL: manual dispatch only. Nothing auto-deploys from a push
+# until we flip `on:` to include push/pull_request after Fase 0 sign-off.
+name: AWS Infra (CDK)
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: 'Target environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, prod]
+      command:
+        description: 'CDK command'
+        required: true
+        default: 'diff'
+        type: choice
+        options: [diff, deploy, synth]
+
+permissions:
+  id-token: write   # for OIDC
+  contents: read
+
+jobs:
+  cdk:
+    name: CDK ${{ inputs.command }} (${{ inputs.env }})
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install
+        working-directory: infra
+        run: npm ci || npm install
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Build
+        working-directory: infra
+        run: npm run build
+
+      - name: CDK
+        working-directory: infra
+        run: |
+          if [[ "${{ inputs.command }}" == "deploy" ]]; then
+            npx cdk deploy --all --require-approval never --context env=${{ inputs.env }}
+          else
+            npx cdk ${{ inputs.command }} --context env=${{ inputs.env }}
+          fi
