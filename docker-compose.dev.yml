@@ -1,0 +1,74 @@
+# Local development stack — totally isolated from production.
+#
+# Use:
+#   docker compose -f docker-compose.dev.yml up --build
+#
+#   client: http://localhost:3000 (CRA hot reload)
+#   api:    http://localhost:4000 (nodemon, restarts on change)
+#   db:     localhost:55432       (Postgres 16, published only to loopback)
+#
+# Nothing here ever talks to the production EC2 or Aurora. The compose
+# project name and network are also separate to avoid collisions with
+# docker-compose.yml (prod).
+
+name: dvpnyx-dev
+
+services:
+  db-dev:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: dvpnyx_quoter
+      POSTGRES_USER: dvpnyx
+      POSTGRES_PASSWORD: devpassword
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:55432:5432"   # loopback only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dvpnyx"]
+      interval: 5s
+      retries: 5
+
+  server-dev:
+    image: node:20-alpine
+    working_dir: /app/server
+    command: sh -c "npm install && npx nodemon --watch . --ext js,json index.js"
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DB_HOST: db-dev
+      DB_PORT: 5432
+      DB_NAME: dvpnyx_quoter
+      DB_USER: dvpnyx
+      DB_PASSWORD: devpassword
+      JWT_SECRET: dev-jwt-secret-not-for-prod
+      JWT_EXPIRES_IN: 8h
+      CLIENT_URL: http://localhost:3000
+    volumes:
+      - ./server:/app/server
+    ports:
+      - "127.0.0.1:4000:4000"
+    depends_on:
+      db-dev:
+        condition: service_healthy
+    # Run migration + seed on first start; harmless to repeat
+    entrypoint: sh -c "cd /app/server && npm install && node database/migrate.js && node database/seed.js && npx nodemon --watch . --ext js,json index.js"
+
+  client-dev:
+    image: node:20-alpine
+    working_dir: /app/client
+    command: sh -c "npm install && npm start"
+    environment:
+      # The browser (outside the container) calls the API on host loopback
+      # where server-dev is published (127.0.0.1:4000).
+      REACT_APP_API_URL: "http://localhost:4000/api"
+      PORT: 3000
+      WATCHPACK_POLLING: "true"   # reliable file-watch on macOS/Windows
+      BROWSER: "none"
+    volumes:
+      - ./client:/app/client
+    ports:
+      - "127.0.0.1:3000:3000"
+
+volumes:
+  pgdata-dev:

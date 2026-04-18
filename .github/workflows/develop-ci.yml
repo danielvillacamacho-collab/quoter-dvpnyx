@@ -1,0 +1,47 @@
+# CI for the `develop` branch and any PR targeting develop or main.
+#
+# Purpose: let the team iterate WITHOUT touching production.
+#   - Runs tests.
+#   - Builds the client (to catch build-time errors early).
+#   - Does NOT deploy.
+#
+# When AWS dev environment is live, add a deploy step here gated on
+# `if: github.ref == 'refs/heads/develop'` that calls `cdk deploy --context env=dev`.
+name: Develop CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  test:
+    name: Unit & Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install client deps
+        working-directory: client
+        run: npm install
+
+      - name: Run tests with coverage
+        working-directory: client
+        run: npm test -- --watchAll=false --ci --coverage
+
+      - name: Build client (sanity)
+        working-directory: client
+        run: CI=false npm run build
+
+      - name: Upload coverage summary
+        if: always()
+        run: |
+          echo "### Coverage summary" >> $GITHUB_STEP_SUMMARY
+          if [[ -f client/coverage/coverage-summary.json ]]; then
+            node -e "const c=require('./client/coverage/coverage-summary.json').total;console.log('| Metric | % |'); console.log('|-|-|'); for (const k of ['lines','statements','functions','branches']) console.log('|'+k+'|'+c[k].pct+'|');" >> $GITHUB_STEP_SUMMARY
+          fi

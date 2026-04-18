@@ -2,6 +2,30 @@
 
 Aplicación web para cotización de servicios de Staff Augmentation y Proyectos de Alcance Fijo.
 
+## Quick start
+
+### Desarrollo local (un comando, sin AWS)
+```bash
+docker compose -f docker-compose.dev.yml up --build
+# → cliente: http://localhost:3000
+# → API:     http://localhost:4000
+# → DB:      127.0.0.1:55432
+```
+
+### Documentación funcional
+- [`docs/DVPNYX_Cotizador_Documentacion_Funcional.docx`](docs/DVPNYX_Cotizador_Documentacion_Funcional.docx) — sistema actual + historias de usuario
+- [`docs/DVPNYX_Arquitectura_AWS_Modernizada.docx`](docs/DVPNYX_Arquitectura_AWS_Modernizada.docx) — propuesta de modernización AWS
+- [`docs/ONBOARDING_DEV.md`](docs/ONBOARDING_DEV.md) — setup de ambiente de desarrollo
+- [`docs/runbooks/`](docs/runbooks/) — playbooks de rollback y DR
+
+### Branching
+| Rama      | Destino                                     | CI/CD             |
+|-----------|---------------------------------------------|-------------------|
+| `main`    | Producción EC2 (`quoter.doublevpartners.com`) | `deploy.yml` auto |
+| `develop` | AWS Dev Stack (cuando se active)            | `develop-ci.yml`  |
+| `feat/*`  | Ninguno (sólo tests en PR)                  | `develop-ci.yml`  |
+
+
 ## Arquitectura
 
 ```
