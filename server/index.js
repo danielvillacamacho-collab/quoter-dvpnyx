@@ -27,5 +27,11 @@ if (process.env.NODE_ENV === 'production') {
 
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Error interno del servidor' }); });
 
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`DVPNYX Quoter API running on port ${PORT}`));
+// Only start the HTTP listener when executed directly (EC2 / local dev).
+// When required by lambda.js for API Gateway, we just export the app.
+if (require.main === module) {
+  const PORT = process.env.PORT || 4000;
+  app.listen(PORT, () => console.log(`DVPNYX Quoter API running on port ${PORT}`));
+}
+
+module.exports = app;
