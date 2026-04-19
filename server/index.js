@@ -23,7 +23,7 @@ app.use('/api/quotations', require('./routes/quotations'));
 
 // V2 modules — currently 501 stubs; sprints 2+ replace each file.
 const _stubs = require('./routes/_stubs');
-app.use('/api/clients',           _stubs.clients);
+app.use('/api/clients',           require('./routes/clients')); // ✅ Sprint 2
 app.use('/api/opportunities',     _stubs.opportunities);
 app.use('/api/employees',         _stubs.employees);
 app.use('/api/skills',            _stubs.skills);
