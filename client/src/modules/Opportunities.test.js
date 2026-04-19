@@ -47,8 +47,11 @@ describe('Opportunities module', () => {
     mount();
     await waitFor(() => expect(apiV2.apiGet).toHaveBeenCalled());
     expect(await screen.findByText('Proyecto Atlas')).toBeInTheDocument();
-    expect(screen.getByText('Acme Corp')).toBeInTheDocument();
-    expect(screen.getByText('Propuesta')).toBeInTheDocument();
+    // 'Acme Corp' also shows up in the client-filter <option>, so scope to the
+    // row. Likewise 'Propuesta' appears in the status-filter <option>.
+    const row = screen.getByText('Proyecto Atlas').closest('tr');
+    expect(within(row).getByText('Acme Corp')).toBeInTheDocument();
+    expect(within(row).getByText('Propuesta')).toBeInTheDocument();
   });
 
   it('loads clients list into the client filter dropdown', async () => {
