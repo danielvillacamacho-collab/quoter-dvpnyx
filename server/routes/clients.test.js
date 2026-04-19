@@ -45,9 +45,9 @@ jest.mock('../utils/events', () => ({
 }));
 
 // Stub auth middleware to inject a fake user (preserves role-gating tests).
-let currentUser = { id: 'u1', role: 'member', function: 'comercial' };
+let mockCurrentUser = { id: 'u1', role: 'member', function: 'comercial' };
 jest.mock('../middleware/auth', () => ({
-  auth: (req, _res, next) => { req.user = { ...currentUser }; next(); },
+  auth: (req, _res, next) => { req.user = { ...mockCurrentUser }; next(); },
   adminOnly: (req, res, next) => {
     if (!['admin', 'superadmin'].includes(req.user.role)) return res.status(403).json({ error: 'Acceso solo para administradores' });
     next();
@@ -108,7 +108,7 @@ const client = request(app);
 beforeEach(() => {
   queryQueue.length = 0;
   issuedQueries.length = 0;
-  currentUser = { id: 'u1', role: 'member', function: 'comercial' };
+  mockCurrentUser = { id: 'u1', role: 'member', function: 'comercial' };
 });
 
 /* ---------- GET / ---------- */
@@ -227,14 +227,14 @@ describe('PUT /api/clients/:id', () => {
 /* ---------- DELETE /:id ---------- */
 describe('DELETE /api/clients/:id (admin+)', () => {
   it('rejects non-admin users with 403', async () => {
-    currentUser = { id: 'u1', role: 'member' };
+    mockCurrentUser = { id: 'u1', role: 'member' };
     const res = await client.call('DELETE', '/api/clients/c1');
     expect(res.status).toBe(403);
     expect(issuedQueries).toHaveLength(0);
   });
 
   it('rejects deletion when client has opportunities or contracts', async () => {
-    currentUser = { id: 'u1', role: 'admin' };
+    mockCurrentUser = { id: 'u1', role: 'admin' };
     queryQueue.push({ rows: [{ opps: 3, ctrs: 0 }] });
     const res = await client.call('DELETE', '/api/clients/c1');
     expect(res.status).toBe(409);
@@ -242,7 +242,7 @@ describe('DELETE /api/clients/:id (admin+)', () => {
   });
 
   it('soft-deletes when there are no dependencies', async () => {
-    currentUser = { id: 'u1', role: 'admin' };
+    mockCurrentUser = { id: 'u1', role: 'admin' };
     queryQueue.push({ rows: [{ opps: 0, ctrs: 0 }] });
     queryQueue.push({ rows: [{ id: 'c1', name: 'Acme' }] });
     const res = await client.call('DELETE', '/api/clients/c1');
@@ -254,13 +254,13 @@ describe('DELETE /api/clients/:id (admin+)', () => {
 /* ---------- deactivate/activate ---------- */
 describe('deactivate/activate (admin+)', () => {
   it('non-admin gets 403', async () => {
-    currentUser = { id: 'u1', role: 'member' };
+    mockCurrentUser = { id: 'u1', role: 'member' };
     const res = await client.call('POST', '/api/clients/c1/deactivate');
     expect(res.status).toBe(403);
   });
 
   it('admin can deactivate a client', async () => {
-    currentUser = { id: 'u1', role: 'admin' };
+    mockCurrentUser = { id: 'u1', role: 'admin' };
     queryQueue.push({ rows: [{ id: 'c1', name: 'Acme', active: false }] });
     const res = await client.call('POST', '/api/clients/c1/deactivate');
     expect(res.status).toBe(200);
