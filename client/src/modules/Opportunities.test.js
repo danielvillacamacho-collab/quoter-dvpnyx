@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Opportunities from './Opportunities';
 import * as apiV2 from '../utils/apiV2';
@@ -84,12 +84,20 @@ describe('Opportunities module', () => {
     apiV2.apiPost.mockResolvedValue({ id: 'o-new' });
     mount();
     await screen.findByText('Proyecto Atlas');
+    // Wait for the clients dropdown to populate before opening the form,
+    // otherwise setting the client_id select to 'c1' is a no-op (option missing).
+    await waitFor(() => {
+      const filter = screen.getByLabelText('Filtro por cliente');
+      expect(filter.querySelector('option[value="c1"]')).not.toBeNull();
+    });
     fireEvent.click(screen.getByRole('button', { name: /Nueva Oportunidad/i }));
-    await screen.findByText('Nueva oportunidad');
-    fireEvent.change(screen.getByLabelText('Cliente'), { target: { value: 'c1' } });
-    const nameInput = screen.getAllByRole('textbox')[0];
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
+    // Inside the dialog the first textbox is the name input; the second is the
+    // description textarea. Scope to dialog so page-level filter inputs don't leak in.
+    const nameInput = within(dialog).getAllByRole('textbox')[0];
     fireEvent.change(nameInput, { target: { value: 'Nuevo Deal' } });
-    fireEvent.click(screen.getByRole('button', { name: /^Guardar/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/opportunities',
@@ -102,19 +110,19 @@ describe('Opportunities module', () => {
     mount();
     await screen.findByText('Proyecto Atlas');
     fireEvent.click(screen.getByRole('button', { name: /Nueva Oportunidad/i }));
-    await screen.findByText('Nueva oportunidad');
-    const form = document.querySelector('form');
-    fireEvent.submit(form);
-    await waitFor(() => expect(screen.getByText(/Cliente es requerido/i)).toBeInTheDocument());
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.submit(within(dialog).getByRole('button', { name: /^Guardar/i }).closest('form'));
+    await waitFor(() => expect(within(dialog).getByText(/Cliente es requerido/i)).toBeInTheDocument());
   });
 
   it('opens edit modal with prefilled name and disables client change', async () => {
     mount();
     await screen.findByText('Proyecto Atlas');
     fireEvent.click(screen.getByLabelText('Editar Proyecto Atlas'));
-    expect(await screen.findByText('Editar oportunidad')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Proyecto Atlas')).toBeInTheDocument();
-    expect(screen.getByLabelText('Cliente')).toBeDisabled();
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Editar oportunidad')).toBeInTheDocument();
+    expect(within(dialog).getByDisplayValue('Proyecto Atlas')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Cliente')).toBeDisabled();
   });
 
   it('calls apiDelete with confirmation', async () => {
@@ -152,14 +160,14 @@ describe('Opportunities module', () => {
     mount();
     await screen.findByText('Proyecto Atlas');
     fireEvent.click(screen.getByLabelText('Mover Proyecto Atlas a Perdida'));
-    await screen.findByText(/Mover a Perdida/);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Mover a Perdida/)).toBeInTheDocument();
     // submit without reason → validation error
-    const form = document.querySelector('form');
-    fireEvent.submit(form);
-    await waitFor(() => expect(screen.getByText(/Selecciona una razón/i)).toBeInTheDocument());
+    fireEvent.submit(within(dialog).getByRole('button', { name: /Confirmar/i }).closest('form'));
+    await waitFor(() => expect(within(dialog).getByText(/Selecciona una razón/i)).toBeInTheDocument());
     // pick reason and confirm
-    fireEvent.change(screen.getByLabelText('Razón'), { target: { value: 'price' } });
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar/i }));
+    fireEvent.change(within(dialog).getByLabelText('Razón'), { target: { value: 'price' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/opportunities/o1/status',
@@ -173,16 +181,18 @@ describe('Opportunities module', () => {
     mount();
     await screen.findByText('Proyecto Atlas');
     fireEvent.click(screen.getByLabelText('Mover Proyecto Atlas a Ganada'));
-    await screen.findByText(/Mover a Ganada/);
-    // wait for quotations to load
-    await waitFor(() => expect(screen.getByLabelText('Cotización ganadora')).toBeInTheDocument());
+    const dialog = await screen.findByRole('dialog');
+    // wait for quotations to load — the q1 option only appears after the /api/opportunities/o1 fetch resolves
+    await waitFor(() => {
+      const select = within(dialog).getByLabelText('Cotización ganadora');
+      expect(select.querySelector('option[value="q1"]')).not.toBeNull();
+    });
     // submit without selection → validation error
-    const form = document.querySelector('form');
-    fireEvent.submit(form);
-    await waitFor(() => expect(screen.getByText(/Selecciona cotización ganadora/i)).toBeInTheDocument());
+    fireEvent.submit(within(dialog).getByRole('button', { name: /Confirmar/i }).closest('form'));
+    await waitFor(() => expect(within(dialog).getByText(/Selecciona cotización ganadora/i)).toBeInTheDocument());
     // pick and confirm
-    fireEvent.change(screen.getByLabelText('Cotización ganadora'), { target: { value: 'q1' } });
-    fireEvent.click(screen.getByRole('button', { name: /Confirmar/i }));
+    fireEvent.change(within(dialog).getByLabelText('Cotización ganadora'), { target: { value: 'q1' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/opportunities/o1/status',
