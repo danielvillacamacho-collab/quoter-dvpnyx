@@ -4,6 +4,9 @@ import * as api from './utils/api';
 import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
 import ProjectEditor from './ProjectEditor';
 import Wiki from './Wiki';
+import Footer from './shell/Footer';
+import Breadcrumb from './shell/Breadcrumb';
+import ComingSoon from './shell/ComingSoon';
 import './App.css';
 
 /* ========== AUTH CONTEXT ========== */
@@ -71,16 +74,62 @@ function Layout() {
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const items = [
-    { path: '/', label: '📊 Dashboard' },
-    { path: '/quotation/new/staff_aug', label: '👥 Nueva Staff Aug' },
-    { path: '/quotation/new/fixed_scope', label: '📋 Nuevo Proyecto' },
-    { path: '/wiki', label: '📚 Wiki' },
+  // Sidebar is organized in groups. Groups 2+ route to ComingSoon screens
+  // until their corresponding module ships. Visibility is role-based; fine-
+  // grained visibility by function lands when users.function is populated.
+  const groups = [
+    {
+      title: null, items: [
+        { path: '/', label: '📊 Dashboard' },
+      ],
+    },
+    {
+      title: 'Comercial', items: [
+        { path: '/quotation/new/staff_aug', label: '👥 Nueva Staff Aug' },
+        { path: '/quotation/new/fixed_scope', label: '📋 Nuevo Proyecto' },
+        { path: '/clients', label: '🏢 Clientes' },
+        { path: '/opportunities', label: '💼 Oportunidades' },
+      ],
+    },
+    {
+      title: 'Delivery', items: [
+        { path: '/contracts', label: '📑 Contratos' },
+        { path: '/resource-requests', label: '🧾 Solicitudes' },
+        { path: '/assignments', label: '🗓 Asignaciones' },
+      ],
+    },
+    {
+      title: 'Gente', items: [
+        { path: '/employees', label: '🧑‍💻 Empleados' },
+        ...(isAdmin ? [
+          { path: '/admin/areas',  label: '🧭 Áreas' },
+          { path: '/admin/skills', label: '🏷 Skills' },
+          { path: '/admin/squads', label: '🛡 Squads' },
+        ] : []),
+      ],
+    },
+    {
+      title: 'Time Tracking', items: [
+        { path: '/time/me',   label: '⏱ Mis horas' },
+        { path: '/time/team', label: '📈 Horas del equipo' },
+      ],
+    },
+    {
+      title: null, items: [
+        { path: '/reports', label: '📊 Reportes' },
+        { path: '/wiki',    label: '📚 Wiki' },
+      ],
+    },
+    ...(isAdmin ? [{
+      title: 'Configuración', items: [
+        { path: '/admin/params', label: '⚙️ Parámetros' },
+        { path: '/admin/users',  label: '👤 Usuarios' },
+      ],
+    }] : []),
   ];
-  if (isAdmin) {
-    items.push({ path: '/admin/params', label: '⚙️ Parámetros' });
-    items.push({ path: '/admin/users', label: '👤 Usuarios' });
-  }
+  // Flattened version kept for compatibility with existing tests and
+  // behavior (any component that expected `items` can still use it).
+  const items = groups.flatMap(g => g.items);
 
   const closeSidebar = () => setSidebarOpen(false);
 
@@ -95,8 +144,17 @@ function Layout() {
         <div style={css.logo}>DVPNYX</div>
         <div style={css.tagline}>Unconventional People. Disruptive Tech.</div>
         <nav style={css.nav}>
-          {items.map(i => (
-            <Link key={i.path} to={i.path} style={css.navItem(loc.pathname === i.path)} onClick={closeSidebar}>{i.label}</Link>
+          {groups.map((g, gi) => (
+            <React.Fragment key={gi}>
+              {g.title && (
+                <div style={{ padding: '10px 12px 4px', fontSize: 10, fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                  {g.title}
+                </div>
+              )}
+              {g.items.map(i => (
+                <Link key={i.path} to={i.path} style={css.navItem(loc.pathname === i.path)} onClick={closeSidebar}>{i.label}</Link>
+              ))}
+            </React.Fragment>
           ))}
         </nav>
         <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,.1)' }}>
@@ -108,6 +166,7 @@ function Layout() {
       </div>
 
       <div className="main-content">
+        <Breadcrumb />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
@@ -115,7 +174,26 @@ function Layout() {
           <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
           {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
+          {/* V2 modules — placeholders until they ship in later sprints */}
+          <Route path="/clients" element={<ComingSoon />} />
+          <Route path="/clients/*" element={<ComingSoon />} />
+          <Route path="/opportunities" element={<ComingSoon />} />
+          <Route path="/opportunities/*" element={<ComingSoon />} />
+          <Route path="/employees" element={<ComingSoon />} />
+          <Route path="/employees/*" element={<ComingSoon />} />
+          <Route path="/contracts" element={<ComingSoon />} />
+          <Route path="/contracts/*" element={<ComingSoon />} />
+          <Route path="/resource-requests" element={<ComingSoon />} />
+          <Route path="/assignments" element={<ComingSoon />} />
+          <Route path="/time" element={<ComingSoon />} />
+          <Route path="/time/*" element={<ComingSoon />} />
+          <Route path="/reports" element={<ComingSoon />} />
+          <Route path="/reports/*" element={<ComingSoon />} />
+          {isAdmin && <Route path="/admin/areas" element={<ComingSoon />} />}
+          {isAdmin && <Route path="/admin/skills" element={<ComingSoon />} />}
+          {isAdmin && <Route path="/admin/squads" element={<ComingSoon />} />}
         </Routes>
+        <Footer />
       </div>
     </div>
   );
