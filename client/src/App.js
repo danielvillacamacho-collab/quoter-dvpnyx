@@ -7,6 +7,7 @@ import Wiki from './Wiki';
 import Footer from './shell/Footer';
 import Breadcrumb from './shell/Breadcrumb';
 import ComingSoon from './shell/ComingSoon';
+import Clients from './modules/Clients';
 import './App.css';
 
 /* ========== AUTH CONTEXT ========== */
@@ -175,8 +176,8 @@ function Layout() {
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
           {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
           {/* V2 modules — placeholders until they ship in later sprints */}
-          <Route path="/clients" element={<ComingSoon />} />
-          <Route path="/clients/*" element={<ComingSoon />} />
+          <Route path="/clients" element={<Clients />} />
+          <Route path="/clients/*" element={<Clients />} />
           <Route path="/opportunities" element={<ComingSoon />} />
           <Route path="/opportunities/*" element={<ComingSoon />} />
           <Route path="/employees" element={<ComingSoon />} />
