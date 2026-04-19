@@ -71,10 +71,11 @@ describe('Clients module', () => {
     mount();
     await screen.findByText('Acme Corp');
     fireEvent.click(screen.getByRole('button', { name: /Nuevo Cliente/i }));
-    fireEvent.change(await screen.findByPlaceholderText(/Colombia/i), { target: { value: 'Colombia' } });
-    // name input is the first input after the Nuevo cliente heading
-    const nameInput = screen.getByLabelText('Nombre *', { exact: false }).closest('input')
-      || screen.getAllByRole('textbox')[0];
+    // Scope to the modal so we don't pick up the page-level filter inputs.
+    // The label "Nuevo cliente" (h2) uniquely identifies the modal.
+    const modalHeading = await screen.findByText('Nuevo cliente');
+    const modal = modalHeading.closest('form');
+    const nameInput = modal.querySelectorAll('input')[0];
     fireEvent.change(nameInput, { target: { value: 'New Corp' } });
     fireEvent.click(screen.getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => expect(apiV2.apiPost).toHaveBeenCalledWith('/api/clients', expect.objectContaining({ name: 'New Corp' })));

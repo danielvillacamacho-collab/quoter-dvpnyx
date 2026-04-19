@@ -11,12 +11,14 @@ const issuedQueries = [];
 
 // Track transactional state so BEGIN/COMMIT/ROLLBACK in the status route
 // don't consume real rows from the queue.
-const control = new Set(['BEGIN', 'COMMIT', 'ROLLBACK']);
+// Must start with `mock` so jest-hoist lets the jest.mock() factory below
+// reference it (see commit 098a644 for the same rename applied to currentUser).
+const mockControlSql = new Set(['BEGIN', 'COMMIT', 'ROLLBACK']);
 
 jest.mock('../database/pool', () => {
   const pushAndPop = (sql, params) => {
     issuedQueries.push({ sql, params });
-    if (control.has(sql)) return { rows: [] };
+    if (mockControlSql.has(sql)) return { rows: [] };
     if (!queryQueue.length) {
       throw new Error(`Unexpected query (no mock enqueued): ${String(sql).slice(0, 80)}`);
     }
