@@ -1,9 +1,14 @@
 {
   "name": "dvpnyx-quoter-server",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "scripts": {
     "dev": "nodemon index.js",
-    "start": "node index.js"
+    "start": "node index.js",
+    "migrate": "node database/migrate.js",
+    "migrate:v2-data": "node database/migrate_v2_data.js",
+    "validate:v2": "node database/validate_v2_migration.js",
+    "seed": "node database/seed.js",
+    "test": "jest --passWithNoTests"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -18,6 +23,7 @@
     "uuid": "^9.0.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "nodemon": "^3.0.2",
+    "jest": "^29.7.0"
   }
 }
