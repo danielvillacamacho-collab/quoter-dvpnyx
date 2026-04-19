@@ -114,6 +114,71 @@
   -webkit-overflow-scrolling: touch;
 }
 
+/* ===== BREADCRUMB ===== */
+.breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-light);
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: rgba(86, 35, 77, 0.03);
+  border-radius: 6px;
+  line-height: 1.6;
+}
+.breadcrumb-item {
+  color: var(--text-light);
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.15s;
+}
+.breadcrumb-item:hover { color: var(--purple-dark); }
+.breadcrumb-current {
+  color: var(--purple-dark);
+  font-weight: 700;
+  cursor: default;
+}
+.breadcrumb-current:hover { color: var(--purple-dark); }
+.breadcrumb-sep {
+  color: var(--border);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* ===== FOOTER ===== */
+.app-footer {
+  position: fixed;
+  bottom: 8px;
+  right: 14px;
+  font-size: 10px;
+  color: var(--text-light);
+  opacity: 0.7;
+  font-family: 'Courier New', monospace;
+  pointer-events: none;
+  user-select: none;
+  z-index: 50;
+}
+.app-footer-sep { margin: 0 4px; }
+
+/* ===== COMING SOON ===== */
+.coming-soon {
+  text-align: center;
+  padding: 80px 20px;
+}
+.coming-soon-icon {
+  font-size: 72px;
+  margin-bottom: 20px;
+}
+.coming-soon code {
+  background: rgba(86, 35, 77, 0.08);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+}
+
 /* ===== STEPPER (Proyecto wizard) ===== */
 .stepper {
   display: flex;
