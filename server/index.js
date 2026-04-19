@@ -15,10 +15,27 @@ app.use('/api/', limiter);
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Demasiados intentos. Intente en 15 minutos.' } });
 app.use('/api/auth/login', loginLimiter);
 
+app.use('/api/health', require('./routes/health'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/parameters', require('./routes/parameters'));
 app.use('/api/quotations', require('./routes/quotations'));
+
+// V2 modules — currently 501 stubs; sprints 2+ replace each file.
+const _stubs = require('./routes/_stubs');
+app.use('/api/clients',           _stubs.clients);
+app.use('/api/opportunities',     _stubs.opportunities);
+app.use('/api/employees',         _stubs.employees);
+app.use('/api/skills',            _stubs.skills);
+app.use('/api/areas',             _stubs.areas);
+app.use('/api/contracts',         _stubs.contracts);
+app.use('/api/resource-requests', _stubs.resourceRequests);
+app.use('/api/assignments',       _stubs.assignments);
+app.use('/api/time-entries',      _stubs.timeEntries);
+app.use('/api/reports',           _stubs.reports);
+app.use('/api/squads',            _stubs.squads);
+app.use('/api/events',            _stubs.events);
+app.use('/api/notifications',     _stubs.notifications);
 
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../client/build')));

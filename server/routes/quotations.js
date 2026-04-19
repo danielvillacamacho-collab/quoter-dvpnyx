@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
+const { emitEvent } = require('../utils/events');
 
 router.use(auth);
 
@@ -77,6 +78,15 @@ router.post('/', async (req, res) => {
     }
     await client.query(`INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES ($1, 'create_quotation', 'quotation', $2, $3)`,
       [req.user.id, quot.id, JSON.stringify({ type, project_name, client_name })]);
+    // V2 structured event (non-fatal if it fails)
+    await emitEvent(client, {
+      event_type: 'quotation.created',
+      entity_type: 'quotation',
+      entity_id: quot.id,
+      actor_user_id: req.user.id,
+      payload: { type, project_name, client_name, status: quot.status },
+      req,
+    });
     await client.query('COMMIT');
     res.status(201).json(quot);
   } catch (err) {
@@ -135,6 +145,14 @@ router.put('/:id', async (req, res) => {
         );
       }
     }
+    await emitEvent(client, {
+      event_type: 'quotation.updated',
+      entity_type: 'quotation',
+      entity_id: quot.id,
+      actor_user_id: req.user.id,
+      payload: { status: quot.status, project_name: quot.project_name },
+      req,
+    });
     await client.query('COMMIT');
     res.json(quot);
   } catch (err) {
@@ -163,6 +181,14 @@ router.post('/:id/duplicate', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM quotations WHERE id=$1', [req.params.id]);
+    await emitEvent(pool, {
+      event_type: 'quotation.deleted',
+      entity_type: 'quotation',
+      entity_id: req.params.id,
+      actor_user_id: req.user.id,
+      payload: {},
+      req,
+    });
     res.json({ message: 'Eliminada' });
   } catch (err) { res.status(500).json({ error: 'Error interno' }); }
 });
