@@ -11,7 +11,7 @@ name: Develop CI
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, 'feat/**']
   pull_request:
     branches: [develop, main]
 
