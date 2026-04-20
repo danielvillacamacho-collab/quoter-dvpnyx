@@ -11,7 +11,7 @@ name: Develop CI
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, 'feat/**']
   pull_request:
     branches: [develop, main]
 
@@ -30,13 +30,21 @@ jobs:
         working-directory: client
         run: npm install
 
-      - name: Run tests with coverage
+      - name: Run client tests with coverage
         working-directory: client
         run: npm test -- --watchAll=false --ci --coverage
 
       - name: Build client (sanity)
         working-directory: client
         run: CI=false npm run build
+
+      - name: Install server deps
+        working-directory: server
+        run: npm install
+
+      - name: Run server tests
+        working-directory: server
+        run: npm test -- --ci
 
       - name: Upload coverage summary
         if: always()

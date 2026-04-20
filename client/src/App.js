@@ -4,6 +4,26 @@ import * as api from './utils/api';
 import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
 import ProjectEditor from './ProjectEditor';
 import Wiki from './Wiki';
+import Footer from './shell/Footer';
+import Breadcrumb from './shell/Breadcrumb';
+import ComingSoon from './shell/ComingSoon';
+import Clients from './modules/Clients';
+import Opportunities from './modules/Opportunities';
+import Areas from './modules/Areas';
+import Skills from './modules/Skills';
+import Employees from './modules/Employees';
+import Contracts from './modules/Contracts';
+import ResourceRequests from './modules/ResourceRequests';
+import Assignments from './modules/Assignments';
+import TimeMe from './modules/TimeMe';
+import Reports from './modules/Reports';
+import DashboardMe from './modules/DashboardMe';
+import ClientDetail from './modules/ClientDetail';
+import OpportunityDetail from './modules/OpportunityDetail';
+import ContractDetail from './modules/ContractDetail';
+import EmployeeDetail from './modules/EmployeeDetail';
+import NewQuotationPreModal from './modules/NewQuotationPreModal';
+import BulkImport from './modules/BulkImport';
 import './App.css';
 
 /* ========== AUTH CONTEXT ========== */
@@ -71,16 +91,63 @@ function Layout() {
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const items = [
-    { path: '/', label: '📊 Dashboard' },
-    { path: '/quotation/new/staff_aug', label: '👥 Nueva Staff Aug' },
-    { path: '/quotation/new/fixed_scope', label: '📋 Nuevo Proyecto' },
-    { path: '/wiki', label: '📚 Wiki' },
+  // Sidebar is organized in groups. Groups 2+ route to ComingSoon screens
+  // until their corresponding module ships. Visibility is role-based; fine-
+  // grained visibility by function lands when users.function is populated.
+  const groups = [
+    {
+      title: null, items: [
+        { path: '/', label: '📊 Dashboard' },
+      ],
+    },
+    {
+      title: 'Comercial', items: [
+        { path: '/quotation/new/staff_aug', label: '👥 Nueva Staff Aug' },
+        { path: '/quotation/new/fixed_scope', label: '📋 Nuevo Proyecto' },
+        { path: '/clients', label: '🏢 Clientes' },
+        { path: '/opportunities', label: '💼 Oportunidades' },
+      ],
+    },
+    {
+      title: 'Delivery', items: [
+        { path: '/contracts', label: '📑 Contratos' },
+        { path: '/resource-requests', label: '🧾 Solicitudes' },
+        { path: '/assignments', label: '🗓 Asignaciones' },
+      ],
+    },
+    {
+      title: 'Gente', items: [
+        { path: '/employees', label: '🧑‍💻 Empleados' },
+        ...(isAdmin ? [
+          { path: '/admin/areas',  label: '🧭 Áreas' },
+          { path: '/admin/skills', label: '🏷 Skills' },
+          // Squads ship in v2.1 — the default squad is managed by migrate_v2_data.js today
+        ] : []),
+      ],
+    },
+    {
+      title: 'Time Tracking', items: [
+        { path: '/time/me',   label: '⏱ Mis horas' },
+        { path: '/time/team', label: '📈 Horas del equipo' },
+      ],
+    },
+    {
+      title: null, items: [
+        { path: '/reports', label: '📊 Reportes' },
+        { path: '/wiki',    label: '📚 Wiki' },
+      ],
+    },
+    ...(isAdmin ? [{
+      title: 'Configuración', items: [
+        { path: '/admin/params',      label: '⚙️ Parámetros' },
+        { path: '/admin/users',       label: '👤 Usuarios' },
+        { path: '/admin/bulk-import', label: '📤 Carga masiva' },
+      ],
+    }] : []),
   ];
-  if (isAdmin) {
-    items.push({ path: '/admin/params', label: '⚙️ Parámetros' });
-    items.push({ path: '/admin/users', label: '👤 Usuarios' });
-  }
+  // Flattened version kept for compatibility with existing tests and
+  // behavior (any component that expected `items` can still use it).
+  const items = groups.flatMap(g => g.items);
 
   const closeSidebar = () => setSidebarOpen(false);
 
@@ -95,8 +162,17 @@ function Layout() {
         <div style={css.logo}>DVPNYX</div>
         <div style={css.tagline}>Unconventional People. Disruptive Tech.</div>
         <nav style={css.nav}>
-          {items.map(i => (
-            <Link key={i.path} to={i.path} style={css.navItem(loc.pathname === i.path)} onClick={closeSidebar}>{i.label}</Link>
+          {groups.map((g, gi) => (
+            <React.Fragment key={gi}>
+              {g.title && (
+                <div style={{ padding: '10px 12px 4px', fontSize: 10, fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: 1 }}>
+                  {g.title}
+                </div>
+              )}
+              {g.items.map(i => (
+                <Link key={i.path} to={i.path} style={css.navItem(loc.pathname === i.path)} onClick={closeSidebar}>{i.label}</Link>
+              ))}
+            </React.Fragment>
           ))}
         </nav>
         <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,.1)' }}>
@@ -108,6 +184,7 @@ function Layout() {
       </div>
 
       <div className="main-content">
+        <Breadcrumb />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
@@ -115,7 +192,28 @@ function Layout() {
           <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
           {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
+          {isAdmin && <Route path="/admin/bulk-import" element={<BulkImport />} />}
+          {/* V2 modules — placeholders until they ship in later sprints */}
+          <Route path="/clients" element={<Clients />} />
+          <Route path="/clients/:id" element={<ClientDetail />} />
+          <Route path="/opportunities" element={<Opportunities />} />
+          <Route path="/opportunities/:id" element={<OpportunityDetail />} />
+          <Route path="/employees" element={<Employees />} />
+          <Route path="/employees/:id" element={<EmployeeDetail />} />
+          <Route path="/contracts" element={<Contracts />} />
+          <Route path="/contracts/:id" element={<ContractDetail />} />
+          <Route path="/resource-requests" element={<ResourceRequests />} />
+          <Route path="/assignments" element={<Assignments />} />
+          <Route path="/time" element={<TimeMe />} />
+          <Route path="/time/me" element={<TimeMe />} />
+          <Route path="/time/team" element={<ComingSoon />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/reports/:type" element={<Reports />} />
+          <Route path="/dashboard/me" element={<DashboardMe />} />
+          {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
+          {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
         </Routes>
+        <Footer />
       </div>
     </div>
   );
@@ -268,7 +366,10 @@ function Dashboard() {
 }
 
 /* ========== QUOTATION ROUTER ========== */
-// Dispatches to the correct editor based on type (fixed_scope → stepper, staff_aug → linear)
+// Dispatches to the correct editor based on type (fixed_scope → stepper, staff_aug → linear).
+// EX-1: when creating a NEW quotation, intercepts with a pre-modal that forces
+// the user to pick cliente + oportunidad before the editor loads — the server
+// now rejects POST /api/quotations without both IDs.
 function QuotationRouter() {
   const { params } = useAuth();
   const nav = useNavigate();
@@ -277,6 +378,7 @@ function QuotationRouter() {
 
   const [loading, setLoading] = useState(!!quotId);
   const [type, setType] = useState(newType || 'staff_aug');
+  const [linkingContext, setLinkingContext] = useState(null); // { client_id, opportunity_id, client_name, opportunity_name }
 
   useEffect(() => {
     if (isNew) { setType(newType); setLoading(false); return; }
@@ -286,19 +388,37 @@ function QuotationRouter() {
   }, [quotId, newType, isNew, nav]);
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-light)' }}>Cargando...</div>;
-  if (type === 'fixed_scope') return <ProjectEditor params={params} />;
-  return <StaffAugEditor params={params} />;
+
+  // New-quotation flow: show the cliente+opp selector first
+  if (isNew && !linkingContext) {
+    return (
+      <NewQuotationPreModal
+        type={newType}
+        onContext={setLinkingContext}
+        onCancel={() => nav('/')}
+      />
+    );
+  }
+
+  if (type === 'fixed_scope') return <ProjectEditor params={params} context={linkingContext} />;
+  return <StaffAugEditor params={params} context={linkingContext} />;
 }
 
 /* ========== STAFF AUG EDITOR (linear table) ========== */
-function StaffAugEditor({ params }) {
+function StaffAugEditor({ params, context }) {
   const nav = useNavigate();
   const { id: quotId, type: newType } = useParams();
   const isNew = !!newType;
 
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState({
-    type: newType || 'staff_aug', project_name: '', client_name: '', commercial_name: '', preventa_name: '',
+    type: newType || 'staff_aug',
+    // EX-1: when creating a new quotation, the cliente+opp IDs come from the
+    // pre-modal's context. On edit, they arrive via the GET /api/quotations/:id
+    // payload below. Both persist through save via api.createQuotation.
+    client_id: context?.client_id || null,
+    opportunity_id: context?.opportunity_id || null,
+    project_name: '', client_name: context?.client_name || '', commercial_name: '', preventa_name: '',
     discount_pct: 0, notes: '', status: 'draft', lines: [{ ...EMPTY_LINE }], metadata: {}
   });
 

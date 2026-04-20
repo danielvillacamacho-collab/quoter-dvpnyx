@@ -15,14 +15,40 @@ app.use('/api/', limiter);
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Demasiados intentos. Intente en 15 minutos.' } });
 app.use('/api/auth/login', loginLimiter);
 
+app.use('/api/health', require('./routes/health'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/parameters', require('./routes/parameters'));
 app.use('/api/quotations', require('./routes/quotations'));
 
+// V2 modules — currently 501 stubs; sprints 2+ replace each file.
+const _stubs = require('./routes/_stubs');
+app.use('/api/clients',           require('./routes/clients'));       // ✅ Sprint 2
+app.use('/api/opportunities',     require('./routes/opportunities')); // ✅ Sprint 2
+app.use('/api/employees',         require('./routes/employees'));    // ✅ Sprint 3 EE-1
+app.use('/api/skills',            require('./routes/skills'));       // ✅ Sprint 3 EA-2
+app.use('/api/areas',             require('./routes/areas'));        // ✅ Sprint 3 EA-1
+app.use('/api/contracts',         require('./routes/contracts'));    // ✅ Sprint 4 EK-1/EK-2
+app.use('/api/resource-requests', require('./routes/resource_requests')); // ✅ Sprint 4 ER-1/ER-2
+app.use('/api/assignments',       require('./routes/assignments'));  // ✅ Sprint 4 EN-1/EN-2/EN-5
+app.use('/api/time-entries',      require('./routes/time_entries')); // ✅ Sprint 5 ET-*
+app.use('/api/reports',           require('./routes/reports'));      // ✅ Sprint 6 EI-* / ED-1
+app.use('/api/bulk-import',       require('./routes/bulk_import'));  // ✅ Sprint 9 (admin+)
+app.use('/api/squads',            _stubs.squads);
+app.use('/api/events',            _stubs.events);
+app.use('/api/notifications',     _stubs.notifications);
+
 if (process.env.NODE_ENV === 'production') {
+  // Hashed static assets (JS, CSS, media) — safe to cache long-term.
   app.use(express.static(path.join(__dirname, '../client/build')));
-  app.get('*', (_, res) => res.sendFile(path.join(__dirname, '../client/build/index.html')));
+  // index.html must NEVER be cached: it references the hashed bundles, so
+  // if a stale index.html is served after a deploy the user gets the old app.
+  app.get('*', (_, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.sendFile(path.join(__dirname, '../client/build/index.html'));
+  });
 }
 
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Error interno del servidor' }); });
