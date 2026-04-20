@@ -26,7 +26,7 @@ const _stubs = require('./routes/_stubs');
 app.use('/api/clients',           require('./routes/clients'));       // ✅ Sprint 2
 app.use('/api/opportunities',     require('./routes/opportunities')); // ✅ Sprint 2
 app.use('/api/employees',         _stubs.employees);
-app.use('/api/skills',            _stubs.skills);
+app.use('/api/skills',            require('./routes/skills'));       // ✅ Sprint 3 EA-2
 app.use('/api/areas',             require('./routes/areas'));        // ✅ Sprint 3 EA-1
 app.use('/api/contracts',         _stubs.contracts);
 app.use('/api/resource-requests', _stubs.resourceRequests);
