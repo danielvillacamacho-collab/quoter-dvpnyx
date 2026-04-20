@@ -39,16 +39,16 @@ services:
       - db_internal
 
   server:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      # These propagate the build-time env vars into the CRA build so the
-      # footer in prod shows the actual commit. deploy.yml exports them
-      # before running `docker compose build`.
-      args:
-        REACT_APP_GIT_SHA: ${REACT_APP_GIT_SHA:-local}
-        REACT_APP_VERSION: ${REACT_APP_VERSION:-2.0.0}
-    image: dvpnyx-quoter-server:latest
+    # Image is built + pushed by .github/workflows/deploy.yml (prod) and
+    # dev-deploy.yml (dev) to ghcr.io. The host just pulls. For local
+    # development, use docker-compose.dev.yml which builds from source.
+    #
+    # IMAGE_NAME defaults to the GHCR path for this repo; override only
+    # if you forked or re-hosted the image.
+    # IMAGE_TAG is the short git SHA of the commit being deployed, set
+    # by the CI workflow via SSH env. Defaults to `latest` for manual
+    # `docker compose pull` / rollbacks.
+    image: ${IMAGE_NAME:-ghcr.io/danielvillacamacho-collab/dvpnyx-quoter-server}:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       DB_HOST: db
