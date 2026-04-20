@@ -28,8 +28,8 @@ app.use('/api/opportunities',     require('./routes/opportunities')); // ✅ Spr
 app.use('/api/employees',         require('./routes/employees'));    // ✅ Sprint 3 EE-1
 app.use('/api/skills',            require('./routes/skills'));       // ✅ Sprint 3 EA-2
 app.use('/api/areas',             require('./routes/areas'));        // ✅ Sprint 3 EA-1
-app.use('/api/contracts',         _stubs.contracts);
-app.use('/api/resource-requests', _stubs.resourceRequests);
+app.use('/api/contracts',         require('./routes/contracts'));    // ✅ Sprint 4 EK-1/EK-2
+app.use('/api/resource-requests', require('./routes/resource_requests')); // ✅ Sprint 4 ER-1/ER-2
 app.use('/api/assignments',       _stubs.assignments);
 app.use('/api/time-entries',      _stubs.timeEntries);
 app.use('/api/reports',           _stubs.reports);
