@@ -678,7 +678,7 @@ function MetricCard({ value, label, color, sub }) {
 }
 
 /* ========== MAIN PROJECT EDITOR ========== */
-export default function ProjectEditor({ params }) {
+export default function ProjectEditor({ params, context }) {
   const nav = useNavigate();
   const { id: quotId } = useParams();
   const isNew = !quotId;
@@ -687,7 +687,11 @@ export default function ProjectEditor({ params }) {
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState({
     type: 'fixed_scope',
-    project_name: '', client_name: '', commercial_name: '', preventa_name: '',
+    // EX-1: cliente+opp IDs from the pre-modal's context (new) or from the
+    // GET response (edit). Both flow through to POST/PUT payloads below.
+    client_id: context?.client_id || null,
+    opportunity_id: context?.opportunity_id || null,
+    project_name: '', client_name: context?.client_name || '', commercial_name: '', preventa_name: '',
     discount_pct: 0, notes: '', status: 'draft',
     lines: [],
     phases: [...DEFAULT_PHASES],
