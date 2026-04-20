@@ -9,6 +9,8 @@ import Breadcrumb from './shell/Breadcrumb';
 import ComingSoon from './shell/ComingSoon';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
+import Areas from './modules/Areas';
+import Skills from './modules/Skills';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import './App.css';
 
@@ -192,8 +194,8 @@ function Layout() {
           <Route path="/time/*" element={<ComingSoon />} />
           <Route path="/reports" element={<ComingSoon />} />
           <Route path="/reports/*" element={<ComingSoon />} />
-          {isAdmin && <Route path="/admin/areas" element={<ComingSoon />} />}
-          {isAdmin && <Route path="/admin/skills" element={<ComingSoon />} />}
+          {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
+          {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           {isAdmin && <Route path="/admin/squads" element={<ComingSoon />} />}
         </Routes>
         <Footer />
