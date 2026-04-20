@@ -62,7 +62,12 @@ jobs:
             # Server files live at /app/server/ inside the container (WORKDIR=/app)
             docker compose run --rm server sh -c "cd server && node database/migrate.js"
 
-            # Build and tag image with git SHA for rollback
+            # Build and tag image with git SHA for rollback.
+            # Export REACT_APP_GIT_SHA so Footer.js shows this exact
+            # commit in the browser, letting users paste it into bug
+            # reports (EX-5).
+            export REACT_APP_GIT_SHA=$GIT_SHA
+            export REACT_APP_VERSION=$(node -p "require('./server/package.json').version" 2>/dev/null || echo 2.0.0)
             docker compose build server
             docker tag dvpnyx-quoter-server:latest dvpnyx-quoter-server:$GIT_SHA
 

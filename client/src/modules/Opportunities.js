@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 
 /* ========== styles (mirror Clients.js) ========== */
@@ -364,7 +364,9 @@ export default function Opportunities() {
                 const nextStates = TRANSITIONS[o.status] || [];
                 return (
                   <tr key={o.id}>
-                    <td style={{ ...s.td, fontWeight: 600 }}>{o.name}</td>
+                    <td style={{ ...s.td, fontWeight: 600 }}>
+                      <Link to={`/opportunities/${o.id}`} style={{ color: 'var(--purple-dark)', textDecoration: 'none' }} aria-label={`Ver ${o.name}`}>{o.name}</Link>
+                    </td>
                     <td style={s.td}>{o.client_name || '—'}</td>
                     <td style={s.td}>
                       <span style={{

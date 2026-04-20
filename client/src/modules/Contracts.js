@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 
 const s = {
@@ -266,7 +267,9 @@ export default function Contracts() {
                 const nextStates = TRANSITIONS[c.status] || [];
                 return (
                   <tr key={c.id}>
-                    <td style={{ ...s.td, fontWeight: 600 }}>{c.name}</td>
+                    <td style={{ ...s.td, fontWeight: 600 }}>
+                      <Link to={`/contracts/${c.id}`} style={{ color: 'var(--purple-dark)', textDecoration: 'none' }} aria-label={`Ver ${c.name}`}>{c.name}</Link>
+                    </td>
                     <td style={s.td}>{c.client_name || '—'}</td>
                     <td style={{ ...s.td, fontSize: 12 }}>{TYPE_LABEL[c.type] || c.type}</td>
                     <td style={s.td}>
