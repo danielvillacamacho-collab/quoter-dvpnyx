@@ -15,6 +15,7 @@ import Employees from './modules/Employees';
 import Contracts from './modules/Contracts';
 import ResourceRequests from './modules/ResourceRequests';
 import Assignments from './modules/Assignments';
+import TimeMe from './modules/TimeMe';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import './App.css';
 
@@ -194,7 +195,8 @@ function Layout() {
           <Route path="/contracts/*" element={<Contracts />} />
           <Route path="/resource-requests" element={<ResourceRequests />} />
           <Route path="/assignments" element={<Assignments />} />
-          <Route path="/time" element={<ComingSoon />} />
+          <Route path="/time" element={<TimeMe />} />
+          <Route path="/time/me" element={<TimeMe />} />
           <Route path="/time/*" element={<ComingSoon />} />
           <Route path="/reports" element={<ComingSoon />} />
           <Route path="/reports/*" element={<ComingSoon />} />
