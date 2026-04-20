@@ -226,6 +226,139 @@ describe('PUT /api/assignments/:id — EN-2 on update', () => {
   });
 });
 
+describe('GET /api/assignments/validate — US-BK-2', () => {
+  /**
+   * Validate enqueues queries in this order:
+   *   1. SELECT employee + area        (Promise.all first)
+   *   2. SELECT request + area         (Promise.all second)
+   *   3. SELECT committed_hours SUM    (sumOverlappingHours)
+   */
+  const enqueue = (employeeRow, requestRow, committedTotal) => {
+    queryQueue.push({ rows: employeeRow ? [employeeRow] : [] });
+    queryQueue.push({ rows: requestRow  ? [requestRow]  : [] });
+    if (employeeRow && requestRow) {
+      queryQueue.push({ rows: [{ total: committedTotal }] });
+    }
+  };
+
+  const matchedEmployee = {
+    id: 'e1', first_name: 'Ana', last_name: 'G',
+    level: 'L5', weekly_capacity_hours: 40, status: 'active',
+    area_id: 1, area_name: 'Desarrollo',
+  };
+  const matchedRequest = {
+    id: 'rr1', contract_id: 'ct1', role_title: 'Senior Dev', level: 'L5',
+    weekly_hours: 20, start_date: '2026-05-01', end_date: '2026-08-01',
+    status: 'open', area_id: 1, area_name: 'Desarrollo',
+  };
+
+  it('requires employee_id and request_id', async () => {
+    let res = await client.call('GET', '/api/assignments/validate');
+    expect(res.status).toBe(400);
+    res = await client.call('GET', '/api/assignments/validate?employee_id=e1');
+    expect(res.status).toBe(400);
+    res = await client.call('GET', '/api/assignments/validate?request_id=rr1');
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when employee does not exist', async () => {
+    enqueue(null, matchedRequest);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/employee/);
+  });
+
+  it('returns 404 when request does not exist', async () => {
+    enqueue(matchedEmployee, null);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/resource_request/);
+  });
+
+  it('returns valid=true when everything matches', async () => {
+    enqueue(matchedEmployee, matchedRequest, 0);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(true);
+    expect(res.body.can_override).toBe(false);
+    expect(res.body.summary.pass).toBe(4);
+    expect(res.body.checks).toHaveLength(4);
+    expect(res.body.context.employee.name).toBe('Ana G');
+    expect(res.body.context.request.role_title).toBe('Senior Dev');
+    expect(res.body.context.proposed.weekly_hours).toBe(20);
+  });
+
+  it('flags area mismatch as overridable fail', async () => {
+    enqueue(
+      { ...matchedEmployee, area_id: 2, area_name: 'Testing' },
+      matchedRequest, 0,
+    );
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(false);
+    expect(res.body.can_override).toBe(true);
+    expect(res.body.requires_justification).toBe(true);
+    const areaCheck = res.body.checks.find((c) => c.check === 'area_match');
+    expect(areaCheck.status).toBe('fail');
+    expect(areaCheck.overridable).toBe(true);
+  });
+
+  it('marks non-overlapping dates as non-overridable fail', async () => {
+    enqueue(matchedEmployee, matchedRequest, 0);
+    const res = await client.call(
+      'GET',
+      '/api/assignments/validate?employee_id=e1&request_id=rr1&start_date=2027-01-01&end_date=2027-06-01',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(false);
+    expect(res.body.can_override).toBe(false);
+    const dateCheck = res.body.checks.find((c) => c.check === 'date_conflict');
+    expect(dateCheck.status).toBe('fail');
+    expect(dateCheck.overridable).toBe(false);
+  });
+
+  it('uses query-provided weekly_hours when present (overrides request default)', async () => {
+    enqueue(matchedEmployee, matchedRequest, 30);
+    const res = await client.call(
+      'GET',
+      '/api/assignments/validate?employee_id=e1&request_id=rr1&weekly_hours=20',
+    );
+    // committed 30 + requested 20 > capacity 40 → fail overridable
+    const cap = res.body.checks.find((c) => c.check === 'capacity');
+    expect(cap.status).toBe('fail');
+    expect(cap.overridable).toBe(true);
+    expect(cap.detail.utilization_after_pct).toBe(125);
+    expect(res.body.context.proposed.weekly_hours).toBe(20);
+  });
+
+  it('surfaces employee status advisories alongside checks', async () => {
+    enqueue({ ...matchedEmployee, status: 'terminated' }, matchedRequest, 0);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(200);
+    expect(res.body.advisories.map((a) => a.code)).toContain('employee_terminated');
+  });
+
+  it('surfaces cancelled request as advisory', async () => {
+    enqueue(matchedEmployee, { ...matchedRequest, status: 'cancelled' }, 0);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(200);
+    expect(res.body.advisories.map((a) => a.code)).toContain('request_cancelled');
+  });
+
+  it('supports ignore_assignment_id (for editing flow)', async () => {
+    enqueue(matchedEmployee, matchedRequest, 0);
+    const res = await client.call(
+      'GET',
+      '/api/assignments/validate?employee_id=e1&request_id=rr1&ignore_assignment_id=a-existing',
+    );
+    expect(res.status).toBe(200);
+    // The third query (sumOverlappingHours) must have received the ignore id as a param
+    const overlapQuery = issuedQueries.find((q) => /SUM\(weekly_hours\)/i.test(q.sql));
+    expect(overlapQuery).toBeTruthy();
+    expect(overlapQuery.params).toContain('a-existing');
+  });
+});
+
 describe('DELETE /api/assignments/:id — EN-5', () => {
   it('hard-deletes when there are no time entries', async () => {
     const { emitEvent } = require('../utils/events');
