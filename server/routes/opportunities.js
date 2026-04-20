@@ -167,16 +167,34 @@ router.post('/', async (req, res) => {
 
     const ownerId = account_owner_id || req.user.id;
 
-    // Resolve squad_id: explicit from body, else look up from users table
+    // Resolve squad_id automatically. Squads are an internal concept no longer
+    // exposed in the UI — we resolve (or auto-create) a default so opportunity
+    // creation never fails. Order: body → user's squad → default "DVPNYX Global"
+    // → auto-create the default if the table is empty.
     let finalSquadId = squad_id || null;
     if (!finalSquadId) {
       const { rows: userRows } = await pool.query(`SELECT squad_id FROM users WHERE id=$1`, [ownerId]);
       finalSquadId = userRows[0]?.squad_id || null;
     }
     if (!finalSquadId) {
-      return res.status(400).json({
-        error: 'El usuario no tiene squad asignado; un administrador debe asignar un squad antes de crear oportunidades',
-      });
+      const { rows: sRows } = await pool.query(
+        `SELECT id FROM squads
+           WHERE deleted_at IS NULL AND active = true
+           ORDER BY (LOWER(name) = LOWER('DVPNYX Global')) DESC, created_at ASC
+           LIMIT 1`
+      );
+      finalSquadId = sRows[0]?.id || null;
+    }
+    if (!finalSquadId) {
+      const { rows: createdRows } = await pool.query(
+        `INSERT INTO squads (name, description, active)
+           VALUES ('DVPNYX Global', 'Squad por defecto (auto-creado)', true)
+           RETURNING id`
+      );
+      finalSquadId = createdRows[0]?.id || null;
+    }
+    if (!finalSquadId) {
+      return res.status(500).json({ error: 'No se pudo resolver el squad por defecto. Contacta al administrador.' });
     }
 
     const { rows } = await pool.query(

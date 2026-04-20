@@ -145,9 +145,9 @@ router.post('/', adminOnly, async (req, res) => {
       resolvedSquadId = uRows[0]?.squad_id || null;
     }
     if (!resolvedSquadId) {
-      // Fallback to the default squad seeded by the V2 migration ("DVPNYX Global").
-      // The schema has no "key" column — match by name. If that's missing too,
-      // grab any active squad as a last resort so contracts aren't blocked.
+      // Fallback to the default squad ("DVPNYX Global"). Squads are an internal
+      // concept no longer exposed in the UI — we auto-provision the default so
+      // contract creation never fails on a fresh/empty DB.
       const { rows: sRows } = await pool.query(
         `SELECT id FROM squads
            WHERE deleted_at IS NULL AND active = true
@@ -157,7 +157,17 @@ router.post('/', adminOnly, async (req, res) => {
       resolvedSquadId = sRows[0]?.id || null;
     }
     if (!resolvedSquadId) {
-      return res.status(500).json({ error: 'No hay squad disponible para asignar al contrato. Contacta al administrador.' });
+      // Last resort: create the default squad on the fly so the system is
+      // self-healing in environments where the V2 data migration never ran.
+      const { rows: createdRows } = await pool.query(
+        `INSERT INTO squads (name, description, active)
+           VALUES ('DVPNYX Global', 'Squad por defecto (auto-creado)', true)
+           RETURNING id`
+      );
+      resolvedSquadId = createdRows[0]?.id || null;
+    }
+    if (!resolvedSquadId) {
+      return res.status(500).json({ error: 'No se pudo resolver el squad por defecto. Contacta al administrador.' });
     }
     // Referential checks
     const { rows: cRows } = await pool.query(
