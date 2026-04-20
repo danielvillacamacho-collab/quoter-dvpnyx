@@ -145,14 +145,63 @@ router.put('/:id', async (req, res) => {
   try {
     await client.query('BEGIN');
     const { project_name, client_name, commercial_name, preventa_name, status, discount_pct, notes, lines, phases, epics, milestones, metadata } = req.body;
+
+    // EX-3: snapshot parameters when the quotation first leaves `draft` for
+    // `sent` or `approved`. Load the current row first so we can decide
+    // whether to capture BEFORE the UPDATE.
+    const { rows: [before] } = await client.query(
+      `SELECT id, type, status, parameters_snapshot FROM quotations WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!before) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'No encontrada' }); }
+
+    const effectiveStatus = status != null ? status : before.status;
+    const isFirstLeavingDraft = before.status === 'draft'
+      && (effectiveStatus === 'sent' || effectiveStatus === 'approved')
+      && !before.parameters_snapshot;
+
+    // EX-2 + EX-3: pick the calc params for this PUT.
+    //   - If a snapshot already exists → use it (frozen post-sent totals).
+    //   - If we're capturing one right now → load live params and use those.
+    //   - Else → use live params (quotation is still in draft).
+    let paramsForCalc = null;
+    let capturedSnapshot = null;
+    if (before.parameters_snapshot) {
+      paramsForCalc = before.parameters_snapshot;
+    } else if (isFirstLeavingDraft || (lines && before.type === 'staff_aug')) {
+      paramsForCalc = await loadCanonicalParams(client);
+      if (isFirstLeavingDraft) capturedSnapshot = paramsForCalc;
+    }
+
     const { rows: [quot] } = await client.query(
       `UPDATE quotations SET project_name=COALESCE($1,project_name), client_name=COALESCE($2,client_name),
        commercial_name=COALESCE($3,commercial_name), preventa_name=COALESCE($4,preventa_name),
        status=COALESCE($5,status), discount_pct=COALESCE($6,discount_pct), notes=COALESCE($7,notes),
-       metadata=COALESCE($8,metadata), updated_at=NOW() WHERE id=$9 RETURNING *`,
-      [project_name, client_name, commercial_name, preventa_name, status, discount_pct, notes, metadata ? JSON.stringify(metadata) : null, req.params.id]
+       metadata=COALESCE($8,metadata),
+       parameters_snapshot=COALESCE($9,parameters_snapshot),
+       sent_at=CASE WHEN $10::boolean AND sent_at IS NULL THEN NOW() ELSE sent_at END,
+       updated_at=NOW() WHERE id=$11 RETURNING *`,
+      [
+        project_name, client_name, commercial_name, preventa_name,
+        status, discount_pct, notes,
+        metadata ? JSON.stringify(metadata) : null,
+        capturedSnapshot ? JSON.stringify(capturedSnapshot) : null,
+        effectiveStatus === 'sent',
+        req.params.id,
+      ]
     );
     if (!quot) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'No encontrada' }); }
+
+    if (capturedSnapshot) {
+      await emitEvent(client, {
+        event_type: 'quotation.snapshot_captured',
+        entity_type: 'quotation',
+        entity_id: quot.id,
+        actor_user_id: req.user.id,
+        payload: { trigger_status: effectiveStatus, previous_status: before.status },
+        req,
+      });
+    }
 
     // EX-2: for staff_aug lines, the server is the source of truth for
     // calculated outputs (cost_hour / rate_hour / rate_month / total).
@@ -160,9 +209,8 @@ router.put('/:id', async (req, res) => {
     // emit an event — the persisted values come from recalcStaffAugLines.
     let driftReport = null;
     let canonicalLines = lines;
-    if (lines && quot.type === 'staff_aug') {
-      const params = await loadCanonicalParams(client);
-      canonicalLines = recalcStaffAugLines(lines, params);
+    if (lines && quot.type === 'staff_aug' && paramsForCalc) {
+      canonicalLines = recalcStaffAugLines(lines, paramsForCalc);
       driftReport = detectLineDrift(lines, canonicalLines, 0.01);
       if (driftReport.drifted) {
         await emitEvent(client, {
@@ -170,7 +218,7 @@ router.put('/:id', async (req, res) => {
           entity_type: 'quotation',
           entity_id: quot.id,
           actor_user_id: req.user.id,
-          payload: { diffs: driftReport.diffs.slice(0, 20), total_drifted_fields: driftReport.diffs.length },
+          payload: { diffs: driftReport.diffs.slice(0, 20), total_drifted_fields: driftReport.diffs.length, used_snapshot: !!before.parameters_snapshot },
           req,
         });
       }
@@ -187,14 +235,67 @@ router.put('/:id', async (req, res) => {
         );
       }
     }
+    // Collected phase IDs indexed by sort_order. Populated when `phases`
+    // is included in the PUT body so EX-4 can translate the legacy
+    // allocation matrix (which keys by phase index) into the relational
+    // quotation_allocations table (which keys by phase UUID).
+    const phaseIdByIdx = [];
     if (phases) {
       await client.query('DELETE FROM quotation_phases WHERE quotation_id=$1', [req.params.id]);
       for (let i = 0; i < phases.length; i++) {
         const p = phases[i];
-        await client.query('INSERT INTO quotation_phases (quotation_id, sort_order, name, weeks, description) VALUES ($1,$2,$3,$4,$5)',
-          [quot.id, i, p.name, p.weeks, p.description]);
+        const { rows: [inserted] } = await client.query(
+          'INSERT INTO quotation_phases (quotation_id, sort_order, name, weeks, description) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+          [quot.id, i, p.name, p.weeks, p.description]
+        );
+        phaseIdByIdx[i] = inserted.id;
       }
     }
+
+    // EX-4: dual-write metadata.allocation to the quotation_allocations
+    // table so future reporting queries can aggregate without scanning
+    // JSONB. GET still returns the legacy JSONB shape (backwards
+    // compatible); a subsequent change can flip GET over once all
+    // consumers are on the relational source.
+    //
+    // If phases weren't re-uploaded in this PUT but the allocation was,
+    // we fall back to fetching the existing phase IDs from the DB so the
+    // mapping still works.
+    const allocationFromMeta = metadata?.allocation;
+    if (allocationFromMeta && typeof allocationFromMeta === 'object') {
+      let idxMap = phaseIdByIdx;
+      if (idxMap.length === 0) {
+        const { rows: existingPhases } = await client.query(
+          'SELECT id, sort_order FROM quotation_phases WHERE quotation_id=$1 ORDER BY sort_order',
+          [quot.id]
+        );
+        idxMap = existingPhases.map((r) => r.id);
+      }
+      // CASCADE on phase DELETE already cleared old allocation rows when
+      // phases were re-inserted above. When phases weren't re-uploaded
+      // we need to clear explicitly so this write is authoritative.
+      if (phaseIdByIdx.length === 0) {
+        await client.query('DELETE FROM quotation_allocations WHERE quotation_id=$1', [req.params.id]);
+      }
+      for (const [lineIdxStr, phaseMap] of Object.entries(allocationFromMeta)) {
+        const lineIdx = Number(lineIdxStr);
+        if (!Number.isFinite(lineIdx) || !phaseMap || typeof phaseMap !== 'object') continue;
+        for (const [phaseIdxStr, hoursRaw] of Object.entries(phaseMap)) {
+          const phaseIdx = Number(phaseIdxStr);
+          const hours = Number(hoursRaw);
+          if (!Number.isFinite(phaseIdx) || !Number.isFinite(hours) || hours <= 0) continue;
+          const phaseId = idxMap[phaseIdx];
+          if (!phaseId) continue; // orphan — skip
+          await client.query(
+            `INSERT INTO quotation_allocations (quotation_id, line_sort_order, phase_id, weekly_hours)
+             VALUES ($1,$2,$3,$4)
+             ON CONFLICT (quotation_id, line_sort_order, phase_id) DO UPDATE SET weekly_hours = EXCLUDED.weekly_hours`,
+            [quot.id, lineIdx, phaseId, hours]
+          );
+        }
+      }
+    }
+
     if (milestones) {
       await client.query('DELETE FROM quotation_milestones WHERE quotation_id=$1', [req.params.id]);
       for (let i = 0; i < milestones.length; i++) {
