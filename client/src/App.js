@@ -9,6 +9,7 @@ import Breadcrumb from './shell/Breadcrumb';
 import ComingSoon from './shell/ComingSoon';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
+import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import './App.css';
 
 /* ========== AUTH CONTEXT ========== */
@@ -348,7 +349,10 @@ function Dashboard() {
 }
 
 /* ========== QUOTATION ROUTER ========== */
-// Dispatches to the correct editor based on type (fixed_scope → stepper, staff_aug → linear)
+// Dispatches to the correct editor based on type (fixed_scope → stepper, staff_aug → linear).
+// EX-1: when creating a NEW quotation, intercepts with a pre-modal that forces
+// the user to pick cliente + oportunidad before the editor loads — the server
+// now rejects POST /api/quotations without both IDs.
 function QuotationRouter() {
   const { params } = useAuth();
   const nav = useNavigate();
@@ -357,6 +361,7 @@ function QuotationRouter() {
 
   const [loading, setLoading] = useState(!!quotId);
   const [type, setType] = useState(newType || 'staff_aug');
+  const [linkingContext, setLinkingContext] = useState(null); // { client_id, opportunity_id, client_name, opportunity_name }
 
   useEffect(() => {
     if (isNew) { setType(newType); setLoading(false); return; }
@@ -366,19 +371,37 @@ function QuotationRouter() {
   }, [quotId, newType, isNew, nav]);
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-light)' }}>Cargando...</div>;
-  if (type === 'fixed_scope') return <ProjectEditor params={params} />;
-  return <StaffAugEditor params={params} />;
+
+  // New-quotation flow: show the cliente+opp selector first
+  if (isNew && !linkingContext) {
+    return (
+      <NewQuotationPreModal
+        type={newType}
+        onContext={setLinkingContext}
+        onCancel={() => nav('/')}
+      />
+    );
+  }
+
+  if (type === 'fixed_scope') return <ProjectEditor params={params} context={linkingContext} />;
+  return <StaffAugEditor params={params} context={linkingContext} />;
 }
 
 /* ========== STAFF AUG EDITOR (linear table) ========== */
-function StaffAugEditor({ params }) {
+function StaffAugEditor({ params, context }) {
   const nav = useNavigate();
   const { id: quotId, type: newType } = useParams();
   const isNew = !!newType;
 
   const [saving, setSaving] = useState(false);
   const [data, setData] = useState({
-    type: newType || 'staff_aug', project_name: '', client_name: '', commercial_name: '', preventa_name: '',
+    type: newType || 'staff_aug',
+    // EX-1: when creating a new quotation, the cliente+opp IDs come from the
+    // pre-modal's context. On edit, they arrive via the GET /api/quotations/:id
+    // payload below. Both persist through save via api.createQuotation.
+    client_id: context?.client_id || null,
+    opportunity_id: context?.opportunity_id || null,
+    project_name: '', client_name: context?.client_name || '', commercial_name: '', preventa_name: '',
     discount_pct: 0, notes: '', status: 'draft', lines: [{ ...EMPTY_LINE }], metadata: {}
   });
 

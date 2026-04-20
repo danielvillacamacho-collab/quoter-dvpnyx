@@ -2,8 +2,45 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import App from './App';
 import * as api from './utils/api';
+import * as apiV2 from './utils/apiV2';
 
 jest.mock('./utils/api');
+jest.mock('./utils/apiV2');
+
+/**
+ * When entering the new-quotation flow, the EX-1 pre-modal intercepts
+ * and requires picking cliente + oportunidad before the editor loads.
+ * This helper walks past it in stepper tests that don't care about the
+ * pre-modal itself (those tests live in NewQuotationPreModal.test.js).
+ */
+async function walkPastPreModal() {
+  // Pre-modal is up when its Cliente selector is on screen
+  const clientSelect = await screen.findByLabelText('Cliente');
+  // Wait for the mocked clients list to populate the <option>s
+  // — otherwise the change event's value has no matching option and is a no-op.
+  await waitFor(() => {
+    expect(clientSelect.querySelector('option[value="c-pre"]')).not.toBeNull();
+  });
+  fireEvent.change(clientSelect, { target: { value: 'c-pre' } });
+  await waitFor(() => {
+    const opps = screen.getByLabelText('Oportunidad');
+    expect(opps.querySelector('option[value="o-pre"]')).not.toBeNull();
+  });
+  fireEvent.change(screen.getByLabelText('Oportunidad'), { target: { value: 'o-pre' } });
+  fireEvent.click(screen.getByRole('button', { name: /Continuar/i }));
+}
+
+function mockPreModalData() {
+  apiV2.apiGet.mockImplementation((url) => {
+    if (url.startsWith('/api/clients')) {
+      return Promise.resolve({ data: [{ id: 'c-pre', name: 'Acme Test', active: true }], pagination: {} });
+    }
+    if (url.startsWith('/api/opportunities')) {
+      return Promise.resolve({ data: [{ id: 'o-pre', name: 'Deal Test', client_id: 'c-pre', status: 'open' }], pagination: {} });
+    }
+    return Promise.resolve({ data: [], pagination: {} });
+  });
+}
 
 /* ===== fixtures ===== */
 const mockUser = {
@@ -219,6 +256,7 @@ describe('ProjectEditor — fixed_scope stepper', () => {
     api.getMe.mockResolvedValue(mockUser);
     api.getParams.mockResolvedValue(mockParams);
     api.getQuotations.mockResolvedValue([]);
+    mockPreModalData();
     window.history.pushState({}, '', '/quotation/new/fixed_scope');
   });
 
@@ -226,6 +264,7 @@ describe('ProjectEditor — fixed_scope stepper', () => {
 
   it('renders 6-step stepper when type=fixed_scope', async () => {
     render(<App />);
+    await walkPastPreModal();
     // Use the unique Step-1 heading to confirm the project editor mounted
     await waitFor(() => expect(screen.getByText(/📝 Datos del Proyecto/)).toBeInTheDocument());
     // stepper nav contains all 6 step labels (multiple "Proyecto" matches expected)
@@ -239,6 +278,7 @@ describe('ProjectEditor — fixed_scope stepper', () => {
 
   it('starts on Step 1 with project data form', async () => {
     render(<App />);
+    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     expect(screen.getByPlaceholderText(/Plataforma de analítica/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Acme SA/i)).toBeInTheDocument();
@@ -246,48 +286,51 @@ describe('ProjectEditor — fixed_scope stepper', () => {
 
   it('disables Next button until project name and client are filled', async () => {
     render(<App />);
+    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     const next = screen.getByRole('button', { name: /Siguiente paso/i });
+    // After the pre-modal the client_name is pre-filled from context ("Acme Test"),
+    // so Next is disabled only on project_name.
     expect(next).toBeDisabled();
-
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Proyecto Alpha' } });
-    expect(next).toBeDisabled();
-
-    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
     expect(next).toBeEnabled();
   });
 
   it('navigates to Step 2 (Team) once name and client are provided', async () => {
     render(<App />);
+    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Proyecto Alpha' } });
-    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
+    // client_name is already filled from the pre-modal context
     fireEvent.click(screen.getByRole('button', { name: /Siguiente paso/i }));
     await waitFor(() => expect(screen.getByText(/Composición del Equipo/i)).toBeInTheDocument());
   });
 
-  it('"Guardar borrador" in header calls createQuotation with type=fixed_scope', async () => {
+  it('"Guardar borrador" in header calls createQuotation with type=fixed_scope + linking IDs', async () => {
     api.createQuotation.mockResolvedValue({ id: 'new-q-1' });
     api.getQuotation.mockResolvedValue({ id: 'new-q-1', type: 'fixed_scope', project_name: 'Draft P', client_name: 'Acme', lines: [], phases: [], epics: [], milestones: [], metadata: {} });
     const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
     render(<App />);
+    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Draft P' } });
-    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
     fireEvent.click(screen.getByRole('button', { name: /Guardar borrador/i }));
     await waitFor(() => expect(api.createQuotation).toHaveBeenCalled());
     const payload = api.createQuotation.mock.calls[0][0];
     expect(payload.type).toBe('fixed_scope');
     expect(payload.project_name).toBe('Draft P');
     expect(payload.phases.length).toBe(5);
+    // EX-1: POST must carry the cliente+opp IDs the pre-modal collected.
+    expect(payload.client_id).toBe('c-pre');
+    expect(payload.opportunity_id).toBe('o-pre');
     alertSpy.mockRestore();
   });
 
   it('back button returns to previous step', async () => {
     render(<App />);
+    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'P' } });
-    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'A' } });
     fireEvent.click(screen.getByRole('button', { name: /Siguiente paso/i }));
     await waitFor(() => screen.getByText(/Composición del Equipo/i));
     fireEvent.click(screen.getByRole('button', { name: /Anterior/i }));
