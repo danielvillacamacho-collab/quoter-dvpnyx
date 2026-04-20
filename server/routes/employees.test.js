@@ -334,6 +334,138 @@ describe('EE-2 status transitions via PUT', () => {
   });
 });
 
+describe('EE-3 employee_skills nested routes', () => {
+  describe('GET /api/employees/:id/skills', () => {
+    it('lists the employee skills joined with the catalog', async () => {
+      queryQueue.push({ rows: [
+        { id: 'es1', employee_id: 'e1', skill_id: 1, proficiency: 'advanced', skill_name: 'JavaScript', skill_category: 'language', skill_active: true },
+        { id: 'es2', employee_id: 'e1', skill_id: 5, proficiency: 'expert',    skill_name: 'React',      skill_category: 'framework', skill_active: true },
+      ] });
+      const res = await client.call('GET', '/api/employees/e1/skills');
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(2);
+    });
+  });
+
+  describe('POST /api/employees/:id/skills (admin+)', () => {
+    it('rejects non-admin', async () => {
+      mockCurrentUser = { id: 'u1', role: 'member' };
+      const res = await client.call('POST', '/api/employees/e1/skills', { skill_id: 1 });
+      expect(res.status).toBe(403);
+    });
+
+    it('rejects when skill_id is missing', async () => {
+      const res = await client.call('POST', '/api/employees/e1/skills', {});
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/skill_id/);
+    });
+
+    it('rejects invalid proficiency', async () => {
+      const res = await client.call('POST', '/api/employees/e1/skills', { skill_id: 1, proficiency: 'ninja' });
+      expect(res.status).toBe(400);
+    });
+
+    it('rejects when the skill does not exist', async () => {
+      queryQueue.push({ rows: [] }); // skill lookup
+      const res = await client.call('POST', '/api/employees/e1/skills', { skill_id: 999 });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/no existe/);
+    });
+
+    it('rejects when the skill is inactive', async () => {
+      queryQueue.push({ rows: [{ id: 5, name: 'Flash', active: false }] });
+      const res = await client.call('POST', '/api/employees/e1/skills', { skill_id: 5 });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/inactivo/);
+    });
+
+    it('rejects when the employee does not exist', async () => {
+      queryQueue.push({ rows: [{ id: 1, name: 'JS', active: true }] }); // skill
+      queryQueue.push({ rows: [] });                                    // employee lookup empty
+      const res = await client.call('POST', '/api/employees/missing/skills', { skill_id: 1 });
+      expect(res.status).toBe(404);
+    });
+
+    it('creates an assignment + emits employee_skill.assigned', async () => {
+      const { emitEvent } = require('../utils/events');
+      emitEvent.mockClear();
+      queryQueue.push({ rows: [{ id: 1, name: 'JavaScript', active: true }] });  // skill lookup
+      queryQueue.push({ rows: [{ id: 'e1' }] });                                  // employee lookup
+      queryQueue.push({ rows: [{ id: 'es-new', employee_id: 'e1', skill_id: 1, proficiency: 'advanced' }] });
+      const res = await client.call('POST', '/api/employees/e1/skills', {
+        skill_id: 1, proficiency: 'advanced', years_experience: 4, notes: 'fullstack',
+      });
+      expect(res.status).toBe(201);
+      const call = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee_skill.assigned');
+      expect(call).toBeTruthy();
+      expect(call[1].payload.skill_name).toBe('JavaScript');
+    });
+
+    it('returns 409 on duplicate (UNIQUE violation propagates)', async () => {
+      const uniqueErr = new Error('dup');
+      uniqueErr.code = '23505';
+      queryQueue.push({ rows: [{ id: 1, name: 'JS', active: true }] });
+      queryQueue.push({ rows: [{ id: 'e1' }] });
+      queryQueue.push(uniqueErr);
+      const res = await client.call('POST', '/api/employees/e1/skills', { skill_id: 1 });
+      expect(res.status).toBe(409);
+    });
+  });
+
+  describe('PUT /api/employees/:id/skills/:skillId (admin+)', () => {
+    it('rejects non-admin', async () => {
+      mockCurrentUser = { id: 'u1', role: 'member' };
+      const res = await client.call('PUT', '/api/employees/e1/skills/1', { proficiency: 'expert' });
+      expect(res.status).toBe(403);
+    });
+
+    it('rejects invalid proficiency', async () => {
+      const res = await client.call('PUT', '/api/employees/e1/skills/1', { proficiency: 'ninja' });
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 when the assignment does not exist', async () => {
+      queryQueue.push({ rows: [] });
+      const res = await client.call('PUT', '/api/employees/e1/skills/999', { proficiency: 'expert' });
+      expect(res.status).toBe(404);
+    });
+
+    it('updates proficiency + emits employee_skill.updated', async () => {
+      const { emitEvent } = require('../utils/events');
+      emitEvent.mockClear();
+      queryQueue.push({ rows: [{ id: 'es1', employee_id: 'e1', skill_id: 1, proficiency: 'expert', years_experience: 6 }] });
+      const res = await client.call('PUT', '/api/employees/e1/skills/1', { proficiency: 'expert', years_experience: 6 });
+      expect(res.status).toBe(200);
+      const call = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee_skill.updated');
+      expect(call).toBeTruthy();
+    });
+  });
+
+  describe('DELETE /api/employees/:id/skills/:skillId (admin+)', () => {
+    it('rejects non-admin', async () => {
+      mockCurrentUser = { id: 'u1', role: 'member' };
+      const res = await client.call('DELETE', '/api/employees/e1/skills/1');
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 404 when nothing was removed', async () => {
+      queryQueue.push({ rows: [] });
+      const res = await client.call('DELETE', '/api/employees/e1/skills/999');
+      expect(res.status).toBe(404);
+    });
+
+    it('removes and emits employee_skill.removed', async () => {
+      const { emitEvent } = require('../utils/events');
+      emitEvent.mockClear();
+      queryQueue.push({ rows: [{ id: 'es1' }] });
+      const res = await client.call('DELETE', '/api/employees/e1/skills/1');
+      expect(res.status).toBe(200);
+      const call = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee_skill.removed');
+      expect(call).toBeTruthy();
+    });
+  });
+});
+
 describe('DELETE /api/employees/:id (admin+)', () => {
   it('rejects non-admin', async () => {
     mockCurrentUser = { id: 'u1', role: 'member' };

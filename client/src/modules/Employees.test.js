@@ -160,6 +160,95 @@ describe('Employees module', () => {
     alertSpy.mockRestore();
   });
 
+  describe('EE-3 skills modal', () => {
+    beforeEach(() => {
+      apiV2.apiGet.mockImplementation((url) => {
+        if (url.startsWith('/api/areas'))                   return Promise.resolve({ data: sampleAreas });
+        if (url === '/api/skills?active=true')              return Promise.resolve({ data: [
+          { id: 1, name: 'JavaScript', category: 'language',  active: true },
+          { id: 2, name: 'React',      category: 'framework', active: true },
+          { id: 3, name: 'Python',     category: 'language',  active: true },
+        ] });
+        if (url.endsWith('/skills'))                        return Promise.resolve({ data: [
+          { skill_id: 1, skill_name: 'JavaScript', skill_category: 'language',  proficiency: 'advanced', years_experience: 5, notes: 'fullstack' },
+        ] });
+        if (url.startsWith('/api/employees'))               return Promise.resolve({ data: sampleEmployees, pagination: { page: 1, limit: 25, total: 2, pages: 1 } });
+        return Promise.resolve({});
+      });
+    });
+
+    it('opens the skills modal and shows assigned skills', async () => {
+      mount();
+      await screen.findByText('Ana García');
+      fireEvent.click(screen.getByLabelText('Skills Ana García'));
+      const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
+      expect(await within(dialog).findByText('JavaScript')).toBeInTheDocument();
+      // Verify the proficiency select is set to 'advanced' for this row.
+      expect(within(dialog).getByLabelText('Proficiency JavaScript')).toHaveValue('advanced');
+    });
+
+    it('filters the add-skill dropdown to exclude already-assigned skills', async () => {
+      mount();
+      await screen.findByText('Ana García');
+      fireEvent.click(screen.getByLabelText('Skills Ana García'));
+      const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
+      await within(dialog).findByText('JavaScript'); // assigned — shown in the table
+      const addSel = within(dialog).getByLabelText('Nuevo skill');
+      // JavaScript (id=1) is already assigned → excluded from add dropdown
+      expect(addSel.querySelector('option[value="1"]')).toBeNull();
+      // React (id=2) and Python (id=3) are still available
+      expect(addSel.querySelector('option[value="2"]')).not.toBeNull();
+      expect(addSel.querySelector('option[value="3"]')).not.toBeNull();
+    });
+
+    it('POSTs the new skill with proficiency + years_experience', async () => {
+      apiV2.apiPost.mockResolvedValue({ id: 'es-new' });
+      mount();
+      await screen.findByText('Ana García');
+      fireEvent.click(screen.getByLabelText('Skills Ana García'));
+      const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
+      await within(dialog).findByText('JavaScript');
+
+      fireEvent.change(within(dialog).getByLabelText('Nuevo skill'), { target: { value: '2' } });
+      fireEvent.change(within(dialog).getByLabelText('Nueva proficiency'), { target: { value: 'expert' } });
+      fireEvent.change(within(dialog).getByLabelText('Nuevos años'), { target: { value: '4' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Agregar$/ }));
+
+      await waitFor(() => {
+        expect(apiV2.apiPost).toHaveBeenCalledWith(
+          '/api/employees/e1/skills',
+          expect.objectContaining({ skill_id: 2, proficiency: 'expert', years_experience: 4 })
+        );
+      });
+    });
+
+    it('removes a skill with confirmation', async () => {
+      apiV2.apiDelete.mockResolvedValue({ message: 'ok' });
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+      mount();
+      await screen.findByText('Ana García');
+      fireEvent.click(screen.getByLabelText('Skills Ana García'));
+      const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
+      await within(dialog).findByText('JavaScript');
+      fireEvent.click(within(dialog).getByLabelText('Remover JavaScript'));
+      await waitFor(() => expect(apiV2.apiDelete).toHaveBeenCalledWith('/api/employees/e1/skills/1'));
+      confirmSpy.mockRestore();
+    });
+
+    it('PUTs proficiency change on blur/change of the inline select', async () => {
+      apiV2.apiPut.mockResolvedValue({ id: 'es1', proficiency: 'expert' });
+      mount();
+      await screen.findByText('Ana García');
+      fireEvent.click(screen.getByLabelText('Skills Ana García'));
+      const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
+      await within(dialog).findByText('JavaScript');
+      fireEvent.change(within(dialog).getByLabelText('Proficiency JavaScript'), { target: { value: 'expert' } });
+      await waitFor(() => {
+        expect(apiV2.apiPut).toHaveBeenCalledWith('/api/employees/e1/skills/1', { proficiency: 'expert' });
+      });
+    });
+  });
+
   it('renders empty state when no employees match filters', async () => {
     apiV2.apiGet.mockImplementation((url) => {
       if (url.startsWith('/api/areas')) return Promise.resolve({ data: [] });

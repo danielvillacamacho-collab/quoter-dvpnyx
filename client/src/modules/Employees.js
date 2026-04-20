@@ -35,6 +35,13 @@ const EMPLOYMENT_TYPES = [
   { value: 'contractor', label: 'Contratista' },
 ];
 
+const PROFICIENCIES = [
+  { value: 'beginner',     label: 'Principiante' },
+  { value: 'intermediate', label: 'Intermedio' },
+  { value: 'advanced',     label: 'Avanzado' },
+  { value: 'expert',       label: 'Experto' },
+];
+
 const EMPTY = {
   first_name: '', last_name: '', personal_email: '', corporate_email: '',
   country: 'Colombia', city: '', area_id: '', level: 'L3',
@@ -156,6 +163,211 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
   );
 }
 
+/**
+ * EE-3: inline skills manager for a single employee. Opens over the
+ * employee row so admins can add/edit/remove skills without leaving
+ * the list. Uses the nested /api/employees/:id/skills endpoints.
+ */
+function EmployeeSkillsModal({ employee, onClose }) {
+  const [skills, setSkills] = useState([]);
+  const [catalog, setCatalog] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [addForm, setAddForm] = useState({ skill_id: '', proficiency: 'intermediate', years_experience: '', notes: '' });
+  const [busy, setBusy] = useState(false);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [r, c] = await Promise.all([
+        apiGet(`/api/employees/${employee.id}/skills`),
+        apiGet('/api/skills?active=true'),
+      ]);
+      setSkills(r?.data || []);
+      setCatalog(c?.data || []);
+    } catch (e) {
+      setErr(e.message || 'Error cargando');
+    } finally {
+      setLoading(false);
+    }
+  }, [employee.id]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const availableCatalog = catalog.filter((c) => !skills.some((sk) => sk.skill_id === c.id));
+
+  const addSkill = async (e) => {
+    e.preventDefault();
+    setErr('');
+    if (!addForm.skill_id) return setErr('Selecciona un skill');
+    setBusy(true);
+    try {
+      await apiPost(`/api/employees/${employee.id}/skills`, {
+        skill_id: Number(addForm.skill_id),
+        proficiency: addForm.proficiency,
+        years_experience: addForm.years_experience ? Number(addForm.years_experience) : null,
+        notes: addForm.notes || null,
+      });
+      setAddForm({ skill_id: '', proficiency: 'intermediate', years_experience: '', notes: '' });
+      await reload();
+    } catch (ex) {
+      setErr(ex.message || 'Error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateSkill = async (sk, patch) => {
+    try {
+      await apiPut(`/api/employees/${employee.id}/skills/${sk.skill_id}`, patch);
+      await reload();
+    } catch (ex) {
+      // eslint-disable-next-line no-alert
+      alert(ex.message);
+    }
+  };
+
+  const removeSkill = async (sk) => {
+    // eslint-disable-next-line no-alert
+    if (!window.confirm(`¿Remover "${sk.skill_name}" de ${employee.first_name}?`)) return;
+    try {
+      await apiDelete(`/api/employees/${employee.id}/skills/${sk.skill_id}`);
+      await reload();
+    } catch (ex) {
+      // eslint-disable-next-line no-alert
+      alert(ex.message);
+    }
+  };
+
+  return (
+    <div style={s.modalBg} role="dialog" aria-modal="true" aria-label="Skills del empleado">
+      <div style={{ ...s.modal, width: 760 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 8 }}>
+          <div>
+            <h2 style={{ margin: 0, color: 'var(--purple-dark)', fontFamily: 'Montserrat' }}>Skills</h2>
+            <div style={{ fontSize: 13, color: 'var(--text-light)' }}>{employee.first_name} {employee.last_name}</div>
+          </div>
+          <button type="button" style={s.btnOutline} onClick={onClose}>Cerrar</button>
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          {loading && <div style={{ color: 'var(--text-light)', fontSize: 13 }}>Cargando…</div>}
+          {!loading && skills.length === 0 && (
+            <div style={{ color: 'var(--text-light)', fontSize: 13, padding: 12, textAlign: 'center' }}>
+              Sin skills asignados todavía.
+            </div>
+          )}
+          {!loading && skills.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  {['Skill', 'Categoría', 'Proficiency', 'Años', 'Notas', ''].map((h) => <th key={h} style={s.th}>{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {skills.map((sk) => (
+                  <tr key={sk.skill_id}>
+                    <td style={{ ...s.td, fontWeight: 600 }}>{sk.skill_name}</td>
+                    <td style={{ ...s.td, fontFamily: 'monospace', fontSize: 12 }}>{sk.skill_category || '—'}</td>
+                    <td style={s.td}>
+                      <select
+                        style={{ ...s.input, padding: '4px 6px', fontSize: 12 }}
+                        value={sk.proficiency}
+                        onChange={(e) => updateSkill(sk, { proficiency: e.target.value })}
+                        aria-label={`Proficiency ${sk.skill_name}`}
+                      >
+                        {PROFICIENCIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                      </select>
+                    </td>
+                    <td style={s.td}>
+                      <input
+                        type="number" min={0} step={0.5}
+                        style={{ ...s.input, padding: '4px 6px', fontSize: 12, width: 80 }}
+                        defaultValue={sk.years_experience ?? ''}
+                        onBlur={(e) => {
+                          const v = e.target.value ? Number(e.target.value) : null;
+                          if (v !== (sk.years_experience ?? null)) updateSkill(sk, { years_experience: v });
+                        }}
+                        aria-label={`Años ${sk.skill_name}`}
+                      />
+                    </td>
+                    <td style={s.td}>
+                      <input
+                        style={{ ...s.input, padding: '4px 6px', fontSize: 12 }}
+                        defaultValue={sk.notes || ''}
+                        onBlur={(e) => { if (e.target.value !== (sk.notes || '')) updateSkill(sk, { notes: e.target.value }); }}
+                        aria-label={`Notas ${sk.skill_name}`}
+                      />
+                    </td>
+                    <td style={s.td}>
+                      <button
+                        style={{ ...s.btnOutline, padding: '3px 8px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                        onClick={() => removeSkill(sk)}
+                        aria-label={`Remover ${sk.skill_name}`}
+                      >Remover</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        {/* Add form */}
+        <form onSubmit={addSkill} style={{ marginTop: 16, padding: 12, background: 'var(--bg-soft, #f7f5f8)', borderRadius: 8 }}>
+          <h3 style={{ margin: '0 0 8px', fontSize: 13, color: 'var(--purple-dark)' }}>Agregar skill</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 2fr auto', gap: 8, alignItems: 'end' }}>
+            <div>
+              <label style={s.label}>Skill *</label>
+              <select
+                style={s.input}
+                value={addForm.skill_id}
+                onChange={(e) => setAddForm({ ...addForm, skill_id: e.target.value })}
+                aria-label="Nuevo skill"
+                required
+              >
+                <option value="">— Selecciona —</option>
+                {availableCatalog.map((c) => <option key={c.id} value={c.id}>{c.name}{c.category ? ` · ${c.category}` : ''}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={s.label}>Proficiency</label>
+              <select
+                style={s.input}
+                value={addForm.proficiency}
+                onChange={(e) => setAddForm({ ...addForm, proficiency: e.target.value })}
+                aria-label="Nueva proficiency"
+              >
+                {PROFICIENCIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={s.label}>Años</label>
+              <input
+                type="number" min={0} step={0.5} style={s.input}
+                value={addForm.years_experience}
+                onChange={(e) => setAddForm({ ...addForm, years_experience: e.target.value })}
+                aria-label="Nuevos años"
+              />
+            </div>
+            <div>
+              <label style={s.label}>Notas</label>
+              <input
+                style={s.input}
+                value={addForm.notes}
+                onChange={(e) => setAddForm({ ...addForm, notes: e.target.value })}
+                aria-label="Nuevas notas"
+              />
+            </div>
+            <button type="submit" style={s.btn('var(--teal-mid)')} disabled={busy}>{busy ? 'Guardando…' : 'Agregar'}</button>
+          </div>
+          {err && <div style={{ color: 'var(--danger)', fontSize: 12, marginTop: 6 }}>{err}</div>}
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function Employees() {
   const [state, setState] = useState({ data: [], loading: true, page: 1, total: 0, pages: 1 });
   const [search, setSearch] = useState('');
@@ -166,6 +378,7 @@ export default function Employees() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [skillsFor, setSkillsFor] = useState(null); // employee row for which the skills modal is open
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -300,6 +513,9 @@ export default function Employees() {
                     <button style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, marginRight: 4 }}
                             onClick={() => { setEditing(emp); setShowForm(true); }}
                             aria-label={`Editar ${emp.first_name} ${emp.last_name}`}>Editar</button>
+                    <button style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, marginRight: 4 }}
+                            onClick={() => setSkillsFor(emp)}
+                            aria-label={`Skills ${emp.first_name} ${emp.last_name}`}>Skills</button>
                     <button style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }}
                             onClick={() => onDelete(emp)}
                             aria-label={`Eliminar ${emp.first_name} ${emp.last_name}`}>Eliminar</button>
@@ -333,6 +549,13 @@ export default function Employees() {
             />
           </div>
         </div>
+      )}
+
+      {skillsFor && (
+        <EmployeeSkillsModal
+          employee={skillsFor}
+          onClose={() => { setSkillsFor(null); load(state.page); }}
+        />
       )}
     </div>
   );

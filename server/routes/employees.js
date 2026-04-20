@@ -388,4 +388,149 @@ router.delete('/:id', adminOnly, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Error interno' }); }
 });
 
+/* ========================================================================
+ * EE-3 — Employee skills (proficiency, years, notes)
+ *
+ * Nested under employee because skills only make sense in that context.
+ * Mutations are admin+; any authenticated user can READ a ficha.
+ * The selector endpoint in /api/skills already filters inactive skills
+ * when active=true is sent; the frontend is expected to do that when
+ * building the "add skill" selector.
+ * ====================================================================== */
+
+const VALID_PROFICIENCY = ['beginner','intermediate','advanced','expert'];
+
+/* List skills for an employee, joined to the skill catalog row. */
+router.get('/:id/skills', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT es.id, es.employee_id, es.skill_id, es.proficiency,
+              es.years_experience, es.notes, es.created_at,
+              s.name AS skill_name, s.category AS skill_category, s.active AS skill_active
+         FROM employee_skills es
+         JOIN skills s ON s.id = es.skill_id
+        WHERE es.employee_id = $1
+        ORDER BY s.category NULLS LAST, s.name`,
+      [req.params.id]
+    );
+    res.json({ data: rows });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /employees/:id/skills failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+/* Assign a skill to an employee. 409 on duplicate (UNIQUE index). */
+router.post('/:id/skills', adminOnly, async (req, res) => {
+  const { skill_id, proficiency, years_experience, notes } = req.body || {};
+  if (!skill_id) return res.status(400).json({ error: 'skill_id es requerido' });
+  if (proficiency && !VALID_PROFICIENCY.includes(proficiency)) {
+    return res.status(400).json({ error: 'proficiency inválido' });
+  }
+
+  try {
+    // Referential + active check on skill
+    const { rows: sRows } = await pool.query(`SELECT id, name, active FROM skills WHERE id=$1`, [skill_id]);
+    if (!sRows.length) return res.status(400).json({ error: 'skill no existe' });
+    if (!sRows[0].active) return res.status(400).json({ error: 'El skill está inactivo y no puede asignarse' });
+
+    // Ensure employee exists (scoped to not-deleted)
+    const { rows: eRows } = await pool.query(
+      `SELECT id FROM employees WHERE id=$1 AND deleted_at IS NULL`,
+      [req.params.id]
+    );
+    if (!eRows.length) return res.status(404).json({ error: 'Empleado no encontrado' });
+
+    const { rows } = await pool.query(
+      `INSERT INTO employee_skills (employee_id, skill_id, proficiency, years_experience, notes)
+        VALUES ($1,$2,COALESCE($3,'intermediate'),$4,$5) RETURNING *`,
+      [
+        req.params.id,
+        skill_id,
+        proficiency || null,
+        years_experience != null ? Number(years_experience) : null,
+        notes || null,
+      ]
+    );
+    const es = rows[0];
+    await emitEvent(pool, {
+      event_type: 'employee_skill.assigned',
+      entity_type: 'employee',
+      entity_id: req.params.id,
+      actor_user_id: req.user.id,
+      payload: { skill_id, skill_name: sRows[0].name, proficiency: es.proficiency },
+      req,
+    });
+    res.status(201).json(es);
+  } catch (err) {
+    // UNIQUE violation on (employee_id, skill_id)
+    if (err && err.code === '23505') {
+      return res.status(409).json({ error: 'Este empleado ya tiene ese skill asignado' });
+    }
+    // eslint-disable-next-line no-console
+    console.error('POST /employees/:id/skills failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+/* Update proficiency / years / notes on an existing assignment. */
+router.put('/:id/skills/:skillId', adminOnly, async (req, res) => {
+  const body = req.body || {};
+  if (body.proficiency && !VALID_PROFICIENCY.includes(body.proficiency)) {
+    return res.status(400).json({ error: 'proficiency inválido' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE employee_skills SET
+          proficiency       = COALESCE($1, proficiency),
+          years_experience  = COALESCE($2, years_experience),
+          notes             = COALESCE($3, notes)
+        WHERE employee_id=$4 AND skill_id=$5
+        RETURNING *`,
+      [
+        body.proficiency ?? null,
+        body.years_experience != null ? Number(body.years_experience) : null,
+        body.notes ?? null,
+        req.params.id,
+        req.params.skillId,
+      ]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Asignación no encontrada' });
+    await emitEvent(pool, {
+      event_type: 'employee_skill.updated',
+      entity_type: 'employee',
+      entity_id: req.params.id,
+      actor_user_id: req.user.id,
+      payload: { skill_id: Number(req.params.skillId), proficiency: rows[0].proficiency },
+      req,
+    });
+    res.json(rows[0]);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('PUT /employees/:id/skills/:skillId failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+/* Remove a skill from an employee. */
+router.delete('/:id/skills/:skillId', adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `DELETE FROM employee_skills WHERE employee_id=$1 AND skill_id=$2 RETURNING *`,
+      [req.params.id, req.params.skillId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Asignación no encontrada' });
+    await emitEvent(pool, {
+      event_type: 'employee_skill.removed',
+      entity_type: 'employee',
+      entity_id: req.params.id,
+      actor_user_id: req.user.id,
+      payload: { skill_id: Number(req.params.skillId) },
+      req,
+    });
+    res.json({ message: 'Skill removido' });
+  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+});
+
 module.exports = router;
