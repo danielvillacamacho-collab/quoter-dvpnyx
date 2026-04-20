@@ -342,6 +342,75 @@ describe('POST /api/quotations — EX-1 linking requirements', () => {
     expect(paramsCall).toBeFalsy();
   });
 
+  it('EX-4: dual-writes metadata.allocation to quotation_allocations when phases are provided', async () => {
+    queryQueue.push({ rows: [{ id: 'q1', type: 'fixed_scope', status: 'draft', parameters_snapshot: null }] }); // SELECT before
+    queryQueue.push({ rows: [{ id: 'q1', type: 'fixed_scope', status: 'draft' }] });                            // UPDATE quotations
+    queryQueue.push({ rows: [] });                                                                              // DELETE phases
+    queryQueue.push({ rows: [{ id: 'phase-a' }] });                                                             // INSERT phase 0 RETURNING
+    queryQueue.push({ rows: [{ id: 'phase-b' }] });                                                             // INSERT phase 1 RETURNING
+    queryQueue.push({ rows: [] });                                                                              // INSERT allocation line=0 phase=phase-a hours=20
+    queryQueue.push({ rows: [] });                                                                              // INSERT allocation line=0 phase=phase-b hours=15
+    queryQueue.push({ rows: [] });                                                                              // INSERT allocation line=1 phase=phase-a hours=10
+
+    const res = await client.call('PUT', '/api/quotations/q1', {
+      phases: [
+        { name: 'Planeación', weeks: 2 },
+        { name: 'Desarrollo', weeks: 8 },
+      ],
+      metadata: {
+        allocation: {
+          '0': { '0': 20, '1': 15 },
+          '1': { '0': 10 },
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+    const allocInserts = issuedQueries.filter((q) => String(q.sql).match(/INSERT INTO quotation_allocations/));
+    expect(allocInserts).toHaveLength(3);
+    // Sample: first insert is (q1, line=0, phase-a, 20)
+    expect(allocInserts[0].params).toEqual(['q1', 0, 'phase-a', 20]);
+    expect(allocInserts[1].params).toEqual(['q1', 0, 'phase-b', 15]);
+    expect(allocInserts[2].params).toEqual(['q1', 1, 'phase-a', 10]);
+  });
+
+  it('EX-4: when allocation is sent without phases, reads existing phase IDs from DB', async () => {
+    queryQueue.push({ rows: [{ id: 'q1', type: 'fixed_scope', status: 'draft', parameters_snapshot: null }] }); // SELECT before
+    queryQueue.push({ rows: [{ id: 'q1', type: 'fixed_scope', status: 'draft' }] });                            // UPDATE
+    queryQueue.push({ rows: [{ id: 'existing-phase-a', sort_order: 0 }, { id: 'existing-phase-b', sort_order: 1 }] }); // SELECT existing phases
+    queryQueue.push({ rows: [] }); // DELETE allocations
+    queryQueue.push({ rows: [] }); // INSERT allocation
+
+    const res = await client.call('PUT', '/api/quotations/q1', {
+      metadata: { allocation: { '0': { '1': 30 } } },
+    });
+    expect(res.status).toBe(200);
+    const allocInserts = issuedQueries.filter((q) => String(q.sql).match(/INSERT INTO quotation_allocations/));
+    expect(allocInserts).toHaveLength(1);
+    expect(allocInserts[0].params).toEqual(['q1', 0, 'existing-phase-b', 30]);
+  });
+
+  it('EX-4: skips zero-hour cells and orphan phase indices', async () => {
+    queryQueue.push({ rows: [{ id: 'q1', type: 'fixed_scope', status: 'draft', parameters_snapshot: null }] });
+    queryQueue.push({ rows: [{ id: 'q1', type: 'fixed_scope', status: 'draft' }] });
+    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [{ id: 'phase-a' }] }); // only 1 phase
+    queryQueue.push({ rows: [] }); // INSERT allocation for line 0 phase 0 = 5
+
+    const res = await client.call('PUT', '/api/quotations/q1', {
+      phases: [{ name: 'Only', weeks: 4 }],
+      metadata: {
+        allocation: {
+          '0': { '0': 5, '1': 10 }, // phase 1 doesn't exist — skip
+          '1': { '0': 0 },          // zero hours — skip
+        },
+      },
+    });
+    expect(res.status).toBe(200);
+    const allocInserts = issuedQueries.filter((q) => String(q.sql).match(/INSERT INTO quotation_allocations/));
+    expect(allocInserts).toHaveLength(1);
+    expect(allocInserts[0].params).toEqual(['q1', 0, 'phase-a', 5]);
+  });
+
   it('defaults client_name from the client row if not provided', async () => {
     queryQueue.push({ rows: [{ id: 'c1', name: 'Acme Corp' }] });
     queryQueue.push({ rows: [{ id: 'o1', name: 'Deal', client_id: 'c1' }] });

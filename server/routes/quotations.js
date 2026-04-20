@@ -235,14 +235,67 @@ router.put('/:id', async (req, res) => {
         );
       }
     }
+    // Collected phase IDs indexed by sort_order. Populated when `phases`
+    // is included in the PUT body so EX-4 can translate the legacy
+    // allocation matrix (which keys by phase index) into the relational
+    // quotation_allocations table (which keys by phase UUID).
+    const phaseIdByIdx = [];
     if (phases) {
       await client.query('DELETE FROM quotation_phases WHERE quotation_id=$1', [req.params.id]);
       for (let i = 0; i < phases.length; i++) {
         const p = phases[i];
-        await client.query('INSERT INTO quotation_phases (quotation_id, sort_order, name, weeks, description) VALUES ($1,$2,$3,$4,$5)',
-          [quot.id, i, p.name, p.weeks, p.description]);
+        const { rows: [inserted] } = await client.query(
+          'INSERT INTO quotation_phases (quotation_id, sort_order, name, weeks, description) VALUES ($1,$2,$3,$4,$5) RETURNING id',
+          [quot.id, i, p.name, p.weeks, p.description]
+        );
+        phaseIdByIdx[i] = inserted.id;
       }
     }
+
+    // EX-4: dual-write metadata.allocation to the quotation_allocations
+    // table so future reporting queries can aggregate without scanning
+    // JSONB. GET still returns the legacy JSONB shape (backwards
+    // compatible); a subsequent change can flip GET over once all
+    // consumers are on the relational source.
+    //
+    // If phases weren't re-uploaded in this PUT but the allocation was,
+    // we fall back to fetching the existing phase IDs from the DB so the
+    // mapping still works.
+    const allocationFromMeta = metadata?.allocation;
+    if (allocationFromMeta && typeof allocationFromMeta === 'object') {
+      let idxMap = phaseIdByIdx;
+      if (idxMap.length === 0) {
+        const { rows: existingPhases } = await client.query(
+          'SELECT id, sort_order FROM quotation_phases WHERE quotation_id=$1 ORDER BY sort_order',
+          [quot.id]
+        );
+        idxMap = existingPhases.map((r) => r.id);
+      }
+      // CASCADE on phase DELETE already cleared old allocation rows when
+      // phases were re-inserted above. When phases weren't re-uploaded
+      // we need to clear explicitly so this write is authoritative.
+      if (phaseIdByIdx.length === 0) {
+        await client.query('DELETE FROM quotation_allocations WHERE quotation_id=$1', [req.params.id]);
+      }
+      for (const [lineIdxStr, phaseMap] of Object.entries(allocationFromMeta)) {
+        const lineIdx = Number(lineIdxStr);
+        if (!Number.isFinite(lineIdx) || !phaseMap || typeof phaseMap !== 'object') continue;
+        for (const [phaseIdxStr, hoursRaw] of Object.entries(phaseMap)) {
+          const phaseIdx = Number(phaseIdxStr);
+          const hours = Number(hoursRaw);
+          if (!Number.isFinite(phaseIdx) || !Number.isFinite(hours) || hours <= 0) continue;
+          const phaseId = idxMap[phaseIdx];
+          if (!phaseId) continue; // orphan — skip
+          await client.query(
+            `INSERT INTO quotation_allocations (quotation_id, line_sort_order, phase_id, weekly_hours)
+             VALUES ($1,$2,$3,$4)
+             ON CONFLICT (quotation_id, line_sort_order, phase_id) DO UPDATE SET weekly_hours = EXCLUDED.weekly_hours`,
+            [quot.id, lineIdx, phaseId, hours]
+          );
+        }
+      }
+    }
+
     if (milestones) {
       await client.query('DELETE FROM quotation_milestones WHERE quotation_id=$1', [req.params.id]);
       for (let i = 0; i < milestones.length; i++) {
