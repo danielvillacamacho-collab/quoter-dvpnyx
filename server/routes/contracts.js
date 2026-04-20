@@ -145,8 +145,14 @@ router.post('/', adminOnly, async (req, res) => {
       resolvedSquadId = uRows[0]?.squad_id || null;
     }
     if (!resolvedSquadId) {
+      // Fallback to the default squad seeded by the V2 migration ("DVPNYX Global").
+      // The schema has no "key" column — match by name. If that's missing too,
+      // grab any active squad as a last resort so contracts aren't blocked.
       const { rows: sRows } = await pool.query(
-        `SELECT id FROM squads WHERE key = 'global' LIMIT 1`
+        `SELECT id FROM squads
+           WHERE deleted_at IS NULL AND active = true
+           ORDER BY (LOWER(name) = LOWER('DVPNYX Global')) DESC, created_at ASC
+           LIMIT 1`
       );
       resolvedSquadId = sRows[0]?.id || null;
     }
