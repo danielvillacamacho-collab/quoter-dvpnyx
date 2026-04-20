@@ -75,18 +75,21 @@ describe('BulkImport — upload + preview', () => {
     expect(screen.getByText(/Válidas:\s*2/)).toBeInTheDocument();
   });
 
-  it('shows a validation warning when all rows are invalid', async () => {
+  it('shows a validation warning when all rows fail backend validation', async () => {
+    // Parser strips totally-blank rows, so to reach the preview with
+    // invalid rows we need a row with some content that the BACKEND
+    // rejects (simulated via the mocked preview response).
     apiV2.apiPost.mockResolvedValue({
       entity: 'skills',
       counts: { total: 1, created: 0, updated: 0, skipped: 0, error: 1 },
       dry_run: true,
-      report: [{ row_number: 2, status: 'error', reason: 'Columna "name" requerida' }],
+      report: [{ row_number: 2, status: 'error', reason: 'Categoría inválida' }],
     });
     render(<BulkImport />);
     fireEvent.click(screen.getByLabelText('Cargar Catálogo de Skills'));
     await screen.findByText(/Subir CSV/);
     fireEvent.change(screen.getByLabelText('Archivo CSV'), {
-      target: { files: [makeCsvFile('name\n\n')] },
+      target: { files: [makeCsvFile('name,category\nReact,pottery\n')] },
     });
     await screen.findByText(/Revisión previa/);
     expect(screen.getByText(/Hay filas con errores/)).toBeInTheDocument();
