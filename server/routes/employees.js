@@ -203,33 +203,38 @@ router.post('/', adminOnly, async (req, res) => {
 
 /* -------- UPDATE (admin+) -------- */
 router.put('/:id', adminOnly, async (req, res) => {
+  const conn = await pool.connect();
   try {
-    const { rows: [before] } = await pool.query(
+    const { rows: [before] } = await conn.query(
       `SELECT * FROM employees WHERE id=$1 AND deleted_at IS NULL`, [req.params.id]
     );
-    if (!before) return res.status(404).json({ error: 'Empleado no encontrado' });
+    if (!before) { conn.release(); return res.status(404).json({ error: 'Empleado no encontrado' }); }
 
     const body = req.body || {};
     if (body.first_name !== undefined && !String(body.first_name).trim()) {
+      conn.release();
       return res.status(400).json({ error: 'first_name no puede estar vacío' });
     }
     if (body.last_name !== undefined && !String(body.last_name).trim()) {
+      conn.release();
       return res.status(400).json({ error: 'last_name no puede estar vacío' });
     }
-    if (!validateLevel(body.level)) return res.status(400).json({ error: 'level inválido' });
-    if (!validateStatus(body.status)) return res.status(400).json({ error: 'status inválido' });
-    if (!validateEmploymentType(body.employment_type)) return res.status(400).json({ error: 'employment_type inválido' });
+    if (!validateLevel(body.level))           { conn.release(); return res.status(400).json({ error: 'level inválido' }); }
+    if (!validateStatus(body.status))         { conn.release(); return res.status(400).json({ error: 'status inválido' }); }
+    if (!validateEmploymentType(body.employment_type)) { conn.release(); return res.status(400).json({ error: 'employment_type inválido' }); }
 
     // Duplicate corporate_email check when renaming
     if (body.corporate_email && String(body.corporate_email).trim().toLowerCase() !== String(before.corporate_email || '').toLowerCase()) {
-      const dup = await pool.query(
+      const dup = await conn.query(
         `SELECT id FROM employees WHERE LOWER(corporate_email)=LOWER($1) AND deleted_at IS NULL AND id<>$2`,
         [String(body.corporate_email).trim(), req.params.id]
       );
-      if (dup.rows.length) return res.status(409).json({ error: 'Ya existe un empleado con ese corporate_email' });
+      if (dup.rows.length) { conn.release(); return res.status(409).json({ error: 'Ya existe un empleado con ese corporate_email' }); }
     }
 
-    const { rows } = await pool.query(
+    await conn.query('BEGIN');
+
+    const { rows } = await conn.query(
       `UPDATE employees SET
           user_id               = COALESCE($1, user_id),
           first_name            = COALESCE($2, first_name),
@@ -279,17 +284,74 @@ router.put('/:id', adminOnly, async (req, res) => {
       ]
     );
     const after = rows[0];
-    await emitEvent(pool, {
+
+    // EE-2: status transitions with side effects.
+    //   terminated → cancel planned/active assignments (preserves history
+    //                via soft semantics; active time_entries stay intact)
+    //   on_leave   → flag for manager notification (ES-3 wires the
+    //                notification; here we just emit the event)
+    //   active from on_leave → emit "leave_ended" event
+    let cancelledAssignments = [];
+    const statusChanged = before.status !== after.status;
+    if (statusChanged && after.status === 'terminated') {
+      const { rows: cancelled } = await conn.query(
+        `UPDATE assignments SET status='cancelled', updated_at=NOW()
+          WHERE employee_id=$1 AND status IN ('planned','active')
+          RETURNING id`,
+        [after.id]
+      );
+      cancelledAssignments = cancelled.map((r) => r.id);
+    }
+
+    await emitEvent(conn, {
       event_type: 'employee.updated', entity_type: 'employee', entity_id: after.id,
       actor_user_id: req.user.id,
       payload: buildUpdatePayload(before, after, EDITABLE_FIELDS),
       req,
     });
-    res.json(after);
+    if (statusChanged) {
+      await emitEvent(conn, {
+        event_type: 'employee.status_changed', entity_type: 'employee', entity_id: after.id,
+        actor_user_id: req.user.id,
+        payload: {
+          from: before.status, to: after.status,
+          cancelled_assignments: cancelledAssignments.length,
+        },
+        req,
+      });
+      if (after.status === 'terminated') {
+        await emitEvent(conn, {
+          event_type: 'employee.terminated', entity_type: 'employee', entity_id: after.id,
+          actor_user_id: req.user.id,
+          payload: { cancelled_assignments: cancelledAssignments },
+          req,
+        });
+      } else if (after.status === 'on_leave') {
+        await emitEvent(conn, {
+          event_type: 'employee.leave_started', entity_type: 'employee', entity_id: after.id,
+          actor_user_id: req.user.id,
+          payload: { manager_user_id: after.manager_user_id, from: before.status },
+          req,
+        });
+      } else if (before.status === 'on_leave' && after.status === 'active') {
+        await emitEvent(conn, {
+          event_type: 'employee.leave_ended', entity_type: 'employee', entity_id: after.id,
+          actor_user_id: req.user.id,
+          payload: {},
+          req,
+        });
+      }
+    }
+
+    await conn.query('COMMIT');
+    res.json({ ...after, cancelled_assignments: cancelledAssignments.length });
   } catch (err) {
+    await conn.query('ROLLBACK').catch(() => {});
     // eslint-disable-next-line no-console
     console.error('PUT /employees/:id failed:', err);
     res.status(500).json({ error: 'Error interno' });
+  } finally {
+    conn.release();
   }
 });
 

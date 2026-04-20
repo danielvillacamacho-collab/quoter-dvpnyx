@@ -8,8 +8,12 @@ const queryQueue = [];
 const issuedQueries = [];
 
 jest.mock('../database/pool', () => {
+  // Transactional control statements don't consume real rows (see
+  // opportunities.test.js / quotations.test.js for the same pattern).
+  const mockControlSql = new Set(['BEGIN', 'COMMIT', 'ROLLBACK']);
   const pushAndPop = (sql, params) => {
     issuedQueries.push({ sql, params });
+    if (mockControlSql.has(sql)) return { rows: [] };
     if (!queryQueue.length) {
       throw new Error(`Unexpected query (no mock enqueued): ${String(sql).slice(0, 80)}`);
     }
@@ -246,6 +250,87 @@ describe('PUT /api/employees/:id (admin+)', () => {
     const call = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee.updated');
     expect(call).toBeTruthy();
     expect(call[1].payload.changed_fields).toContain('level');
+  });
+});
+
+describe('EE-2 status transitions via PUT', () => {
+  it('transition to terminated cancels planned/active assignments and emits employee.terminated', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ id: 'e1', first_name: 'Ana', last_name: 'G', status: 'active' }] }); // SELECT before
+    queryQueue.push({ rows: [{ id: 'e1', first_name: 'Ana', last_name: 'G', status: 'terminated' }] }); // UPDATE employee
+    queryQueue.push({ rows: [{ id: 'a1' }, { id: 'a2' }] }); // UPDATE assignments RETURNING
+
+    const res = await client.call('PUT', '/api/employees/e1', { status: 'terminated' });
+    expect(res.status).toBe(200);
+    expect(res.body.cancelled_assignments).toBe(2);
+
+    const statusEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee.status_changed');
+    const termEvt   = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee.terminated');
+    expect(statusEvt).toBeTruthy();
+    expect(statusEvt[1].payload).toEqual({ from: 'active', to: 'terminated', cancelled_assignments: 2 });
+    expect(termEvt).toBeTruthy();
+    expect(termEvt[1].payload.cancelled_assignments).toEqual(['a1', 'a2']);
+
+    // Verify we ran the UPDATE assignments SET status='cancelled' query.
+    const cancelQ = issuedQueries.find((q) => String(q.sql).match(/UPDATE assignments SET status='cancelled'/));
+    expect(cancelQ).toBeTruthy();
+    expect(cancelQ.params).toEqual(['e1']);
+  });
+
+  it('transition to on_leave emits employee.leave_started (no assignment cancellation)', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ id: 'e1', status: 'active', manager_user_id: 'mgr1' }] });
+    queryQueue.push({ rows: [{ id: 'e1', status: 'on_leave', manager_user_id: 'mgr1' }] });
+
+    const res = await client.call('PUT', '/api/employees/e1', { status: 'on_leave' });
+    expect(res.status).toBe(200);
+    expect(res.body.cancelled_assignments).toBe(0);
+
+    const leaveEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee.leave_started');
+    expect(leaveEvt).toBeTruthy();
+    expect(leaveEvt[1].payload).toEqual({ manager_user_id: 'mgr1', from: 'active' });
+
+    // No UPDATE assignments query should have run.
+    const cancelQ = issuedQueries.find((q) => String(q.sql).match(/UPDATE assignments SET status='cancelled'/));
+    expect(cancelQ).toBeFalsy();
+  });
+
+  it('transition from on_leave back to active emits employee.leave_ended', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ id: 'e1', status: 'on_leave' }] });
+    queryQueue.push({ rows: [{ id: 'e1', status: 'active' }] });
+
+    const res = await client.call('PUT', '/api/employees/e1', { status: 'active' });
+    expect(res.status).toBe(200);
+
+    const endEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee.leave_ended');
+    expect(endEvt).toBeTruthy();
+  });
+
+  it('no status change → no status_changed event emitted', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ id: 'e1', status: 'active' }] });
+    queryQueue.push({ rows: [{ id: 'e1', status: 'active' }] });
+
+    await client.call('PUT', '/api/employees/e1', { notes: 'ping' });
+    const statusEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'employee.status_changed');
+    expect(statusEvt).toBeFalsy();
+  });
+
+  it('termination rolls back on downstream failure (transaction safety)', async () => {
+    queryQueue.push({ rows: [{ id: 'e1', status: 'active' }] });
+    queryQueue.push({ rows: [{ id: 'e1', status: 'terminated' }] });
+    // UPDATE assignments throws — the whole transaction must roll back
+    queryQueue.push(new Error('assignments table is on fire'));
+
+    const res = await client.call('PUT', '/api/employees/e1', { status: 'terminated' });
+    expect(res.status).toBe(500);
+    const rollback = issuedQueries.find((q) => q.sql === 'ROLLBACK');
+    expect(rollback).toBeTruthy();
   });
 });
 
