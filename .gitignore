@@ -6,3 +6,4 @@ client/build/
 # Runtime / server-local state (never commit)
 letsencrypt/
 deploy-history.log
+.claude/
