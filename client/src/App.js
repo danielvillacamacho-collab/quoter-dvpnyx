@@ -16,6 +16,8 @@ import Contracts from './modules/Contracts';
 import ResourceRequests from './modules/ResourceRequests';
 import Assignments from './modules/Assignments';
 import TimeMe from './modules/TimeMe';
+import Reports from './modules/Reports';
+import DashboardMe from './modules/DashboardMe';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import './App.css';
 
@@ -198,8 +200,9 @@ function Layout() {
           <Route path="/time" element={<TimeMe />} />
           <Route path="/time/me" element={<TimeMe />} />
           <Route path="/time/*" element={<ComingSoon />} />
-          <Route path="/reports" element={<ComingSoon />} />
-          <Route path="/reports/*" element={<ComingSoon />} />
+          <Route path="/reports" element={<Reports />} />
+          <Route path="/reports/:type" element={<Reports />} />
+          <Route path="/dashboard/me" element={<DashboardMe />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           {isAdmin && <Route path="/admin/squads" element={<ComingSoon />} />}
