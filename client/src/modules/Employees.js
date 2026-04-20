@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 
 const s = {
@@ -494,7 +495,7 @@ export default function Employees() {
               {state.data.map((emp) => (
                 <tr key={emp.id}>
                   <td style={{ ...s.td, fontWeight: 600 }}>
-                    <div>{emp.first_name} {emp.last_name}</div>
+                    <div><Link to={`/employees/${emp.id}`} style={{ color: 'var(--purple-dark)', textDecoration: 'none' }} aria-label={`Ver ${emp.first_name} ${emp.last_name}`}>{emp.first_name} {emp.last_name}</Link></div>
                     {emp.corporate_email && <div style={{ fontSize: 11, color: 'var(--text-light)' }}>{emp.corporate_email}</div>}
                   </td>
                   <td style={s.td}>{emp.area_name || '—'}</td>

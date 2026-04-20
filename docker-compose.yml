@@ -42,6 +42,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # These propagate the build-time env vars into the CRA build so the
+      # footer in prod shows the actual commit. deploy.yml exports them
+      # before running `docker compose build`.
+      args:
+        REACT_APP_GIT_SHA: ${REACT_APP_GIT_SHA:-local}
+        REACT_APP_VERSION: ${REACT_APP_VERSION:-2.0.0}
     image: dvpnyx-quoter-server:latest
     restart: unless-stopped
     environment:

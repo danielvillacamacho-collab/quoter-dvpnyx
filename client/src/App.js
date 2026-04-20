@@ -18,6 +18,10 @@ import Assignments from './modules/Assignments';
 import TimeMe from './modules/TimeMe';
 import Reports from './modules/Reports';
 import DashboardMe from './modules/DashboardMe';
+import ClientDetail from './modules/ClientDetail';
+import OpportunityDetail from './modules/OpportunityDetail';
+import ContractDetail from './modules/ContractDetail';
+import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import './App.css';
 
@@ -116,7 +120,7 @@ function Layout() {
         ...(isAdmin ? [
           { path: '/admin/areas',  label: '🧭 Áreas' },
           { path: '/admin/skills', label: '🏷 Skills' },
-          { path: '/admin/squads', label: '🛡 Squads' },
+          // Squads ship in v2.1 — the default squad is managed by migrate_v2_data.js today
         ] : []),
       ],
     },
@@ -188,24 +192,23 @@ function Layout() {
           {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
           {/* V2 modules — placeholders until they ship in later sprints */}
           <Route path="/clients" element={<Clients />} />
-          <Route path="/clients/*" element={<Clients />} />
+          <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/opportunities" element={<Opportunities />} />
-          <Route path="/opportunities/*" element={<Opportunities />} />
+          <Route path="/opportunities/:id" element={<OpportunityDetail />} />
           <Route path="/employees" element={<Employees />} />
-          <Route path="/employees/*" element={<Employees />} />
+          <Route path="/employees/:id" element={<EmployeeDetail />} />
           <Route path="/contracts" element={<Contracts />} />
-          <Route path="/contracts/*" element={<Contracts />} />
+          <Route path="/contracts/:id" element={<ContractDetail />} />
           <Route path="/resource-requests" element={<ResourceRequests />} />
           <Route path="/assignments" element={<Assignments />} />
           <Route path="/time" element={<TimeMe />} />
           <Route path="/time/me" element={<TimeMe />} />
-          <Route path="/time/*" element={<ComingSoon />} />
+          <Route path="/time/team" element={<ComingSoon />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:type" element={<Reports />} />
           <Route path="/dashboard/me" element={<DashboardMe />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
-          {isAdmin && <Route path="/admin/squads" element={<ComingSoon />} />}
         </Routes>
         <Footer />
       </div>

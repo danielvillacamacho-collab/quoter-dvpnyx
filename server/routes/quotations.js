@@ -23,15 +23,51 @@ router.use(auth);
 
 router.get('/', async (req, res) => {
   try {
-    const where = req.user.role === 'preventa' ? 'WHERE q.created_by=$1' : '';
-    const params = req.user.role === 'preventa' ? [req.user.id] : [];
-    const { rows } = await pool.query(`
+    // Pagination is OPT-IN to preserve backwards compat with the V1
+    // Dashboard which expects a flat array from /api/quotations. When a
+    // caller passes ?page, ?limit or ?paginate=true we return the
+    // paginated envelope; otherwise we return an array (capped at 500
+    // for safety — still protects against runaway growth).
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '100', 10), 1), 200);
+    const offset = (page - 1) * limit;
+    const paginated = req.query.page !== undefined
+      || req.query.limit !== undefined
+      || req.query.paginate === 'true';
+
+    const wheres = [];
+    const params = [];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+
+    // preventa users only see their own drafts (privacy guard).
+    if (req.user.role === 'preventa') wheres.push(`q.created_by = ${add(req.user.id)}`);
+    if (req.query.client_id)      wheres.push(`q.client_id = ${add(req.query.client_id)}`);
+    if (req.query.opportunity_id) wheres.push(`q.opportunity_id = ${add(req.query.opportunity_id)}`);
+    if (req.query.status)         wheres.push(`q.status = ${add(req.query.status)}`);
+
+    const where = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+    const baseSql = `
       SELECT q.*, u.name as created_by_name,
         (SELECT COUNT(*) FROM quotation_lines WHERE quotation_id=q.id) as line_count
-      FROM quotations q JOIN users u ON q.created_by=u.id ${where}
-      ORDER BY q.updated_at DESC
-    `, params);
-    res.json(rows);
+      FROM quotations q JOIN users u ON q.created_by=u.id
+      ${where}
+      ORDER BY q.updated_at DESC`;
+
+    if (!paginated) {
+      // Legacy shape: flat array, no pagination metadata. Keep a hard
+      // safety cap at 500 so the query never melts even in legacy mode.
+      const { rows } = await pool.query(`${baseSql} LIMIT 500`, params);
+      return res.json(rows);
+    }
+
+    const [countRes, rowsRes] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS total FROM quotations q ${where}`, params),
+      pool.query(`${baseSql} LIMIT ${limit} OFFSET ${offset}`, params),
+    ]);
+    res.json({
+      data: rowsRes.rows,
+      pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
+    });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
 });
 

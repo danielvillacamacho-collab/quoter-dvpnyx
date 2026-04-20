@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 
 /* ========== styles ========== */
@@ -228,7 +228,7 @@ export default function Clients() {
               {state.data.map((c) => (
                 <tr key={c.id} style={{ cursor: 'default' }}>
                   <td style={{ ...s.td, fontWeight: 600 }}>
-                    <div>{c.name}</div>
+                    <Link to={`/clients/${c.id}`} style={{ color: 'var(--purple-dark)', textDecoration: 'none' }} aria-label={`Ver ${c.name}`}>{c.name}</Link>
                     {c.legal_name && <div style={{ fontSize: 11, color: 'var(--text-light)' }}>{c.legal_name}</div>}
                   </td>
                   <td style={s.td}>{c.country || '—'}</td>
