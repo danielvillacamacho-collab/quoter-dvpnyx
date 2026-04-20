@@ -108,7 +108,9 @@ describe('POST /api/contracts — EK-1 validations', () => {
   });
 
   it('rejects when required fields missing', async () => {
-    for (const miss of ['name', 'client_id', 'type', 'start_date', 'squad_id']) {
+    // squad_id is no longer required — the server resolves it automatically
+    // from the creator's squad or the global default.
+    for (const miss of ['name', 'client_id', 'type', 'start_date']) {
       const body = { ...validBody, [miss]: undefined };
       // eslint-disable-next-line no-await-in-loop
       const res = await client.call('POST', '/api/contracts', body);
@@ -144,6 +146,27 @@ describe('POST /api/contracts — EK-1 validations', () => {
     expect(res.status).toBe(201);
     const evt = emitEvent.mock.calls.find((c) => c[1].event_type === 'contract.created');
     expect(evt).toBeTruthy();
+  });
+
+  it('auto-resolves squad_id from creator when not provided', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    const { squad_id: _unused, ...bodyNoSquad } = validBody;
+    queryQueue.push({ rows: [{ squad_id: 'user-squad-uuid' }] });  // SELECT user squad
+    queryQueue.push({ rows: [{ id: 'c1', name: 'Acme' }] });        // client check
+    queryQueue.push({ rows: [{ id: 'ct-new', name: 'Contract Alpha', type: 'project', client_id: 'c1', status: 'planned' }] });
+    const res = await client.call('POST', '/api/contracts', bodyNoSquad);
+    expect(res.status).toBe(201);
+  });
+
+  it('auto-resolves squad_id from global squad when creator has none', async () => {
+    const { squad_id: _unused, ...bodyNoSquad } = validBody;
+    queryQueue.push({ rows: [{ squad_id: null }] });                // user has no squad
+    queryQueue.push({ rows: [{ id: 'global-squad-uuid' }] });       // global squad fallback
+    queryQueue.push({ rows: [{ id: 'c1', name: 'Acme' }] });        // client check
+    queryQueue.push({ rows: [{ id: 'ct-new', name: 'Contract Alpha', type: 'project', client_id: 'c1', status: 'planned' }] });
+    const res = await client.call('POST', '/api/contracts', bodyNoSquad);
+    expect(res.status).toBe(201);
   });
 });
 
