@@ -162,26 +162,32 @@ describe('POST /api/quotations — EX-1 linking requirements', () => {
     expect(call[1].payload.opportunity_id).toBe('o1');
   });
 
+  // Reusable fixture for the parameters SELECT that happens inside PUT.
+  const PARAM_ROWS = [
+    { category: 'level',     key: 'L2',            value: 2000 },
+    { category: 'geo',       key: 'Colombia',      value: 1.0 },
+    { category: 'bilingual', key: 'No',            value: 1.0 },
+    { category: 'stack',     key: 'Especializada', value: 1.0 },
+    { category: 'tools',     key: 'Básico',        value: 50 },
+    { category: 'modality',  key: 'Remoto',        value: 1.0 },
+    { category: 'project',   key: 'hours_month',   value: 160 },
+    { category: 'margin',    key: 'talent',        value: 0.35 },
+    { category: 'margin',    key: 'tools',         value: 0 },
+  ];
+
+  // PUT query sequence (EX-3):
+  //   [0] SELECT before  → { id, type, status, parameters_snapshot }
+  //   [1] loadCanonicalParams (only when needed for snapshot capture or staff_aug recalc)
+  //   [2] UPDATE quotations  → returns the updated row
+  //   [3+] DELETE/INSERT lines, phases, etc.
+
   it('PUT on staff_aug recalcs lines server-side and emits quotation.calc_drift when client outputs are wrong', async () => {
     const { emitEvent } = require('../utils/events');
-    // 1) UPDATE quotation (returns row)
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'draft', parameters_snapshot: null }] });
+    queryQueue.push({ rows: PARAM_ROWS });
     queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'draft', project_name: 'P1' }] });
-    // 2) loadCanonicalParams — SELECT parameters
-    queryQueue.push({ rows: [
-      { category: 'level',     key: 'L2',            value: 2000 },
-      { category: 'geo',       key: 'Colombia',      value: 1.0 },
-      { category: 'bilingual', key: 'No',            value: 1.0 },
-      { category: 'stack',     key: 'Especializada', value: 1.0 },
-      { category: 'tools',     key: 'Básico',        value: 50 },
-      { category: 'modality',  key: 'Remoto',        value: 1.0 },
-      { category: 'project',   key: 'hours_month',   value: 160 },
-      { category: 'margin',    key: 'talent',        value: 0.35 },
-      { category: 'margin',    key: 'tools',         value: 0 },
-    ] });
-    // 3) DELETE lines
-    queryQueue.push({ rows: [] });
-    // 4) INSERT line (one line)
-    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [] }); // DELETE lines
+    queryQueue.push({ rows: [] }); // INSERT line
 
     const res = await client.call('PUT', '/api/quotations/q1', {
       lines: [{
@@ -194,7 +200,6 @@ describe('POST /api/quotations — EX-1 linking requirements', () => {
     const driftEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'quotation.calc_drift');
     expect(driftEvt).toBeTruthy();
     expect(driftEvt[1].payload.total_drifted_fields).toBeGreaterThan(0);
-    // Response carries canonical values — NOT the bogus 999/9999 the client sent.
     expect(res.body.lines[0].cost_hour).toBeCloseTo(12.5, 2);
     expect(res.body.lines[0].total).not.toBe(9999);
     expect(res.body.drift.drifted).toBe(true);
@@ -202,24 +207,13 @@ describe('POST /api/quotations — EX-1 linking requirements', () => {
 
   it('PUT on staff_aug does NOT emit drift event when client outputs match server', async () => {
     const { emitEvent } = require('../utils/events');
-    // Reset the shared mock so we can assert "not called" cleanly.
     emitEvent.mockClear();
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'draft', parameters_snapshot: null }] });
+    queryQueue.push({ rows: PARAM_ROWS });
     queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'draft' }] });
-    queryQueue.push({ rows: [
-      { category: 'level',     key: 'L2',            value: 2000 },
-      { category: 'geo',       key: 'Colombia',      value: 1.0 },
-      { category: 'bilingual', key: 'No',            value: 1.0 },
-      { category: 'stack',     key: 'Especializada', value: 1.0 },
-      { category: 'tools',     key: 'Básico',        value: 50 },
-      { category: 'modality',  key: 'Remoto',        value: 1.0 },
-      { category: 'project',   key: 'hours_month',   value: 160 },
-      { category: 'margin',    key: 'talent',        value: 0.35 },
-      { category: 'margin',    key: 'tools',         value: 0 },
-    ] });
-    queryQueue.push({ rows: [] }); // DELETE lines
-    queryQueue.push({ rows: [] }); // INSERT line
+    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [] });
 
-    // Correct client outputs (same as what server computes)
     const res = await client.call('PUT', '/api/quotations/q1', {
       lines: [{
         level: 2, country: 'Colombia', bilingual: false, stack: 'Especializada',
@@ -234,6 +228,118 @@ describe('POST /api/quotations — EX-1 linking requirements', () => {
     const driftEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'quotation.calc_drift');
     expect(driftEvt).toBeFalsy();
     expect(res.body.drift.drifted).toBe(false);
+  });
+
+  it('PUT returns 404 when the quotation does not exist', async () => {
+    queryQueue.push({ rows: [] }); // SELECT before → empty
+    const res = await client.call('PUT', '/api/quotations/missing', { project_name: 'X' });
+    expect(res.status).toBe(404);
+  });
+
+  it('EX-3: captures parameters_snapshot when transitioning draft → sent', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'draft', parameters_snapshot: null }] });
+    queryQueue.push({ rows: PARAM_ROWS });
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'sent' }] });
+    // no lines in body → no DELETE/INSERT loop
+
+    const res = await client.call('PUT', '/api/quotations/q1', { status: 'sent' });
+    expect(res.status).toBe(200);
+
+    const snapshotEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'quotation.snapshot_captured');
+    expect(snapshotEvt).toBeTruthy();
+    expect(snapshotEvt[1].payload).toEqual({ trigger_status: 'sent', previous_status: 'draft' });
+
+    // UPDATE call should have carried a non-null parameters_snapshot JSON.
+    const updateCall = issuedQueries.find((q) => String(q.sql).match(/UPDATE quotations SET project_name/));
+    expect(updateCall).toBeTruthy();
+    // param[8] is the snapshot (COALESCE arg). Should be a stringified JSON, not null.
+    expect(updateCall.params[8]).not.toBeNull();
+    expect(typeof updateCall.params[8]).toBe('string');
+    const parsed = JSON.parse(updateCall.params[8]);
+    expect(parsed.level).toBeDefined();
+    expect(parsed.geo).toBeDefined();
+  });
+
+  it('EX-3: captures snapshot when transitioning draft → approved (skipping sent)', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'draft', parameters_snapshot: null }] });
+    queryQueue.push({ rows: PARAM_ROWS });
+    queryQueue.push({ rows: [{ id: 'q1', status: 'approved' }] });
+
+    const res = await client.call('PUT', '/api/quotations/q1', { status: 'approved' });
+    expect(res.status).toBe(200);
+    const snapshotEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'quotation.snapshot_captured');
+    expect(snapshotEvt).toBeTruthy();
+    expect(snapshotEvt[1].payload.trigger_status).toBe('approved');
+  });
+
+  it('EX-3: does NOT re-capture snapshot when quotation already has one (sent → approved)', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    const existingSnapshot = { level: [{ key: 'L2', value: 2000 }] };
+    // SELECT before returns an already-snapshotted row
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'sent', parameters_snapshot: existingSnapshot }] });
+    // No loadCanonicalParams call expected (snapshot already exists, no lines to recalc)
+    queryQueue.push({ rows: [{ id: 'q1', status: 'approved' }] });
+
+    const res = await client.call('PUT', '/api/quotations/q1', { status: 'approved' });
+    expect(res.status).toBe(200);
+    const snapshotEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'quotation.snapshot_captured');
+    expect(snapshotEvt).toBeFalsy();
+
+    // The UPDATE's snapshot param should be null (no fresh capture).
+    const updateCall = issuedQueries.find((q) => String(q.sql).match(/UPDATE quotations SET project_name/));
+    expect(updateCall.params[8]).toBeNull();
+  });
+
+  it('EX-3: does NOT capture when PUT keeps status in draft', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'draft', parameters_snapshot: null }] });
+    // No params load (no snapshot capture, no lines)
+    queryQueue.push({ rows: [{ id: 'q1', status: 'draft' }] });
+
+    const res = await client.call('PUT', '/api/quotations/q1', { project_name: 'P-new' });
+    expect(res.status).toBe(200);
+    const snapshotEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'quotation.snapshot_captured');
+    expect(snapshotEvt).toBeFalsy();
+  });
+
+  it('EX-3: recalc on a snapshotted quotation uses the snapshot, not current DB params', async () => {
+    // Frozen snapshot: talent margin was 0.35 (normal).
+    const frozenSnapshot = {
+      level:     [{ key: 'L2', value: 2000 }],
+      geo:       [{ key: 'Colombia', value: 1.0 }],
+      bilingual: [{ key: 'No', value: 1.0 }],
+      stack:     [{ key: 'Especializada', value: 1.0 }],
+      tools:     [{ key: 'Básico', value: 50 }],
+      modality:  [{ key: 'Remoto', value: 1.0 }],
+      project:   [{ key: 'hours_month', value: 160 }],
+      margin:    [{ key: 'talent', value: 0.35 }, { key: 'tools', value: 0 }],
+    };
+    // SELECT before returns the snapshot
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'sent', parameters_snapshot: frozenSnapshot }] });
+    // No loadCanonicalParams call should fire because the snapshot is used directly.
+    queryQueue.push({ rows: [{ id: 'q1', type: 'staff_aug', status: 'sent' }] });
+    queryQueue.push({ rows: [] }); // DELETE lines
+    queryQueue.push({ rows: [] }); // INSERT line
+
+    const res = await client.call('PUT', '/api/quotations/q1', {
+      lines: [{
+        level: 2, country: 'Colombia', bilingual: false, stack: 'Especializada',
+        modality: 'Remoto', tools: 'Básico', quantity: 1, duration_months: 1,
+      }],
+    });
+    expect(res.status).toBe(200);
+    // cost_hour = 2000/160 × 1 × 1 × 1 = 12.5 — matches the frozen snapshot math
+    expect(res.body.lines[0].cost_hour).toBeCloseTo(12.5, 2);
+
+    // Confirm loadCanonicalParams was NOT called (no SELECT parameters).
+    const paramsCall = issuedQueries.find((q) => String(q.sql).includes("SELECT category, key, value FROM parameters"));
+    expect(paramsCall).toBeFalsy();
   });
 
   it('defaults client_name from the client row if not provided', async () => {

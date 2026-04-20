@@ -145,14 +145,63 @@ router.put('/:id', async (req, res) => {
   try {
     await client.query('BEGIN');
     const { project_name, client_name, commercial_name, preventa_name, status, discount_pct, notes, lines, phases, epics, milestones, metadata } = req.body;
+
+    // EX-3: snapshot parameters when the quotation first leaves `draft` for
+    // `sent` or `approved`. Load the current row first so we can decide
+    // whether to capture BEFORE the UPDATE.
+    const { rows: [before] } = await client.query(
+      `SELECT id, type, status, parameters_snapshot FROM quotations WHERE id=$1`,
+      [req.params.id]
+    );
+    if (!before) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'No encontrada' }); }
+
+    const effectiveStatus = status != null ? status : before.status;
+    const isFirstLeavingDraft = before.status === 'draft'
+      && (effectiveStatus === 'sent' || effectiveStatus === 'approved')
+      && !before.parameters_snapshot;
+
+    // EX-2 + EX-3: pick the calc params for this PUT.
+    //   - If a snapshot already exists → use it (frozen post-sent totals).
+    //   - If we're capturing one right now → load live params and use those.
+    //   - Else → use live params (quotation is still in draft).
+    let paramsForCalc = null;
+    let capturedSnapshot = null;
+    if (before.parameters_snapshot) {
+      paramsForCalc = before.parameters_snapshot;
+    } else if (isFirstLeavingDraft || (lines && before.type === 'staff_aug')) {
+      paramsForCalc = await loadCanonicalParams(client);
+      if (isFirstLeavingDraft) capturedSnapshot = paramsForCalc;
+    }
+
     const { rows: [quot] } = await client.query(
       `UPDATE quotations SET project_name=COALESCE($1,project_name), client_name=COALESCE($2,client_name),
        commercial_name=COALESCE($3,commercial_name), preventa_name=COALESCE($4,preventa_name),
        status=COALESCE($5,status), discount_pct=COALESCE($6,discount_pct), notes=COALESCE($7,notes),
-       metadata=COALESCE($8,metadata), updated_at=NOW() WHERE id=$9 RETURNING *`,
-      [project_name, client_name, commercial_name, preventa_name, status, discount_pct, notes, metadata ? JSON.stringify(metadata) : null, req.params.id]
+       metadata=COALESCE($8,metadata),
+       parameters_snapshot=COALESCE($9,parameters_snapshot),
+       sent_at=CASE WHEN $10::boolean AND sent_at IS NULL THEN NOW() ELSE sent_at END,
+       updated_at=NOW() WHERE id=$11 RETURNING *`,
+      [
+        project_name, client_name, commercial_name, preventa_name,
+        status, discount_pct, notes,
+        metadata ? JSON.stringify(metadata) : null,
+        capturedSnapshot ? JSON.stringify(capturedSnapshot) : null,
+        effectiveStatus === 'sent',
+        req.params.id,
+      ]
     );
     if (!quot) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'No encontrada' }); }
+
+    if (capturedSnapshot) {
+      await emitEvent(client, {
+        event_type: 'quotation.snapshot_captured',
+        entity_type: 'quotation',
+        entity_id: quot.id,
+        actor_user_id: req.user.id,
+        payload: { trigger_status: effectiveStatus, previous_status: before.status },
+        req,
+      });
+    }
 
     // EX-2: for staff_aug lines, the server is the source of truth for
     // calculated outputs (cost_hour / rate_hour / rate_month / total).
@@ -160,9 +209,8 @@ router.put('/:id', async (req, res) => {
     // emit an event — the persisted values come from recalcStaffAugLines.
     let driftReport = null;
     let canonicalLines = lines;
-    if (lines && quot.type === 'staff_aug') {
-      const params = await loadCanonicalParams(client);
-      canonicalLines = recalcStaffAugLines(lines, params);
+    if (lines && quot.type === 'staff_aug' && paramsForCalc) {
+      canonicalLines = recalcStaffAugLines(lines, paramsForCalc);
       driftReport = detectLineDrift(lines, canonicalLines, 0.01);
       if (driftReport.drifted) {
         await emitEvent(client, {
@@ -170,7 +218,7 @@ router.put('/:id', async (req, res) => {
           entity_type: 'quotation',
           entity_id: quot.id,
           actor_user_id: req.user.id,
-          payload: { diffs: driftReport.diffs.slice(0, 20), total_drifted_fields: driftReport.diffs.length },
+          payload: { diffs: driftReport.diffs.slice(0, 20), total_drifted_fields: driftReport.diffs.length, used_snapshot: !!before.parameters_snapshot },
           req,
         });
       }
