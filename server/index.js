@@ -27,7 +27,7 @@ app.use('/api/clients',           require('./routes/clients'));       // ✅ Spr
 app.use('/api/opportunities',     require('./routes/opportunities')); // ✅ Sprint 2
 app.use('/api/employees',         _stubs.employees);
 app.use('/api/skills',            _stubs.skills);
-app.use('/api/areas',             _stubs.areas);
+app.use('/api/areas',             require('./routes/areas'));        // ✅ Sprint 3 EA-1
 app.use('/api/contracts',         _stubs.contracts);
 app.use('/api/resource-requests', _stubs.resourceRequests);
 app.use('/api/assignments',       _stubs.assignments);
