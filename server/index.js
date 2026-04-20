@@ -39,8 +39,16 @@ app.use('/api/events',            _stubs.events);
 app.use('/api/notifications',     _stubs.notifications);
 
 if (process.env.NODE_ENV === 'production') {
+  // Hashed static assets (JS, CSS, media) — safe to cache long-term.
   app.use(express.static(path.join(__dirname, '../client/build')));
-  app.get('*', (_, res) => res.sendFile(path.join(__dirname, '../client/build/index.html')));
+  // index.html must NEVER be cached: it references the hashed bundles, so
+  // if a stale index.html is served after a deploy the user gets the old app.
+  app.get('*', (_, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.sendFile(path.join(__dirname, '../client/build/index.html'));
+  });
 }
 
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Error interno del servidor' }); });
