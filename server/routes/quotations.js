@@ -2,6 +2,22 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { emitEvent } = require('../utils/events');
+const { recalcStaffAugLines, detectLineDrift } = require('../utils/calc');
+
+/**
+ * Load the full parameter set grouped by category, in the same shape the
+ * client-side calc expects. Used by the PUT handler to recompute outputs
+ * server-side (EX-2 — server is source of truth for calculated fields).
+ */
+async function loadCanonicalParams(conn) {
+  const { rows } = await conn.query('SELECT category, key, value FROM parameters');
+  const grouped = {};
+  for (const r of rows) {
+    if (!grouped[r.category]) grouped[r.category] = [];
+    grouped[r.category].push({ key: r.key, value: r.value });
+  }
+  return grouped;
+}
 
 router.use(auth);
 
@@ -36,12 +52,41 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   const client = await pool.connect();
   try {
+    const {
+      type, project_name, client_id, opportunity_id,
+      client_name, commercial_name, preventa_name,
+      discount_pct, notes, lines, phases, epics, milestones, metadata,
+    } = req.body;
+
+    // V2 (EX-1): cotizaciones EXIGEN cliente + oportunidad.
+    if (!client_id) return res.status(400).json({ error: 'client_id es requerido' });
+    if (!opportunity_id) return res.status(400).json({ error: 'opportunity_id es requerido' });
+
+    // Validar que ambas entidades existan, no estén soft-deleted, y que la
+    // oportunidad pertenezca al cliente indicado.
+    const { rows: cRows } = await client.query(
+      `SELECT id, name FROM clients WHERE id=$1 AND deleted_at IS NULL`,
+      [client_id]
+    );
+    if (!cRows.length) return res.status(400).json({ error: 'Cliente no existe o está eliminado' });
+
+    const { rows: oRows } = await client.query(
+      `SELECT id, name, client_id FROM opportunities WHERE id=$1 AND deleted_at IS NULL`,
+      [opportunity_id]
+    );
+    if (!oRows.length) return res.status(400).json({ error: 'Oportunidad no existe o está eliminada' });
+    if (oRows[0].client_id !== client_id) {
+      return res.status(409).json({
+        error: 'La oportunidad no pertenece al cliente indicado',
+        opportunity_client_id: oRows[0].client_id,
+      });
+    }
+
     await client.query('BEGIN');
-    const { type, project_name, client_name, commercial_name, preventa_name, discount_pct, notes, lines, phases, epics, milestones, metadata } = req.body;
     const { rows: [quot] } = await client.query(
-      `INSERT INTO quotations (type, project_name, client_name, commercial_name, preventa_name, discount_pct, notes, metadata, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [type, project_name, client_name, commercial_name, preventa_name, discount_pct || 0, notes, JSON.stringify(metadata || {}), req.user.id]
+      `INSERT INTO quotations (type, project_name, client_id, opportunity_id, client_name, commercial_name, preventa_name, discount_pct, notes, metadata, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [type, project_name, client_id, opportunity_id, client_name || cRows[0].name, commercial_name, preventa_name, discount_pct || 0, notes, JSON.stringify(metadata || {}), req.user.id]
     );
     if (lines?.length) {
       for (let i = 0; i < lines.length; i++) {
@@ -84,7 +129,7 @@ router.post('/', async (req, res) => {
       entity_type: 'quotation',
       entity_id: quot.id,
       actor_user_id: req.user.id,
-      payload: { type, project_name, client_name, status: quot.status },
+      payload: { type, project_name, client_id, opportunity_id, status: quot.status },
       req,
     });
     await client.query('COMMIT');
@@ -108,10 +153,33 @@ router.put('/:id', async (req, res) => {
       [project_name, client_name, commercial_name, preventa_name, status, discount_pct, notes, metadata ? JSON.stringify(metadata) : null, req.params.id]
     );
     if (!quot) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'No encontrada' }); }
-    if (lines) {
+
+    // EX-2: for staff_aug lines, the server is the source of truth for
+    // calculated outputs (cost_hour / rate_hour / rate_month / total).
+    // The client's submitted outputs are used ONLY to detect drift and
+    // emit an event — the persisted values come from recalcStaffAugLines.
+    let driftReport = null;
+    let canonicalLines = lines;
+    if (lines && quot.type === 'staff_aug') {
+      const params = await loadCanonicalParams(client);
+      canonicalLines = recalcStaffAugLines(lines, params);
+      driftReport = detectLineDrift(lines, canonicalLines, 0.01);
+      if (driftReport.drifted) {
+        await emitEvent(client, {
+          event_type: 'quotation.calc_drift',
+          entity_type: 'quotation',
+          entity_id: quot.id,
+          actor_user_id: req.user.id,
+          payload: { diffs: driftReport.diffs.slice(0, 20), total_drifted_fields: driftReport.diffs.length },
+          req,
+        });
+      }
+    }
+
+    if (canonicalLines) {
       await client.query('DELETE FROM quotation_lines WHERE quotation_id=$1', [req.params.id]);
-      for (let i = 0; i < lines.length; i++) {
-        const l = lines[i];
+      for (let i = 0; i < canonicalLines.length; i++) {
+        const l = canonicalLines[i];
         await client.query(
           `INSERT INTO quotation_lines (quotation_id, sort_order, specialty, role_title, level, country, bilingual, tools, stack, modality, quantity, duration_months, hours_per_week, phase, cost_hour, rate_hour, rate_month, total)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
@@ -154,7 +222,14 @@ router.put('/:id', async (req, res) => {
       req,
     });
     await client.query('COMMIT');
-    res.json(quot);
+    // EX-2: the response carries the canonical values the server persisted
+    // so the client can reconcile without a round-trip GET. `drift` is
+    // populated only for staff_aug where recalc happened.
+    res.json({
+      ...quot,
+      lines: canonicalLines !== undefined ? canonicalLines : undefined,
+      drift: driftReport,
+    });
   } catch (err) {
     await client.query('ROLLBACK');
     console.error(err); res.status(500).json({ error: 'Error interno' });
