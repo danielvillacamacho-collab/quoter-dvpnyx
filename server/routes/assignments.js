@@ -31,6 +31,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { runAllChecks } = require('../utils/assignment_validation');
 
 router.use(auth);
 
@@ -70,6 +71,152 @@ async function sumOverlappingHours(conn, employeeId, start, end, ignoreAssignmen
   );
   return Number(rows[0].total || 0);
 }
+
+/* -------- VALIDATE (read-only pre-check) — US-BK-2 --------
+ *
+ * Dry-runs the validation engine for a proposed assignment of
+ * `employee_id` to `request_id`. Does not create anything; purely
+ * informational so the UI modal (US-VAL-4) can render the checklist
+ * BEFORE the user commits.
+ *
+ * Query params:
+ *   employee_id   UUID (required)
+ *   request_id    UUID (required)        — resource_request
+ *   weekly_hours  number (optional, defaults to request.weekly_hours)
+ *   start_date    YYYY-MM-DD (optional, defaults to request.start_date)
+ *   end_date      YYYY-MM-DD (optional, defaults to request.end_date)
+ *   ignore_assignment_id  UUID (optional) — exclude this assignment
+ *                         from the committed-hours sum (useful when
+ *                         editing an existing assignment).
+ *
+ * Response:
+ *   { valid, can_override, requires_justification,
+ *     checks: [{ check, status, message, detail?, overridable? }],
+ *     summary: { pass, warn, info, fail, ... },
+ *     context: { employee, request, proposed }  // what we evaluated
+ *   }
+ */
+router.get('/validate', async (req, res) => {
+  const {
+    employee_id, request_id, weekly_hours,
+    start_date, end_date, ignore_assignment_id,
+  } = req.query;
+
+  if (!employee_id) return res.status(400).json({ error: 'employee_id es requerido' });
+  if (!request_id)  return res.status(400).json({ error: 'request_id es requerido' });
+
+  try {
+    // Load employee (with area) and request (with area) in parallel
+    const [eRes, rRes] = await Promise.all([
+      pool.query(
+        `SELECT e.id, e.first_name, e.last_name, e.level,
+                e.weekly_capacity_hours, e.status,
+                e.area_id, a.name AS area_name
+           FROM employees e
+           LEFT JOIN areas a ON a.id = e.area_id
+          WHERE e.id = $1 AND e.deleted_at IS NULL`,
+        [employee_id],
+      ),
+      pool.query(
+        `SELECT rr.id, rr.contract_id, rr.role_title, rr.level,
+                rr.weekly_hours, rr.start_date, rr.end_date, rr.status,
+                rr.area_id, a.name AS area_name
+           FROM resource_requests rr
+           LEFT JOIN areas a ON a.id = rr.area_id
+          WHERE rr.id = $1 AND rr.deleted_at IS NULL`,
+        [request_id],
+      ),
+    ]);
+
+    if (!eRes.rows.length) return res.status(404).json({ error: 'employee no encontrado' });
+    if (!rRes.rows.length) return res.status(404).json({ error: 'resource_request no encontrado' });
+
+    const employee = eRes.rows[0];
+    const requestRow = rRes.rows[0];
+
+    // Resolve proposed window (query overrides, falling back to request)
+    const propStart = start_date || requestRow.start_date;
+    const propEnd   = end_date   || requestRow.end_date;
+    const propHours = weekly_hours != null ? Number(weekly_hours) : Number(requestRow.weekly_hours);
+
+    // Committed hours = sum of overlapping non-terminal assignments.
+    // Mirrors the logic in sumOverlappingHours() but is run only once.
+    const committed = await sumOverlappingHours(
+      pool, employee_id, propStart, propEnd || null,
+      ignore_assignment_id || null,
+    );
+
+    const result = runAllChecks({
+      employee: {
+        area_id: employee.area_id,
+        area_name: employee.area_name,
+        level: employee.level,
+        weekly_capacity_hours: employee.weekly_capacity_hours,
+        committed_hours: committed,
+      },
+      request: {
+        area_id: requestRow.area_id,
+        area_name: requestRow.area_name,
+        level: requestRow.level,
+        start_date: requestRow.start_date,
+        end_date: requestRow.end_date,
+      },
+      proposed: {
+        weekly_hours: propHours,
+        start_date: propStart,
+        end_date: propEnd,
+      },
+    });
+
+    // Surface employee status as an additional advisory warning so the
+    // UI can render it alongside the structured checks (not part of the
+    // engine because it's operational metadata, not a compatibility rule).
+    const advisories = [];
+    if (employee.status === 'on_leave')   advisories.push({ code: 'employee_on_leave',   message: 'El empleado está en "on_leave".' });
+    if (employee.status === 'bench')      advisories.push({ code: 'employee_bench',      message: 'El empleado está en "bench" — priorízalo si buscas ocupación.' });
+    if (employee.status === 'terminated') advisories.push({ code: 'employee_terminated', message: 'El empleado está terminado y no puede recibir asignaciones nuevas.' });
+    if (requestRow.status === 'cancelled') advisories.push({ code: 'request_cancelled', message: 'La solicitud está cancelada.' });
+    if (requestRow.status === 'filled')    advisories.push({ code: 'request_filled',    message: 'La solicitud ya está cubierta por otras asignaciones activas.' });
+
+    res.json({
+      ...result,
+      advisories,
+      context: {
+        employee: {
+          id: employee.id,
+          name: `${employee.first_name} ${employee.last_name}`.trim(),
+          level: employee.level,
+          area_id: employee.area_id,
+          area_name: employee.area_name,
+          weekly_capacity_hours: Number(employee.weekly_capacity_hours),
+          committed_hours: Number(committed),
+          status: employee.status,
+        },
+        request: {
+          id: requestRow.id,
+          role_title: requestRow.role_title,
+          level: requestRow.level,
+          area_id: requestRow.area_id,
+          area_name: requestRow.area_name,
+          weekly_hours: Number(requestRow.weekly_hours),
+          start_date: requestRow.start_date,
+          end_date: requestRow.end_date,
+          status: requestRow.status,
+          contract_id: requestRow.contract_id,
+        },
+        proposed: {
+          weekly_hours: propHours,
+          start_date: propStart,
+          end_date: propEnd || null,
+        },
+      },
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /assignments/validate failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
 
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
