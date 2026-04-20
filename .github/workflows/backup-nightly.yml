@@ -1,0 +1,57 @@
+# EF-5 — Nightly database backup
+#
+# Runs every day at 05:00 UTC (~midnight in Bogotá) and SSHes to the
+# production EC2 box to create a gzipped pg_dump of the quoter database.
+# Dumps live on the server under ~/backups/ with a timestamped filename.
+# Rotation keeps the 7 most recent dumps and deletes anything older.
+#
+# Manual trigger is also supported (workflow_dispatch) so ops can run an
+# ad-hoc backup before risky changes — the V2_MIGRATION.md runbook
+# instructs the operator to click "Run workflow" before running
+# migrate_v2_data.js for the first time.
+#
+# No S3 upload on purpose: keeping the flow minimal. When an S3 bucket
+# is provisioned (see docs/DVPNYX_Arquitectura_AWS_Modernizada.docx),
+# add an `aws s3 cp` step after the gzip.
+name: Nightly DB Backup
+
+on:
+  schedule:
+    - cron: '0 5 * * *'   # 05:00 UTC daily
+  workflow_dispatch:       # manual trigger from the Actions tab
+
+jobs:
+  backup:
+    name: pg_dump via SSH
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dump + rotate via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.AWS_HOST }}
+          username: ${{ secrets.AWS_USER }}
+          key: ${{ secrets.AWS_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/dvpnyx-quoter
+
+            mkdir -p ~/backups
+            TS=$(date -u +%Y%m%d_%H%M%S)
+            OUT=~/backups/dvpnyx_quoter_${TS}.sql.gz
+
+            echo "==> Dumping db to $OUT"
+            docker compose exec -T db pg_dump -U dvpnyx dvpnyx_quoter \
+              | gzip > "$OUT"
+
+            SIZE=$(du -h "$OUT" | cut -f1)
+            echo "==> Backup size: $SIZE"
+
+            # Rotate — keep 7 newest, delete the rest
+            cd ~/backups
+            ls -1t dvpnyx_quoter_*.sql.gz 2>/dev/null | tail -n +8 | while read -r old; do
+              echo "==> Removing old backup: $old"
+              rm -f "$old"
+            done
+
+            echo "==> Done. Current backups:"
+            ls -lh ~/backups | head -20

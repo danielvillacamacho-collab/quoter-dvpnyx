@@ -16,6 +16,15 @@
 
 ## Backup antes de migrar
 
+**Opción A (recomendada): usar el workflow de GitHub Actions.**
+
+Ve a Actions → "Nightly DB Backup" → "Run workflow" (botón manual). El
+workflow SSHea al EC2 y crea `~/backups/dvpnyx_quoter_<timestamp>.sql.gz`
+sin intervención manual. El workflow también se ejecuta automáticamente
+a las 05:00 UTC cada día y mantiene los últimos 7 dumps por rotación.
+
+**Opción B: backup manual desde shell.**
+
 ```bash
 ssh ec2-user@quoter.doublevpartners.com
 cd ~/dvpnyx-quoter
@@ -56,9 +65,16 @@ V2 data migration completed:
   "legacyClientsCreated": 12,
   "legacyOpportunitiesCreated": 27,
   "allocationsMigrated": 84,
+  "retroactiveSnapshotsBackfilled": 39,
   "auditLogEventsCopied": 412
 }
 ```
+
+El campo `retroactiveSnapshotsBackfilled` (EG-5) cuenta las cotizaciones
+`sent` / `approved` que existían sin `parameters_snapshot` y a las que el
+script les estampó el snapshot actual del catálogo. Después de este paso,
+cualquier cambio en `parameters` por parte de un admin no altera los
+totales de cotizaciones comprometidas con clientes.
 
 ## Validar
 
