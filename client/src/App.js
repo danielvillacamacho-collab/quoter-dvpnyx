@@ -121,7 +121,6 @@ function Layout() {
         ...(isAdmin ? [
           { path: '/admin/areas',  label: '🧭 Áreas' },
           { path: '/admin/skills', label: '🏷 Skills' },
-          // Squads ship in v2.1 — the default squad is managed by migrate_v2_data.js today
         ] : []),
       ],
     },
