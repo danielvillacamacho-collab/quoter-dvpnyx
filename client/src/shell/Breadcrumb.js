@@ -26,6 +26,7 @@ const LABELS = {
   areas:          'Áreas',
   skills:         'Skills',
   squads:         'Squads',
+  'bulk-import':  'Carga masiva',
   new:            'Nueva',
   me:             'Yo',
   team:           'Equipo',

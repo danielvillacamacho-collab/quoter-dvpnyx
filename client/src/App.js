@@ -23,6 +23,7 @@ import OpportunityDetail from './modules/OpportunityDetail';
 import ContractDetail from './modules/ContractDetail';
 import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
+import BulkImport from './modules/BulkImport';
 import './App.css';
 
 /* ========== AUTH CONTEXT ========== */
@@ -138,8 +139,9 @@ function Layout() {
     },
     ...(isAdmin ? [{
       title: 'Configuración', items: [
-        { path: '/admin/params', label: '⚙️ Parámetros' },
-        { path: '/admin/users',  label: '👤 Usuarios' },
+        { path: '/admin/params',      label: '⚙️ Parámetros' },
+        { path: '/admin/users',       label: '👤 Usuarios' },
+        { path: '/admin/bulk-import', label: '📤 Carga masiva' },
       ],
     }] : []),
   ];
@@ -190,6 +192,7 @@ function Layout() {
           <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
           {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
+          {isAdmin && <Route path="/admin/bulk-import" element={<BulkImport />} />}
           {/* V2 modules — placeholders until they ship in later sprints */}
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
