@@ -229,6 +229,44 @@ async function copyAuditToEvents(client) {
   return res.rowCount;
 }
 
+/**
+ * EG-5 — backfill parameters_snapshot on legacy non-draft quotations.
+ *
+ * V1 saved quotations directly without a parameter snapshot. After the
+ * V2 deploy, any admin who tweaks a parameter would shift totals on
+ * every sent/approved quotation — changing commercial commitments that
+ * were already made to the client.
+ *
+ * This step reads the current parameter set once and stamps every
+ * legacy sent/approved quotation with it, effectively pinning their
+ * totals to the parameter state at the moment of migration. Draft
+ * quotations are intentionally skipped — they haven't been committed
+ * yet and will get their own snapshot the first time they move to
+ * sent/approved post-migration.
+ *
+ * Idempotent: only touches rows where parameters_snapshot IS NULL.
+ */
+async function backfillRetroactiveSnapshots(client) {
+  const { rows: paramRows } = await client.query(
+    `SELECT category, key, value FROM parameters`
+  );
+  const snapshot = {};
+  for (const r of paramRows) {
+    if (!snapshot[r.category]) snapshot[r.category] = [];
+    snapshot[r.category].push({ key: r.key, value: r.value });
+  }
+  const result = await client.query(
+    `UPDATE quotations
+        SET parameters_snapshot = $1::jsonb,
+            updated_at = NOW()
+      WHERE parameters_snapshot IS NULL
+        AND status IN ('sent', 'approved')
+      RETURNING id`,
+    [JSON.stringify(snapshot)]
+  );
+  return result.rowCount;
+}
+
 async function pickCreatedByFallback(client) {
   // The Legacy clients table requires created_by. Prefer the superadmin user;
   // fall back to ANY user; bomb out explicitly otherwise.
@@ -263,6 +301,7 @@ async function main() {
       await createLegacyOpportunities(client, squadId, clientNameToId);
 
     report.allocationsMigrated = await migrateAllocations(client);
+    report.retroactiveSnapshotsBackfilled = await backfillRetroactiveSnapshots(client);
     report.auditLogEventsCopied = await copyAuditToEvents(client);
 
     await client.query('COMMIT');
