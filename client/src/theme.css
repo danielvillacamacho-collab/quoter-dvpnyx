@@ -121,6 +121,12 @@
   font-size: 12.5px;
   font-family: var(--font-ui);
 }
+.ds-search {
+  cursor: pointer;
+  text-align: left;
+}
+.ds-search:disabled { cursor: default; opacity: 0.7; }
+.ds-search:hover:not(:disabled) { border-color: var(--ds-border-strong); color: var(--ds-text); }
 .ds-search input {
   flex: 1;
   background: transparent;
@@ -129,6 +135,11 @@
   color: var(--ds-text);
   font-size: 12.5px;
   min-width: 0;
+}
+.ds-search-placeholder {
+  flex: 1;
+  color: var(--ds-text-dim);
+  font-size: 12.5px;
 }
 .ds-search kbd {
   font-family: var(--font-mono);

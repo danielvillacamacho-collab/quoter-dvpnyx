@@ -7,6 +7,7 @@ import ProjectEditor from './ProjectEditor';
 import Wiki from './Wiki';
 import Footer from './shell/Footer';
 import Topbar from './shell/Topbar';
+import CommandPalette from './shell/CommandPalette';
 import ComingSoon from './shell/ComingSoon';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
@@ -56,6 +57,22 @@ function Layout() {
   const loc = useLocation();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  // Global ⌘K / Ctrl+K opens the Command Palette. Registered once per
+  // Layout mount so no child has to care. We also close on route change
+  // implicitly because the palette calls onClose on navigation.
+  useEffect(() => {
+    const onKey = (e) => {
+      const isK = (e.key === 'k' || e.key === 'K');
+      if (isK && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Sidebar is organized in groups. Groups 2+ route to ComingSoon screens
   // until their corresponding module ships. Visibility is role-based; fine-
@@ -150,7 +167,8 @@ function Layout() {
       </div>
 
       <div className="main-content">
-        <Topbar />
+        <Topbar onOpenSearch={() => setPaletteOpen(true)} />
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
