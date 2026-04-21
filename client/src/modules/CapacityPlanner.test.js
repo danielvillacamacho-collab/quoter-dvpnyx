@@ -130,9 +130,11 @@ describe('CapacityPlanner module', () => {
 
   it('renders unassigned request row', async () => {
     mount();
-    expect(await screen.findByTestId('unassigned-row-rr9')).toBeInTheDocument();
-    expect(screen.getByText(/QA Sr/)).toBeInTheDocument();
-    expect(screen.getByText(/faltan 2/)).toBeInTheDocument();
+    const row = await screen.findByTestId('unassigned-row-rr9');
+    // role_title appears in both the row title AND every bar (one per week in range),
+    // so scope to the row-title span rather than a global getByText.
+    expect(within(row).getByText(/faltan 2/)).toBeInTheDocument();
+    expect(within(row).getAllByText(/QA Sr/).length).toBeGreaterThan(0);
   });
 
   it('sends contract_id and search filters to the API and syncs the URL', async () => {
