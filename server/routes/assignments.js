@@ -285,12 +285,26 @@ router.get('/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Error interno' }); }
 });
 
-/* -------- CREATE (admin+) — EN-1 + EN-2 -------- */
+/* -------- CREATE (admin+) — EN-1 + EN-2 + US-VAL-4 --------
+ *
+ * Strict validation flow:
+ *   1. Referential checks (request exists + belongs to contract, contract
+ *      is not closed, employee exists + not terminated).
+ *   2. Engine checks via runAllChecks (area/level/capacity/dates).
+ *   3. If any non-overridable FAIL → 409 VALIDATION_FAILED (no bypass).
+ *   4. If any overridable FAIL and no `override_reason` → 409 OVERRIDE_REQUIRED.
+ *   5. Otherwise INSERT; persist override audit metadata when reason was provided.
+ *
+ * Backward compat:
+ *   - Legacy body.force is accepted but ignored; override_reason is the
+ *     only way to bypass an overridable fail. This is an intentional
+ *     tightening coordinated with the UI modal (US-VAL-4).
+ */
 router.post('/', adminOnly, async (req, res) => {
   const body = req.body || {};
   const {
     resource_request_id, employee_id, contract_id, weekly_hours,
-    start_date, end_date, role_title, notes, force,
+    start_date, end_date, role_title, notes, override_reason,
   } = body;
 
   if (!resource_request_id) return res.status(400).json({ error: 'resource_request_id es requerido' });
@@ -303,17 +317,26 @@ router.post('/', adminOnly, async (req, res) => {
   if (body.status && !VALID_STATUSES.includes(body.status)) {
     return res.status(400).json({ error: 'status inválido' });
   }
+  const reasonTrimmed = typeof override_reason === 'string' ? override_reason.trim() : '';
+  if (override_reason != null && reasonTrimmed.length < 10) {
+    return res.status(400).json({ error: 'override_reason debe tener al menos 10 caracteres' });
+  }
 
   const conn = await pool.connect();
   try {
-    // Referential + state checks
+    // --- Referential + state checks --------------------------------------
     const { rows: rrRows } = await conn.query(
-      `SELECT id, contract_id, status FROM resource_requests WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT rr.id, rr.contract_id, rr.status, rr.level, rr.weekly_hours,
+              rr.start_date, rr.end_date, rr.area_id, a.name AS area_name
+         FROM resource_requests rr
+         LEFT JOIN areas a ON a.id = rr.area_id
+        WHERE rr.id=$1 AND rr.deleted_at IS NULL`,
       [resource_request_id]
     );
     if (!rrRows.length) { conn.release(); return res.status(400).json({ error: 'resource_request no existe' }); }
-    if (rrRows[0].status === 'cancelled') { conn.release(); return res.status(400).json({ error: 'La solicitud está cancelada' }); }
-    if (rrRows[0].contract_id !== contract_id) {
+    const rr = rrRows[0];
+    if (rr.status === 'cancelled') { conn.release(); return res.status(400).json({ error: 'La solicitud está cancelada' }); }
+    if (rr.contract_id !== contract_id) {
       conn.release();
       return res.status(409).json({ error: 'La solicitud no pertenece al contrato indicado' });
     }
@@ -328,12 +351,15 @@ router.post('/', adminOnly, async (req, res) => {
     }
 
     const { rows: eRows } = await conn.query(
-      `SELECT id, weekly_capacity_hours, status, first_name, last_name FROM employees WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT e.id, e.weekly_capacity_hours, e.status, e.first_name, e.last_name,
+              e.level, e.area_id, a.name AS area_name
+         FROM employees e
+         LEFT JOIN areas a ON a.id = e.area_id
+        WHERE e.id=$1 AND e.deleted_at IS NULL`,
       [employee_id]
     );
     if (!eRows.length) { conn.release(); return res.status(400).json({ error: 'employee no existe' }); }
     const emp = eRows[0];
-    // Warnings (non-blocking per spec) surfaced via response.warnings.
     const warnings = [];
     if (emp.status === 'on_leave')   warnings.push(`El empleado está en "on_leave".`);
     if (emp.status === 'terminated') {
@@ -342,31 +368,59 @@ router.post('/', adminOnly, async (req, res) => {
     }
     if (emp.status === 'bench') warnings.push(`El empleado está en "bench" — priorízalo si buscas ocupación.`);
 
-    // EN-2 overbooking
-    const existing = await sumOverlappingHours(conn, employee_id, start_date, end_date || null);
-    const proposed = existing + wh;
-    const capacity = Number(emp.weekly_capacity_hours || 40);
-    const threshold = capacity * OVERBOOK_FACTOR;
-    const overbooked = proposed > threshold;
+    // --- Engine validation (US-BK-2 / US-VAL-4) --------------------------
+    const committed = await sumOverlappingHours(conn, employee_id, start_date, end_date || null);
+    const validation = runAllChecks({
+      employee: {
+        area_id: emp.area_id, area_name: emp.area_name,
+        level: emp.level,
+        weekly_capacity_hours: emp.weekly_capacity_hours,
+        committed_hours: committed,
+      },
+      request: {
+        area_id: rr.area_id, area_name: rr.area_name,
+        level: rr.level,
+        start_date: rr.start_date, end_date: rr.end_date,
+      },
+      proposed: {
+        weekly_hours: wh,
+        start_date, end_date: end_date || null,
+      },
+    });
 
-    if (overbooked && !force) {
+    // Hard fails (inverted dates, no-overlap, etc.) — no bypass.
+    if (!validation.valid && !validation.can_override) {
       conn.release();
       return res.status(409).json({
-        error: `Overbooking: ${emp.first_name} ${emp.last_name} quedaría en ${proposed.toFixed(2)}h/semana (capacidad ${capacity}h × 1.10 = ${threshold.toFixed(2)}h). Usa force=true para sobrescribir.`,
-        employee_capacity: capacity,
-        threshold,
-        existing_weekly_hours: existing,
-        proposed_weekly_hours: proposed,
+        error: 'No se puede crear la asignación: hay incompatibilidades no soslayables.',
+        code: 'VALIDATION_FAILED',
+        checks: validation.checks,
+        summary: validation.summary,
       });
     }
+    // Overridable fails require an explicit justification.
+    if (validation.requires_justification && !reasonTrimmed) {
+      conn.release();
+      return res.status(409).json({
+        error: 'Esta asignación tiene incompatibilidades. Proporciona override_reason para continuar.',
+        code: 'OVERRIDE_REQUIRED',
+        requires_justification: true,
+        checks: validation.checks,
+        summary: validation.summary,
+      });
+    }
+
+    const isOverride = !validation.valid && reasonTrimmed.length > 0;
 
     await conn.query('BEGIN');
     const { rows } = await conn.query(
       `INSERT INTO assignments
          (resource_request_id, employee_id, contract_id, weekly_hours,
           start_date, end_date, status, role_title, notes,
-          approval_required, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'planned'),$8,$9,COALESCE($10,false),$11)
+          approval_required, created_by,
+          override_reason, override_checks, override_author_id, override_at)
+        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'planned'),$8,$9,COALESCE($10,false),$11,
+                $12,$13,$14,$15)
         RETURNING *`,
       [
         resource_request_id, employee_id, contract_id, wh,
@@ -374,6 +428,10 @@ router.post('/', adminOnly, async (req, res) => {
         role_title || null, notes || null,
         body.approval_required != null ? !!body.approval_required : null,
         req.user.id,
+        isOverride ? reasonTrimmed : null,
+        isOverride ? JSON.stringify({ checks: validation.checks, summary: validation.summary }) : null,
+        isOverride ? req.user.id : null,
+        isOverride ? new Date() : null,
       ]
     );
     const asg = rows[0];
@@ -385,20 +443,25 @@ router.post('/', adminOnly, async (req, res) => {
         employee_id, contract_id, resource_request_id,
         weekly_hours: wh, start_date, end_date: end_date || null,
         status: asg.status, warnings,
+        validation_summary: validation.summary,
       },
       req,
     });
-    if (overbooked && force) {
+    if (isOverride) {
       await emitEvent(conn, {
-        event_type: 'assignment.overbooked', entity_type: 'assignment', entity_id: asg.id,
+        event_type: 'assignment.overridden', entity_type: 'assignment', entity_id: asg.id,
         actor_user_id: req.user.id,
-        payload: { employee_capacity: capacity, threshold, proposed_weekly_hours: proposed },
+        payload: {
+          reason: reasonTrimmed,
+          checks: validation.checks,
+          summary: validation.summary,
+        },
         req,
       });
     }
 
     await conn.query('COMMIT');
-    res.status(201).json({ ...asg, warnings, overbooked });
+    res.status(201).json({ ...asg, warnings, validation });
   } catch (err) {
     await conn.query('ROLLBACK').catch(() => {});
     // eslint-disable-next-line no-console

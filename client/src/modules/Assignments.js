@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import AssignmentValidationModal from './AssignmentValidationModal';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -39,7 +40,6 @@ const EMPTY = {
 function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
-  const [forceOverride, setForceOverride] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   // When the user picks a request, auto-fill contract_id.
@@ -56,7 +56,6 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
       await onSave({
         ...form,
         contract_id: selectedRequest?.contract_id || form.contract_id,
-        force: forceOverride || undefined,
       });
     } catch (ex) {
       setErr(ex.message || 'Error guardando');
@@ -121,10 +120,11 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
         <label style={s.label}>Notas</label>
         <textarea style={{ ...s.input, minHeight: 50, resize: 'vertical' }} value={form.notes || ''} onChange={(e) => set('notes', e.target.value)} />
       </div>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-light)' }}>
-        <input type="checkbox" checked={forceOverride} onChange={(e) => setForceOverride(e.target.checked)} aria-label="Forzar overbooking" />
-        Forzar asignación aunque exceda capacidad × 1.10 (overbooking)
-      </label>
+      <div style={{ fontSize: 12, color: 'var(--text-light)', background: 'var(--bg-soft, #fafafa)', padding: 10, borderRadius: 8, border: '1px solid var(--border, #eee)' }}>
+        El sistema valida área, nivel, capacidad y fechas al guardar. Si hay
+        incompatibilidades, se te pedirá justificación antes de crear la
+        asignación.
+      </div>
       {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
@@ -142,6 +142,7 @@ export default function Assignments() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [validationModal, setValidationModal] = useState(null); // { validation, advisories, pendingForm }
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -175,13 +176,50 @@ export default function Assignments() {
   useEffect(() => { load(1); }, [load]);
   useEffect(() => { loadLookups(); }, [loadLookups]);
 
+  /**
+   * Submit the form. On a validation 409 we surface the modal with the
+   * structured checklist so the user can either close (non-overridable)
+   * or provide a justification (overridable → retry with override_reason).
+   */
+  const persist = useCallback(async (form, editingId) => {
+    if (editingId) return apiPut(`/api/assignments/${editingId}`, form);
+    return apiPost('/api/assignments', form);
+  }, []);
+
   const onSave = async (form) => {
     setSaving(true);
     try {
-      if (editing?.id) await apiPut(`/api/assignments/${editing.id}`, form);
-      else await apiPost('/api/assignments', form);
+      await persist(form, editing?.id);
       setShowForm(false);
       setEditing(null);
+      setValidationModal(null);
+      await load(state.page);
+    } catch (e) {
+      const isValidation409 = e?.status === 409 && e?.body && Array.isArray(e.body.checks);
+      if (isValidation409) {
+        // Derive a validation payload compatible with the modal.
+        const validation = {
+          valid: false,
+          can_override: e.body.code === 'OVERRIDE_REQUIRED',
+          requires_justification: !!e.body.requires_justification,
+          checks: e.body.checks,
+          summary: e.body.summary || {},
+        };
+        setValidationModal({ validation, advisories: e.body.advisories || [], pendingForm: form });
+        return;
+      }
+      throw e; // Let the form surface the message
+    } finally { setSaving(false); }
+  };
+
+  const onConfirmOverride = async (reason) => {
+    if (!validationModal?.pendingForm) return;
+    setSaving(true);
+    try {
+      await persist({ ...validationModal.pendingForm, override_reason: reason }, editing?.id);
+      setShowForm(false);
+      setEditing(null);
+      setValidationModal(null);
       await load(state.page);
     } finally { setSaving(false); }
   };
@@ -293,6 +331,16 @@ export default function Assignments() {
             />
           </div>
         </div>
+      )}
+
+      {validationModal && (
+        <AssignmentValidationModal
+          validation={validationModal.validation}
+          advisories={validationModal.advisories}
+          saving={saving}
+          onConfirm={onConfirmOverride}
+          onClose={() => setValidationModal(null)}
+        />
       )}
     </div>
   );
