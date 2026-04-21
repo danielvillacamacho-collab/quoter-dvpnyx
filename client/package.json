@@ -23,7 +23,9 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
-    "test": "react-scripts test"
+    "test": "react-scripts test",
+    "test:ci": "CI=true react-scripts test --watchAll=false",
+    "test:coverage": "CI=true react-scripts test --watchAll=false --coverage --coverageReporters=text-summary --coverageReporters=lcov --coverageReporters=html"
   },
   "browserslist": {
     "production": [

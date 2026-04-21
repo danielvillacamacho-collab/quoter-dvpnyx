@@ -8,7 +8,30 @@
     "migrate:v2-data": "node database/migrate_v2_data.js",
     "validate:v2": "node database/validate_v2_migration.js",
     "seed": "node database/seed.js",
-    "test": "jest --passWithNoTests"
+    "test": "jest --passWithNoTests",
+    "test:coverage": "jest --coverage --passWithNoTests",
+    "test:ci": "jest --ci --runInBand --passWithNoTests"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "collectCoverageFrom": [
+      "routes/**/*.js",
+      "utils/**/*.js",
+      "middleware/**/*.js",
+      "!**/*.test.js",
+      "!database/migrate*.js",
+      "!database/seed.js"
+    ],
+    "coverageDirectory": "coverage",
+    "coverageReporters": ["text-summary", "lcov", "html"],
+    "coverageThreshold": {
+      "global": {
+        "statements": 75,
+        "branches": 60,
+        "functions": 75,
+        "lines": 75
+      }
+    }
   },
   "dependencies": {
     "express": "^4.18.2",

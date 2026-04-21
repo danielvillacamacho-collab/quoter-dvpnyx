@@ -1,0 +1,18 @@
+Copyright (c) 2024-2026 Double V Partners (DVP). All rights reserved.
+
+This software and associated documentation files (the "Software") are the
+confidential and proprietary information of Double V Partners. The Software
+is provided to authorized users of DVP strictly for internal use.
+
+No part of the Software may be reproduced, distributed, published,
+downloaded, displayed, transmitted, or otherwise exploited in any form or
+by any means, electronic or mechanical, including photocopying, recording,
+or by any information storage and retrieval system, without prior written
+permission from Double V Partners.
+
+Third-party components included in the Software are licensed under their
+respective open-source licenses. See the dependency tree in client/
+package.json and server/package.json, and the corresponding license files
+under node_modules/, for the full list of third-party terms.
+
+For licensing inquiries, contact: legal@doublevpartners.com
