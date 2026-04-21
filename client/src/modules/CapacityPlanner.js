@@ -38,7 +38,7 @@ const BUCKET_STYLES = {
 
 const s = {
   page: { padding: '20px 24px 40px', fontFamily: 'var(--font-ui, inherit)' },
-  h1: { margin: 0, fontSize: 22, color: 'var(--purple-dark)', fontFamily: 'Montserrat', letterSpacing: '-0.01em' },
+  h1: { margin: 0, fontSize: 20, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)', letterSpacing: '-0.015em', fontFamily: 'var(--font-ui, inherit)' },
   sub: { margin: '4px 0 16px', fontSize: 13, color: 'var(--ds-text-dim, var(--text-light))' },
 
   metrics: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 20 },
@@ -52,7 +52,7 @@ const s = {
     boxShadow: 'var(--ds-shadow-sm, 0 1px 3px rgba(0,0,0,.05))',
   }),
   cardLabel: { fontSize: 10.5, color: 'var(--ds-text-dim, var(--text-light))', textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 4, fontWeight: 500 },
-  cardValue: { fontSize: 24, fontWeight: 700, color: 'var(--ds-text, #1b1b1b)', fontFamily: 'var(--font-mono, Montserrat)', fontFeatureSettings: "'tnum'" },
+  cardValue: { fontSize: 26, fontWeight: 500, color: 'var(--ds-text, #1b1b1b)', fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)', fontFeatureSettings: "'tnum'", letterSpacing: '-0.02em', lineHeight: 1.1 },
   cardHint: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
 
   toolbar: { display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' },
@@ -68,12 +68,13 @@ const s = {
     display: 'grid',
     gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
     position: 'sticky', top: 0, zIndex: 3,
-    background: 'var(--purple-dark, #3b1d52)',
-    color: '#fff',
+    background: 'var(--ds-bg-soft, #f4f5f7)',
+    color: 'var(--ds-text-dim, #6b7280)',
+    borderBottom: '1px solid var(--ds-border, #e5e5e5)',
   }),
-  headCell: { padding: '10px 8px', fontSize: 11, borderLeft: '1px solid rgba(255,255,255,.1)', textAlign: 'center' },
-  headCellWeek: { fontWeight: 700, fontSize: 12, fontFamily: 'var(--font-mono, inherit)', fontFeatureSettings: "'tnum'" },
-  headCellDate: { fontSize: 10, opacity: 0.75 },
+  headCell: { padding: '8px 8px', fontSize: 11, borderLeft: '1px solid var(--ds-border, #eee)', textAlign: 'center', textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 500 },
+  headCellWeek: { fontWeight: 600, fontSize: 11.5, fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)', fontFeatureSettings: "'tnum'", color: 'var(--ds-text, #1b1b1b)', textTransform: 'none' },
+  headCellDate: { fontSize: 10, opacity: 0.8, textTransform: 'none', letterSpacing: 0 },
 
   row: (weeksLen) => ({
     display: 'grid',
@@ -170,7 +171,7 @@ const s = {
     background: 'var(--ds-accent-soft, #faf7ff)',
   }),
   contractCell: { padding: '10px 12px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-accent-soft, #faf7ff)', position: 'sticky', left: 0, zIndex: 2 },
-  contractName: { fontSize: 13, fontWeight: 700, color: 'var(--ds-accent-text, var(--purple-dark))', fontFamily: 'Montserrat', letterSpacing: '-0.005em' },
+  contractName: { fontSize: 13, fontWeight: 600, color: 'var(--ds-accent-text, var(--purple-dark))', fontFamily: 'var(--font-ui, inherit)', letterSpacing: '-0.005em' },
   contractClient: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
   requestSubRow: (weeksLen) => ({
     display: 'grid',
@@ -689,10 +690,10 @@ export default function CapacityPlanner() {
 
       {/* Metric cards */}
       <div style={s.metrics}>
-        <MetricCard label="Personas activas" value={data?.meta?.active_employees ?? '—'} hint={`de ${data?.meta?.total_employees ?? 0} total`} accent="var(--teal-mid, #2a8fa0)" />
-        <MetricCard label="Utilización promedio" value={`${data?.meta?.avg_utilization_pct ?? 0}%`} hint="entre personas con carga" accent="#4B9F6B" />
-        <MetricCard label="Sobre-asignados" value={data?.meta?.overbooked_count ?? 0} hint="al menos una semana > 100%" accent={(data?.meta?.overbooked_count || 0) > 0 ? '#c0392b' : '#888'} />
-        <MetricCard label="Requests sin cubrir" value={data?.meta?.open_request_count ?? 0} hint="open / partially_filled" accent={(data?.meta?.open_request_count || 0) > 0 ? '#e98b3f' : '#888'} />
+        <MetricCard label="Personas activas" value={data?.meta?.active_employees ?? '—'} hint={`de ${data?.meta?.total_employees ?? 0} total`} accent="var(--ds-accent, #6B5B95)" />
+        <MetricCard label="Utilización promedio" value={`${data?.meta?.avg_utilization_pct ?? 0}%`} hint="entre personas con carga" accent="var(--ds-ok, #4B9F6B)" />
+        <MetricCard label="Sobre-asignados" value={data?.meta?.overbooked_count ?? 0} hint="al menos una semana > 100%" accent={(data?.meta?.overbooked_count || 0) > 0 ? 'var(--ds-bad, #c0392b)' : 'var(--ds-text-dim, #888)'} />
+        <MetricCard label="Requests sin cubrir" value={data?.meta?.open_request_count ?? 0} hint="open / partially_filled" accent={(data?.meta?.open_request_count || 0) > 0 ? 'var(--ds-warn, #e98b3f)' : 'var(--ds-text-dim, #888)'} />
       </div>
 
       {/* Toolbar */}
@@ -760,7 +761,7 @@ export default function CapacityPlanner() {
             <div style={s.grid}>
               {/* Header row */}
               <div style={s.headRow(wks.length)}>
-                <div style={{ ...s.headCell, textAlign: 'left', borderLeft: 'none', fontSize: 12, fontWeight: 700 }}>
+                <div style={{ ...s.headCell, textAlign: 'left', borderLeft: 'none', fontSize: 11, fontWeight: 500 }}>
                   {view === 'projects' ? 'Proyecto / solicitud' : 'Empleado'}
                 </div>
                 {wks.map((w) => (
