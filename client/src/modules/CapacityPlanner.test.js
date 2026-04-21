@@ -169,18 +169,29 @@ describe('CapacityPlanner module', () => {
     expect(screen.getByLabelText('Buscar empleado')).toHaveValue('Ana');
   });
 
-  it('clicking an unassigned row navigates to /resource-requests with contract+request params', async () => {
+  it('clicking an unassigned row opens the candidates modal (US-RR-3)', async () => {
+    // Serve an empty candidates payload so the modal mounts but doesn't error.
+    apiV2.apiGet.mockImplementation((url) => {
+      if (url.startsWith('/api/capacity/planner')) return Promise.resolve(plannerResponse());
+      if (url.startsWith('/api/resource-requests/rr9/candidates')) {
+        return Promise.resolve({
+          request: { id: 'rr9', role_title: 'QA Sr', level: 'L6', area_name: 'Testing', weekly_hours: 40, required_skills: [], nice_to_have_skills: [] },
+          candidates: [],
+          skills_lookup: {},
+          meta: { employee_pool_size: 0, returned: 0, area_only: false, include_ineligible: true },
+        });
+      }
+      if (url.startsWith('/api/areas')) return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+
     mount();
     const row = await screen.findByTestId('unassigned-row-rr9');
     fireEvent.click(row);
+
+    expect(await screen.findByRole('dialog', { name: /Candidatos/i })).toBeInTheDocument();
     await waitFor(() => {
-      const probes = screen.getAllByTestId('loc');
-      // After navigation we render the resource-requests route (which only
-      // contains the probe), so the last probe is the RR one.
-      const last = probes[probes.length - 1];
-      expect(last.getAttribute('data-pathname')).toBe('/resource-requests');
-      expect(last.getAttribute('data-search')).toMatch(/contract_id=ct3/);
-      expect(last.getAttribute('data-search')).toMatch(/request_id=rr9/);
+      expect(apiV2.apiGet.mock.calls.some((c) => String(c[0]).includes('/api/resource-requests/rr9/candidates'))).toBe(true);
     });
   });
 
