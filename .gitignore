@@ -1,5 +1,7 @@
 node_modules/
 .env
+.env.local
+.env.*.local
 client/build/
 *.log
 .DS_Store
@@ -7,3 +9,13 @@ client/build/
 letsencrypt/
 deploy-history.log
 .claude/
+# Test coverage artifacts
+coverage/
+.nyc_output/
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+# Local-only directories dropped by agents / designers
+UI de claude design/
