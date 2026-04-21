@@ -14,15 +14,25 @@
  * 3 SQL queries and hands everything to `rankCandidates`. That keeps the
  * scoring math deterministic and easy to evolve (we WILL tune weights).
  *
- * Weights (add to 100):
- *   level_weight      = 25
- *   area_weight       = 20
- *   required_skills   = 35
- *   nice_skills       = 10
- *   availability      = 10
+ * Weights come straight from user story US-RR-2 in
+ * docs/historias_capacity_planning — this is the scoring contract the
+ * product owner committed to:
  *
- * All sub-scores are returned as normalized fractions (0..1) so the
- * frontend can re-weight without re-reading the code.
+ *   area_match         = 40   (área coincide)
+ *   level_match        = 30   (exacto=30, ±1=15, ±2+=0)
+ *   required_skills    = 20   (matched/required, if the request has any)
+ *   availability       = 10   (available_hours ≥ 80% of requested)
+ *   nice_to_have       = 0    (not scored; kept in the match breakdown
+ *                              for the UI only)
+ *
+ * Total = 100. All sub-scores are returned as normalized fractions
+ * (0..1) so the frontend can re-weight without re-reading the code.
+ *
+ * Per the spec, candidates with no available capacity are "penalized
+ * and sent to the bottom" — we subtract `NO_CAPACITY_PENALTY` from the
+ * final score when availability.status === 'none', so even a perfect
+ * area+level+skills match without free hours never out-ranks a
+ * weaker-but-available one.
  */
 
 'use strict';
@@ -34,12 +44,17 @@ const levelIndex = (lvl) => {
 };
 
 const WEIGHTS = Object.freeze({
-  level: 25,
-  area: 20,
-  required: 35,
-  nice: 10,
+  level: 30,
+  area: 40,
+  required: 20,
+  nice: 0,            // per US-RR-2: not scored; kept structurally for the UI
   availability: 10,
 });
+
+// Applied post-hoc when the employee has zero available hours, so
+// "sin capacidad" candidates always fall below ones who can actually
+// take the work even if their area/skills match better.
+const NO_CAPACITY_PENALTY = 40;
 
 /* ── Date helpers ─────────────────────────────────────────────────── */
 
@@ -70,12 +85,15 @@ function scoreLevel(request, employee) {
     return { status: 'unknown', fraction: 0, detail: { request_level: request.level, employee_level: employee.level } };
   }
   const gap = emp - req; // positive = overqualified, negative = underqualified
-  // Under-qualification penalized harder than over-qualification.
+  const absGap = Math.abs(gap);
+  // US-RR-2 scoring curve: exact = full, ±1 = half, ±2+ = nothing.
+  // The per-side asymmetry (under vs over) is lost at this coarseness
+  // but kept in `status` so the UI can still show "sobre-calificado" etc.
   let fraction;
-  if (gap === 0) fraction = 1;
-  else if (gap > 0) fraction = Math.max(0, 1 - 0.1 * gap);       // ±1 over = 0.9
-  else fraction = Math.max(0, 1 + 0.25 * gap);                    // -1 = 0.75, -2 = 0.5, -4 = 0
-  const status = gap === 0 ? 'perfect' : (Math.abs(gap) <= 1 ? 'close' : (gap > 0 ? 'overqualified' : 'underqualified'));
+  if (absGap === 0) fraction = 1;
+  else if (absGap === 1) fraction = 0.5;
+  else fraction = 0;
+  const status = gap === 0 ? 'perfect' : (absGap === 1 ? 'close' : (gap > 0 ? 'overqualified' : 'underqualified'));
   return { status, fraction, detail: { gap, request_level: request.level, employee_level: employee.level } };
 }
 
@@ -125,10 +143,14 @@ function scoreAvailability(request, employee, assignments) {
   }
   const available = Math.max(0, cap - committed);
   const has_full = available >= need && need > 0;
-  // Fraction: 1 if fully available, otherwise available/need (clamped).
-  const fraction = need <= 0 ? 1 : Math.max(0, Math.min(1, available / need));
+  // US-RR-2 scoring is binary: +10 iff available_hours ≥ 80% of requested.
+  // `available_ratio` is kept in the detail so the UI can still render a
+  // precise "12 / 20 h libres" hint without recomputing.
+  const meets_threshold = need <= 0 ? true : available >= 0.8 * need;
+  const fraction = meets_threshold ? 1 : 0;
+  const status = has_full ? 'full' : (available > 0 ? 'partial' : 'none');
   return {
-    status: has_full ? 'full' : (available > 0 ? 'partial' : 'none'),
+    status,
     fraction,
     detail: {
       capacity_hours: cap,
@@ -136,6 +158,8 @@ function scoreAvailability(request, employee, assignments) {
       available_hours: available,
       requested_hours: need,
       has_full_capacity: has_full,
+      meets_threshold,
+      available_ratio: need <= 0 ? 1 : Math.max(0, Math.min(1, available / need)),
     },
   };
 }
@@ -188,13 +212,15 @@ function rankCandidates(request, employees, assignments, opts = {}) {
     const nice  = scoreSkills(request.nice_to_have_skills, emp.skill_ids);
     const avail = scoreAvailability(request, emp, assignments);
 
-    const score = Math.round(
+    const rawScore =
       level.fraction * WEIGHTS.level +
       area.fraction  * WEIGHTS.area +
       req.fraction   * WEIGHTS.required +
       nice.fraction  * WEIGHTS.nice +
-      avail.fraction * WEIGHTS.availability,
-    );
+      avail.fraction * WEIGHTS.availability;
+    // Sin capacidad → al fondo (spec US-RR-2: "score penalizado").
+    const penalty = avail.status === 'none' ? NO_CAPACITY_PENALTY : 0;
+    const score = Math.max(0, Math.round(rawScore - penalty));
 
     const subs = { level, area, required: req, nice, availability: avail };
     const reasons = buildReasons(subs);
