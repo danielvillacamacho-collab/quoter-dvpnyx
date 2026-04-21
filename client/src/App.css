@@ -24,12 +24,6 @@
   transition: transform 0.25s ease;
 }
 
-/* Scrollbar del nav dentro del sidebar */
-.sidebar nav::-webkit-scrollbar { width: 4px; }
-.sidebar nav::-webkit-scrollbar-track { background: transparent; }
-.sidebar nav::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.18); border-radius: 4px; }
-.sidebar nav::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.35); }
-
 .sidebar-overlay {
   display: none;
   position: fixed;

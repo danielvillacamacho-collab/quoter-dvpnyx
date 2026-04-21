@@ -132,43 +132,9 @@ router.post('/', adminOnly, async (req, res) => {
   if (!type) return res.status(400).json({ error: 'type es requerido' });
   if (!VALID_TYPES.includes(type)) return res.status(400).json({ error: 'type inválido (capacity|project|resell)' });
   if (!start_date) return res.status(400).json({ error: 'start_date es requerido' });
+  if (!squad_id) return res.status(400).json({ error: 'squad_id es requerido' });
 
   try {
-    // Resolve squad_id automatically: explicit body → creator's squad → global default.
-    // The DB column is NOT NULL, but the UI no longer exposes this field — users
-    // should never have to think about squads when creating a contract.
-    let resolvedSquadId = squad_id || null;
-    if (!resolvedSquadId) {
-      const { rows: uRows } = await pool.query(
-        `SELECT squad_id FROM users WHERE id = $1`, [req.user.id]
-      );
-      resolvedSquadId = uRows[0]?.squad_id || null;
-    }
-    if (!resolvedSquadId) {
-      // Fallback to the default squad ("DVPNYX Global"). Squads are an internal
-      // concept no longer exposed in the UI — we auto-provision the default so
-      // contract creation never fails on a fresh/empty DB.
-      const { rows: sRows } = await pool.query(
-        `SELECT id FROM squads
-           WHERE deleted_at IS NULL AND active = true
-           ORDER BY (LOWER(name) = LOWER('DVPNYX Global')) DESC, created_at ASC
-           LIMIT 1`
-      );
-      resolvedSquadId = sRows[0]?.id || null;
-    }
-    if (!resolvedSquadId) {
-      // Last resort: create the default squad on the fly so the system is
-      // self-healing in environments where the V2 data migration never ran.
-      const { rows: createdRows } = await pool.query(
-        `INSERT INTO squads (name, description, active)
-           VALUES ('DVPNYX Global', 'Squad por defecto (auto-creado)', true)
-           RETURNING id`
-      );
-      resolvedSquadId = createdRows[0]?.id || null;
-    }
-    if (!resolvedSquadId) {
-      return res.status(500).json({ error: 'No se pudo resolver el squad por defecto. Contacta al administrador.' });
-    }
     // Referential checks
     const { rows: cRows } = await pool.query(
       `SELECT id, name FROM clients WHERE id=$1 AND deleted_at IS NULL`, [client_id]
@@ -207,7 +173,7 @@ router.post('/', adminOnly, async (req, res) => {
       [
         String(name).trim(), client_id, opportunity_id || null, winning_quotation_id || null, type,
         start_date, end_date || null, ownerId, delivery_manager_id || null,
-        capacity_manager_id || null, resolvedSquadId, notes || null, tags || null,
+        capacity_manager_id || null, squad_id, notes || null, tags || null,
         metadata ? JSON.stringify(metadata) : null, req.user.id,
       ]
     );

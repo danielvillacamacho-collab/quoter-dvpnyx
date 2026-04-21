@@ -493,18 +493,6 @@ const V2_ALTERS = `
 
   ALTER TABLE quotation_milestones ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
 
-  -- Assignment validation override audit (US-VAL-2 / US-VAL-4).
-  -- Stores the free-text justification whenever an admin explicitly
-  -- overrides an overridable validation failure (area mismatch, level
-  -- gap, capacity partial/exceeded, partial date overlap). Nullable
-  -- because the vast majority of assignments don't need it — only those
-  -- where the user consciously bypassed a check. Also records the
-  -- structured checks JSON so AI/analytics can learn from past overrides.
-  ALTER TABLE assignments ADD COLUMN IF NOT EXISTS override_reason    TEXT  NULL;
-  ALTER TABLE assignments ADD COLUMN IF NOT EXISTS override_checks    JSONB NULL;
-  ALTER TABLE assignments ADD COLUMN IF NOT EXISTS override_author_id UUID  NULL REFERENCES users(id);
-  ALTER TABLE assignments ADD COLUMN IF NOT EXISTS override_at        TIMESTAMPTZ NULL;
-
   CREATE INDEX IF NOT EXISTS idx_quotations_client      ON quotations(client_id)      WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_quotations_opportunity ON quotations(opportunity_id) WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_quotations_squad       ON quotations(squad_id)       WHERE deleted_at IS NULL;
