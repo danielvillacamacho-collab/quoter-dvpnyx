@@ -164,7 +164,9 @@ describe('POST /api/assignments — EN-1', () => {
     queryQueue.push({ rows: [happyRR()] });
     queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
     queryQueue.push({ rows: [happyEmp()] });
-    queryQueue.push({ rows: [{ total: 30 }] }); // 30 committed + 20 requested > 40 cap
+    // committed=45 ≥ cap=40 → available ≤ 0 → FAIL overridable (engine fails
+    // only when saturated; partial remaining capacity is WARN, not FAIL).
+    queryQueue.push({ rows: [{ total: 45 }] });
 
     const res = await client.call('POST', '/api/assignments', validBody);
     expect(res.status).toBe(409);
@@ -181,7 +183,8 @@ describe('POST /api/assignments — EN-1', () => {
     queryQueue.push({ rows: [happyRR()] });
     queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
     queryQueue.push({ rows: [happyEmp()] });
-    queryQueue.push({ rows: [{ total: 30 }] });
+    // committed=45 ≥ cap=40 → available ≤ 0 → FAIL overridable.
+    queryQueue.push({ rows: [{ total: 45 }] });
     queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
 
     const res = await client.call('POST', '/api/assignments', {
@@ -385,7 +388,9 @@ describe('GET /api/assignments/validate — US-BK-2', () => {
     );
     // committed 30 + requested 20 > capacity 40 → fail overridable
     const cap = res.body.checks.find((c) => c.check === 'capacity');
-    expect(cap.status).toBe('fail');
+    // committed=30 + requested=20 on cap=40 → available=10 (>0, <requested)
+    // → partial-coverage WARN (engine only escalates to FAIL when saturated).
+    expect(cap.status).toBe('warn');
     expect(cap.overridable).toBe(true);
     expect(cap.detail.utilization_after_pct).toBe(125);
     expect(res.body.context.proposed.weekly_hours).toBe(20);
