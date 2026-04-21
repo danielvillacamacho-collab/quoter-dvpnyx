@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { apiGet } from '../utils/apiV2';
+import { loadRecents, pushRecent } from '../utils/recents';
 
 /**
  * CommandPalette — global ⌘K / Ctrl+K spotlight.
@@ -32,6 +33,18 @@ const TYPE_LABELS = {
 // Stable section order — matches the canonical commercial funnel so the
 // palette "reads" like the product flow (lead → deal → contract → …).
 const TYPE_ORDER = ['client', 'opportunity', 'contract', 'resource_request', 'employee', 'quotation'];
+
+// Quick actions shown when the query is empty. These are pure navigation
+// shortcuts — they never hit the server and never enter the recents list
+// (they already live here, and recents should be per-entity).
+const QUICK_ACTIONS = [
+  { id: 'new-staff-aug',  title: 'Nueva cotización Staff Augmentation', subtitle: 'Crear cotización nueva',   url: '/quotation/new/staff_aug' },
+  { id: 'new-project',    title: 'Nueva cotización Alcance Fijo',       subtitle: 'Crear cotización nueva',   url: '/quotation/new/fixed_scope' },
+  { id: 'go-assignments', title: 'Ver asignaciones',                     subtitle: 'Módulo de asignaciones',  url: '/assignments' },
+  { id: 'go-planner',     title: 'Ver planner de capacidad',             subtitle: 'Planeador semanal',       url: '/capacity/planner' },
+  { id: 'go-requests',    title: 'Ver solicitudes de recursos',          subtitle: 'Pipeline de delivery',    url: '/resource-requests' },
+  { id: 'go-time-me',     title: 'Ver mis horas',                         subtitle: 'Registro de tiempo',     url: '/time/me' },
+];
 
 const DEBOUNCE_MS = 200;
 
@@ -93,13 +106,17 @@ export default function CommandPalette({ open, onClose }) {
   const [loading, setL]   = useState(false);
   const [err, setErr]     = useState(null);
   const [cursor, setCur]  = useState(0);
+  const [recents, setRecents] = useState([]);
   const inputRef = useRef(null);
   const nav = useNavigate();
 
-  // Reset + focus on open.
+  // Reset + focus + reload recents on open. Recents are re-read from
+  // localStorage each time the palette opens so another tab's picks
+  // surface immediately (no cross-tab listener needed).
   useEffect(() => {
     if (!open) return;
     setQ(''); setR([]); setErr(null); setCur(0);
+    setRecents(loadRecents());
     // defer to next tick so the input is mounted
     const t = setTimeout(() => inputRef.current?.focus(), 0);
     return () => clearTimeout(t);
@@ -142,11 +159,32 @@ export default function CommandPalette({ open, onClose }) {
       .map((t) => ({ type: t, items: bucket[t] }));
   }, [results]);
 
-  // Flat list order — keyboard cursor indexes into this.
-  const flat = useMemo(() => grouped.flatMap((g) => g.items), [grouped]);
+  // Empty-query state: "Recientes" (from localStorage) + "Acciones rápidas"
+  // (fixed nav shortcuts). These render as two synthetic sections in place
+  // of search results when q.trim().length < 2.
+  const emptyGroups = useMemo(() => {
+    const out = [];
+    if (recents.length) out.push({ kind: 'recent',  label: 'Recientes',       items: recents });
+    out.push({ kind: 'action', label: 'Acciones rápidas', items: QUICK_ACTIONS });
+    return out;
+  }, [recents]);
 
-  const go = useCallback((item) => {
+  const showingEmptyState = q.trim().length < 2;
+
+  // Flat list order — keyboard cursor indexes into this. In empty state
+  // we iterate recents+actions; otherwise the fetched groups.
+  const flat = useMemo(() => {
+    if (showingEmptyState) return emptyGroups.flatMap((g) => g.items);
+    return grouped.flatMap((g) => g.items);
+  }, [showingEmptyState, emptyGroups, grouped]);
+
+  const go = useCallback((item, opts = {}) => {
     onClose?.();
+    // Only entity picks (search results / recents) bump the recents list.
+    // Quick actions navigate but don't pollute MRU.
+    if (opts.remember && item?.type && item.id != null && item.url) {
+      pushRecent(item);
+    }
     if (item?.url) nav(item.url);
   }, [nav, onClose]);
 
@@ -156,7 +194,7 @@ export default function CommandPalette({ open, onClose }) {
     if (e.key === 'ArrowUp')   { e.preventDefault(); setCur((c) => Math.max(c - 1, 0)); return; }
     if (e.key === 'Enter')     {
       const item = flat[cursor];
-      if (item) { e.preventDefault(); go(item); }
+      if (item) { e.preventDefault(); go(item, { remember: Boolean(item.type) }); }
     }
   }, [cursor, flat, go, onClose]);
 
@@ -191,8 +229,35 @@ export default function CommandPalette({ open, onClose }) {
         {err && <div style={s.error} role="alert" data-testid="cmdp-error">{err}</div>}
 
         <div style={s.list} data-testid="cmdp-list">
-          {q.trim().length < 2 ? (
-            <div style={s.empty}>Escribe al menos 2 caracteres.</div>
+          {showingEmptyState ? (
+            emptyGroups.map((group) => {
+              const startIdx = flat.indexOf(group.items[0]);
+              const testidPrefix = group.kind === 'recent' ? 'cmdp-recent' : 'cmdp-action';
+              return (
+                <div key={group.kind} data-testid={`cmdp-group-${group.kind}`}>
+                  <div style={s.sectionLabel}>{group.label}</div>
+                  {group.items.map((item, i) => {
+                    const idx = startIdx + i;
+                    const active = idx === cursor;
+                    return (
+                      <div
+                        key={`${group.kind}:${item.id}`}
+                        role="button"
+                        tabIndex={-1}
+                        aria-selected={active}
+                        style={s.item(active)}
+                        onMouseEnter={() => setCur(idx)}
+                        onClick={() => go(item, { remember: Boolean(item.type) })}
+                        data-testid={`${testidPrefix}-${item.id}`}
+                      >
+                        <span style={s.itemTitle}>{item.title}</span>
+                        {item.subtitle && <span style={s.itemSub}>{item.subtitle}</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })
           ) : loading ? (
             <div style={s.empty} data-testid="cmdp-loading">Buscando…</div>
           ) : flat.length === 0 ? (
@@ -215,7 +280,7 @@ export default function CommandPalette({ open, onClose }) {
                         aria-selected={active}
                         style={s.item(active)}
                         onMouseEnter={() => setCur(idx)}
-                        onClick={() => go(item)}
+                        onClick={() => go(item, { remember: true })}
                         data-testid={`cmdp-item-${item.type}-${item.id}`}
                       >
                         <span style={s.itemTitle}>{item.title}</span>

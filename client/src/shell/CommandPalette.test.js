@@ -9,6 +9,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import CommandPalette from './CommandPalette';
 import * as apiV2 from '../utils/apiV2';
+import { RECENTS_KEY } from '../utils/recents';
 
 jest.mock('../utils/apiV2');
 
@@ -41,9 +42,11 @@ const sample = {
 beforeEach(() => {
   jest.resetAllMocks();
   jest.useFakeTimers();
+  window.localStorage.clear();
 });
 afterEach(() => {
   jest.useRealTimers();
+  window.localStorage.clear();
 });
 
 describe('CommandPalette', () => {
@@ -52,11 +55,50 @@ describe('CommandPalette', () => {
     expect(container.querySelector('[data-testid="command-palette"]')).toBeNull();
   });
 
-  it('shows hint when query is shorter than 2 chars', () => {
+  it('shows quick actions (and not the search hint) when query is empty', () => {
     render(<Harness open />);
     expect(screen.getByTestId('command-palette')).toBeInTheDocument();
-    expect(screen.getByText(/al menos 2 caracteres/i)).toBeInTheDocument();
+    expect(screen.getByTestId('cmdp-group-action')).toBeInTheDocument();
+    expect(screen.getByText(/Acciones rápidas/i)).toBeInTheDocument();
+    expect(screen.getByTestId('cmdp-action-new-staff-aug')).toBeInTheDocument();
+    expect(screen.getByTestId('cmdp-action-go-assignments')).toBeInTheDocument();
+    // No recents section when storage is empty
+    expect(screen.queryByTestId('cmdp-group-recent')).toBeNull();
     expect(apiV2.apiGet).not.toHaveBeenCalled();
+  });
+
+  it('renders recents from localStorage ahead of quick actions', () => {
+    window.localStorage.setItem(RECENTS_KEY, JSON.stringify([
+      { type: 'client', id: 'c1', title: 'Acme SA', subtitle: 'CO', url: '/clients/c1' },
+    ]));
+    render(<Harness open />);
+    expect(screen.getByTestId('cmdp-group-recent')).toBeInTheDocument();
+    expect(screen.getByTestId('cmdp-recent-c1')).toHaveTextContent('Acme SA');
+  });
+
+  it('clicking a quick action navigates but does NOT add it to recents', () => {
+    const onClose = jest.fn();
+    render(<Harness open onClose={onClose} />);
+    fireEvent.click(screen.getByTestId('cmdp-action-go-assignments'));
+    expect(onClose).toHaveBeenCalled();
+    expect(window.localStorage.getItem(RECENTS_KEY)).toBeNull();
+  });
+
+  it('picking a search result stores it in recents for next open', async () => {
+    apiV2.apiGet.mockResolvedValue(sample);
+    const { unmount } = render(<Harness open />);
+    fireEvent.change(screen.getByTestId('cmdp-input'), { target: { value: 'acme' } });
+    act(() => { jest.advanceTimersByTime(250); });
+    await waitFor(() => screen.getByTestId('cmdp-item-client-c1'));
+    fireEvent.click(screen.getByTestId('cmdp-item-client-c1'));
+
+    const stored = JSON.parse(window.localStorage.getItem(RECENTS_KEY));
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toMatchObject({ type: 'client', id: 'c1', title: 'Acme SA', url: '/clients/c1' });
+
+    unmount();
+    render(<Harness open />);
+    expect(screen.getByTestId('cmdp-recent-c1')).toBeInTheDocument();
   });
 
   it('debounces then fetches and renders grouped results', async () => {
