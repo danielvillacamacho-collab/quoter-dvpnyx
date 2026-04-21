@@ -31,6 +31,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { notify, notifyMany } = require('../utils/notifications');
 const { runAllChecks } = require('../utils/assignment_validation');
 
 router.use(auth);
@@ -458,6 +459,57 @@ router.post('/', adminOnly, async (req, res) => {
         },
         req,
       });
+    }
+
+    // ---- Notifications (best-effort, never blocks the mutation) ----
+    // Notify the assigned employee (if they have a linked user account)
+    // that they have a new assignment. Looks up employee.user_id +
+    // contract.name in a single join.
+    try {
+      const { rows: ctx } = await conn.query(
+        `SELECT e.user_id AS employee_user_id,
+                (e.first_name || ' ' || e.last_name) AS employee_name,
+                k.name AS contract_name,
+                k.delivery_manager_id,
+                k.capacity_manager_id
+           FROM employees e, contracts k
+          WHERE e.id = $1 AND k.id = $2`,
+        [employee_id, contract_id]
+      );
+      const c = ctx[0];
+      if (c) {
+        // The assignee — only notify if different from the actor.
+        if (c.employee_user_id && c.employee_user_id !== req.user.id) {
+          await notify(conn, {
+            user_id: c.employee_user_id,
+            type: 'assignment.created',
+            title: 'Te asignaron a un proyecto',
+            body: `${c.contract_name} — ${wh}h/sem desde ${start_date}`,
+            link: '/assignments',
+            entity_type: 'assignment',
+            entity_id: asg.id,
+          });
+        }
+        // On override, notify the contract's managers so they know an
+        // override was exercised against a request under their remit.
+        if (isOverride) {
+          await notifyMany(
+            conn,
+            [c.delivery_manager_id, c.capacity_manager_id].filter((id) => id && id !== req.user.id),
+            {
+              type: 'assignment.overridden',
+              title: 'Asignación creada con justificación',
+              body: `${c.employee_name} → ${c.contract_name} (override registrado)`,
+              link: '/assignments',
+              entity_type: 'assignment',
+              entity_id: asg.id,
+            }
+          );
+        }
+      }
+    } catch (notifyErr) {
+      // eslint-disable-next-line no-console
+      console.error('notify producers failed (non-fatal):', notifyErr.message);
     }
 
     await conn.query('COMMIT');

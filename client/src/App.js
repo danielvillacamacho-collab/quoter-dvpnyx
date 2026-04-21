@@ -8,6 +8,8 @@ import Wiki from './Wiki';
 import Footer from './shell/Footer';
 import Topbar from './shell/Topbar';
 import CommandPalette from './shell/CommandPalette';
+import NotificationsDrawer from './shell/NotificationsDrawer';
+import { apiGet } from './utils/apiV2';
 import ComingSoon from './shell/ComingSoon';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
@@ -58,6 +60,25 @@ function Layout() {
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [unread, setUnread] = useState(0);
+
+  // Poll unread notifications every 60s so the bell badge stays fresh
+  // without a heavy websocket. First fetch fires immediately on login.
+  // Fail-soft: a failing fetch simply leaves the badge at 0.
+  useEffect(() => {
+    if (!user) return undefined;
+    let live = true;
+    const fetchCount = async () => {
+      try {
+        const d = await apiGet('/api/notifications/unread-count');
+        if (live && d && typeof d.count === 'number') setUnread(d.count);
+      } catch (_e) { /* hide badge on error */ }
+    };
+    fetchCount();
+    const t = setInterval(fetchCount, 60000);
+    return () => { live = false; clearInterval(t); };
+  }, [user]);
 
   // Global ⌘K / Ctrl+K opens the Command Palette. Registered once per
   // Layout mount so no child has to care. We also close on route change
@@ -167,8 +188,17 @@ function Layout() {
       </div>
 
       <div className="main-content">
-        <Topbar onOpenSearch={() => setPaletteOpen(true)} />
+        <Topbar
+          onOpenSearch={() => setPaletteOpen(true)}
+          onOpenNotifications={() => setNotifOpen(true)}
+          unreadCount={unread}
+        />
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+        <NotificationsDrawer
+          open={notifOpen}
+          onClose={() => setNotifOpen(false)}
+          onUpdateUnread={setUnread}
+        />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />

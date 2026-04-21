@@ -60,9 +60,43 @@ describe('Topbar', () => {
     expect(onOpenSearch).toHaveBeenCalledTimes(1);
   });
 
-  it('renders a disabled notifications button', () => {
+  it('renders a disabled notifications button when no onOpenNotifications prop is provided', () => {
     renderAt('/clients');
-    const bell = screen.getByRole('button', { name: /Notificaciones/i });
+    const bell = screen.getByRole('button', { name: /^Notificaciones$/i });
     expect(bell).toBeDisabled();
+    expect(screen.queryByTestId('topbar-bell-badge')).toBeNull();
+  });
+
+  it('enables the bell when onOpenNotifications is provided and fires it on click', () => {
+    const onOpenNotifications = jest.fn();
+    render(
+      <MemoryRouter initialEntries={['/clients']}>
+        <Topbar onOpenNotifications={onOpenNotifications} />
+      </MemoryRouter>
+    );
+    const bell = screen.getByRole('button', { name: /^Notificaciones$/i });
+    expect(bell).not.toBeDisabled();
+    bell.click();
+    expect(onOpenNotifications).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the unread-count badge capped at 9+ and reflects count in aria-label', () => {
+    render(
+      <MemoryRouter initialEntries={['/clients']}>
+        <Topbar onOpenNotifications={() => {}} unreadCount={12} />
+      </MemoryRouter>
+    );
+    const badge = screen.getByTestId('topbar-bell-badge');
+    expect(badge).toHaveTextContent('9+');
+    expect(screen.getByRole('button', { name: /Notificaciones \(12 sin leer\)/i })).toBeInTheDocument();
+  });
+
+  it('shows the exact count when below cap', () => {
+    render(
+      <MemoryRouter initialEntries={['/clients']}>
+        <Topbar onOpenNotifications={() => {}} unreadCount={3} />
+      </MemoryRouter>
+    );
+    expect(screen.getByTestId('topbar-bell-badge')).toHaveTextContent('3');
   });
 });
