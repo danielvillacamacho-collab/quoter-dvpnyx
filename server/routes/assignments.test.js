@@ -139,71 +139,134 @@ describe('POST /api/assignments — EN-1', () => {
   });
 
   it('rejects when employee is terminated', async () => {
-    queryQueue.push({ rows: [{ id: 'rr1', contract_id: 'ct1', status: 'open' }] });
+    queryQueue.push({ rows: [happyRR()] });
     queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
-    queryQueue.push({ rows: [{ id: 'e1', weekly_capacity_hours: 40, status: 'terminated', first_name: 'Ana', last_name: 'G' }] });
+    queryQueue.push({ rows: [happyEmp({ status: 'terminated' })] });
     const res = await client.call('POST', '/api/assignments', validBody);
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/terminado/);
   });
 
-  it('warnings (non-blocking) when employee is on_leave or bench', async () => {
-    queryQueue.push({ rows: [{ id: 'rr1', contract_id: 'ct1', status: 'open' }] });
+  it('warnings (non-blocking) when employee is on_leave', async () => {
+    queryQueue.push({ rows: [happyRR()] });
     queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
-    queryQueue.push({ rows: [{ id: 'e1', weekly_capacity_hours: 40, status: 'on_leave', first_name: 'Ana', last_name: 'G' }] });
-    queryQueue.push({ rows: [{ total: 0 }] }); // overlap sum
+    queryQueue.push({ rows: [happyEmp({ status: 'on_leave' })] });
+    queryQueue.push({ rows: [{ total: 0 }] });          // overlap sum
     queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] }); // INSERT
 
     const res = await client.call('POST', '/api/assignments', validBody);
     expect(res.status).toBe(201);
     expect(res.body.warnings.some((w) => /on_leave/.test(w))).toBe(true);
+    expect(res.body.validation.valid).toBe(true);
   });
 
-  it('EN-2: rejects 409 when proposed hours would overbook (>capacity × 1.10)', async () => {
-    queryQueue.push({ rows: [{ id: 'rr1', contract_id: 'ct1', status: 'open' }] });
+  it('US-VAL-4: rejects 409 OVERRIDE_REQUIRED when capacity would overflow and no override_reason', async () => {
+    queryQueue.push({ rows: [happyRR()] });
     queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
-    queryQueue.push({ rows: [{ id: 'e1', weekly_capacity_hours: 40, status: 'active', first_name: 'Ana', last_name: 'G' }] });
-    queryQueue.push({ rows: [{ total: 30 }] }); // existing hours — adding 20 = 50 > 44 threshold
+    queryQueue.push({ rows: [happyEmp()] });
+    // committed=45 ≥ cap=40 → available ≤ 0 → FAIL overridable (engine fails
+    // only when saturated; partial remaining capacity is WARN, not FAIL).
+    queryQueue.push({ rows: [{ total: 45 }] });
 
     const res = await client.call('POST', '/api/assignments', validBody);
     expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/Overbooking/);
-    expect(res.body.threshold).toBeCloseTo(44, 1);
-    expect(res.body.proposed_weekly_hours).toBe(50);
+    expect(res.body.code).toBe('OVERRIDE_REQUIRED');
+    expect(res.body.requires_justification).toBe(true);
+    const cap = res.body.checks.find((c) => c.check === 'capacity');
+    expect(cap.status).toBe('fail');
+    expect(cap.overridable).toBe(true);
   });
 
-  it('EN-2: allows overbook when force=true and emits assignment.overbooked', async () => {
+  it('US-VAL-4: allows override with override_reason and emits assignment.overridden', async () => {
     const { emitEvent } = require('../utils/events');
     emitEvent.mockClear();
-    queryQueue.push({ rows: [{ id: 'rr1', contract_id: 'ct1', status: 'open' }] });
+    queryQueue.push({ rows: [happyRR()] });
     queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
-    queryQueue.push({ rows: [{ id: 'e1', weekly_capacity_hours: 40, status: 'active', first_name: 'Ana', last_name: 'G' }] });
-    queryQueue.push({ rows: [{ total: 30 }] });
+    queryQueue.push({ rows: [happyEmp()] });
+    // committed=45 ≥ cap=40 → available ≤ 0 → FAIL overridable.
+    queryQueue.push({ rows: [{ total: 45 }] });
     queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
 
-    const res = await client.call('POST', '/api/assignments', { ...validBody, force: true });
+    const res = await client.call('POST', '/api/assignments', {
+      ...validBody,
+      override_reason: 'Cliente estratégico — aprobado por COO para cubrir hito crítico.',
+    });
     expect(res.status).toBe(201);
-    expect(res.body.overbooked).toBe(true);
-    const evt = emitEvent.mock.calls.find((c) => c[1].event_type === 'assignment.overbooked');
+    expect(res.body.validation.valid).toBe(false);
+    expect(res.body.validation.can_override).toBe(true);
+    const evt = emitEvent.mock.calls.find((c) => c[1].event_type === 'assignment.overridden');
     expect(evt).toBeTruthy();
+    expect(evt[1].payload.reason).toMatch(/COO/);
   });
 
-  it('creates assignment within capacity (no overbook)', async () => {
+  it('US-VAL-4: rejects 409 VALIDATION_FAILED when there is a non-overridable fail (dates do not overlap)', async () => {
+    queryQueue.push({ rows: [happyRR()] });
+    queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
+    queryQueue.push({ rows: [happyEmp()] });
+    queryQueue.push({ rows: [{ total: 0 }] });
+
+    const res = await client.call('POST', '/api/assignments', {
+      ...validBody,
+      start_date: '2030-01-01', end_date: '2030-06-01', // Outside request window
+    });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('VALIDATION_FAILED');
+    const dateCheck = res.body.checks.find((c) => c.check === 'date_conflict');
+    expect(dateCheck.status).toBe('fail');
+    expect(dateCheck.overridable).toBe(false);
+  });
+
+  it('US-VAL-4: rejects override_reason shorter than 10 chars', async () => {
+    const res = await client.call('POST', '/api/assignments', {
+      ...validBody, override_reason: 'muy corto',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/override_reason/);
+  });
+
+  it('creates assignment within capacity (clean validation)', async () => {
     const { emitEvent } = require('../utils/events');
     emitEvent.mockClear();
-    queryQueue.push({ rows: [{ id: 'rr1', contract_id: 'ct1', status: 'open' }] });
+    queryQueue.push({ rows: [happyRR()] });
     queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
-    queryQueue.push({ rows: [{ id: 'e1', weekly_capacity_hours: 40, status: 'active', first_name: 'Ana', last_name: 'G' }] });
+    queryQueue.push({ rows: [happyEmp()] });
     queryQueue.push({ rows: [{ total: 10 }] });
     queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
 
     const res = await client.call('POST', '/api/assignments', validBody);
     expect(res.status).toBe(201);
-    expect(res.body.overbooked).toBe(false);
+    expect(res.body.validation.valid).toBe(true);
+    expect(res.body.validation.summary.pass).toBe(4);
     const evt = emitEvent.mock.calls.find((c) => c[1].event_type === 'assignment.created');
     expect(evt).toBeTruthy();
+    const override = emitEvent.mock.calls.find((c) => c[1].event_type === 'assignment.overridden');
+    expect(override).toBeFalsy();
   });
 });
+
+/**
+ * Row factories: the POST handler now joins areas and loads level for
+ * the validation engine, so the mocked employee/request rows need to
+ * carry those columns. Using factories keeps individual tests focused
+ * on the behavior under test instead of wiring boilerplate.
+ */
+function happyRR(overrides = {}) {
+  return {
+    id: 'rr1', contract_id: 'ct1', status: 'open',
+    level: 'L5', weekly_hours: 20,
+    start_date: '2026-05-01', end_date: '2026-08-01',
+    area_id: 1, area_name: 'Desarrollo',
+    ...overrides,
+  };
+}
+function happyEmp(overrides = {}) {
+  return {
+    id: 'e1', first_name: 'Ana', last_name: 'G',
+    weekly_capacity_hours: 40, status: 'active',
+    level: 'L5', area_id: 1, area_name: 'Desarrollo',
+    ...overrides,
+  };
+}
 
 describe('PUT /api/assignments/:id — EN-2 on update', () => {
   it('rejects 409 when increasing hours would overbook', async () => {
@@ -223,6 +286,141 @@ describe('PUT /api/assignments/:id — EN-2 on update', () => {
 
     const res = await client.call('PUT', '/api/assignments/a1', { weekly_hours: 20 });
     expect(res.status).toBe(200);
+  });
+});
+
+describe('GET /api/assignments/validate — US-BK-2', () => {
+  /**
+   * Validate enqueues queries in this order:
+   *   1. SELECT employee + area        (Promise.all first)
+   *   2. SELECT request + area         (Promise.all second)
+   *   3. SELECT committed_hours SUM    (sumOverlappingHours)
+   */
+  const enqueue = (employeeRow, requestRow, committedTotal) => {
+    queryQueue.push({ rows: employeeRow ? [employeeRow] : [] });
+    queryQueue.push({ rows: requestRow  ? [requestRow]  : [] });
+    if (employeeRow && requestRow) {
+      queryQueue.push({ rows: [{ total: committedTotal }] });
+    }
+  };
+
+  const matchedEmployee = {
+    id: 'e1', first_name: 'Ana', last_name: 'G',
+    level: 'L5', weekly_capacity_hours: 40, status: 'active',
+    area_id: 1, area_name: 'Desarrollo',
+  };
+  const matchedRequest = {
+    id: 'rr1', contract_id: 'ct1', role_title: 'Senior Dev', level: 'L5',
+    weekly_hours: 20, start_date: '2026-05-01', end_date: '2026-08-01',
+    status: 'open', area_id: 1, area_name: 'Desarrollo',
+  };
+
+  it('requires employee_id and request_id', async () => {
+    let res = await client.call('GET', '/api/assignments/validate');
+    expect(res.status).toBe(400);
+    res = await client.call('GET', '/api/assignments/validate?employee_id=e1');
+    expect(res.status).toBe(400);
+    res = await client.call('GET', '/api/assignments/validate?request_id=rr1');
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 404 when employee does not exist', async () => {
+    enqueue(null, matchedRequest);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/employee/);
+  });
+
+  it('returns 404 when request does not exist', async () => {
+    enqueue(matchedEmployee, null);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/resource_request/);
+  });
+
+  it('returns valid=true when everything matches', async () => {
+    enqueue(matchedEmployee, matchedRequest, 0);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(true);
+    expect(res.body.can_override).toBe(false);
+    expect(res.body.summary.pass).toBe(4);
+    expect(res.body.checks).toHaveLength(4);
+    expect(res.body.context.employee.name).toBe('Ana G');
+    expect(res.body.context.request.role_title).toBe('Senior Dev');
+    expect(res.body.context.proposed.weekly_hours).toBe(20);
+  });
+
+  it('flags area mismatch as overridable fail', async () => {
+    enqueue(
+      { ...matchedEmployee, area_id: 2, area_name: 'Testing' },
+      matchedRequest, 0,
+    );
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(false);
+    expect(res.body.can_override).toBe(true);
+    expect(res.body.requires_justification).toBe(true);
+    const areaCheck = res.body.checks.find((c) => c.check === 'area_match');
+    expect(areaCheck.status).toBe('fail');
+    expect(areaCheck.overridable).toBe(true);
+  });
+
+  it('marks non-overlapping dates as non-overridable fail', async () => {
+    enqueue(matchedEmployee, matchedRequest, 0);
+    const res = await client.call(
+      'GET',
+      '/api/assignments/validate?employee_id=e1&request_id=rr1&start_date=2027-01-01&end_date=2027-06-01',
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.valid).toBe(false);
+    expect(res.body.can_override).toBe(false);
+    const dateCheck = res.body.checks.find((c) => c.check === 'date_conflict');
+    expect(dateCheck.status).toBe('fail');
+    expect(dateCheck.overridable).toBe(false);
+  });
+
+  it('uses query-provided weekly_hours when present (overrides request default)', async () => {
+    enqueue(matchedEmployee, matchedRequest, 30);
+    const res = await client.call(
+      'GET',
+      '/api/assignments/validate?employee_id=e1&request_id=rr1&weekly_hours=20',
+    );
+    // committed 30 + requested 20 > capacity 40 → fail overridable
+    const cap = res.body.checks.find((c) => c.check === 'capacity');
+    // committed=30 + requested=20 on cap=40 → available=10 (>0, <requested)
+    // → partial-coverage WARN (engine only escalates to FAIL when saturated).
+    expect(cap.status).toBe('warn');
+    expect(cap.overridable).toBe(true);
+    expect(cap.detail.utilization_after_pct).toBe(125);
+    expect(res.body.context.proposed.weekly_hours).toBe(20);
+  });
+
+  it('surfaces employee status advisories alongside checks', async () => {
+    enqueue({ ...matchedEmployee, status: 'terminated' }, matchedRequest, 0);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(200);
+    expect(res.body.advisories.map((a) => a.code)).toContain('employee_terminated');
+  });
+
+  it('surfaces cancelled request as advisory', async () => {
+    enqueue(matchedEmployee, { ...matchedRequest, status: 'cancelled' }, 0);
+    const res = await client.call('GET', '/api/assignments/validate?employee_id=e1&request_id=rr1');
+    expect(res.status).toBe(200);
+    expect(res.body.advisories.map((a) => a.code)).toContain('request_cancelled');
+  });
+
+  it('supports ignore_assignment_id (for editing flow)', async () => {
+    enqueue(matchedEmployee, matchedRequest, 0);
+    const res = await client.call(
+      'GET',
+      '/api/assignments/validate?employee_id=e1&request_id=rr1&ignore_assignment_id=a-existing',
+    );
+    expect(res.status).toBe(200);
+    // The third query (sumOverlappingHours) must have received the ignore id as a param
+    const overlapQuery = issuedQueries.find((q) => /SUM\(weekly_hours\)/i.test(q.sql));
+    expect(overlapQuery).toBeTruthy();
+    expect(overlapQuery.params).toContain('a-existing');
   });
 });
 

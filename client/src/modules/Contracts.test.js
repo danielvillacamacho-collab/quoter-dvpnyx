@@ -103,14 +103,16 @@ describe('Contracts module', () => {
     fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
     fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'project' } });
     fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-06-01' } });
-    fireEvent.change(within(dialog).getByLabelText('Squad ID'), { target: { value: 's-uuid' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/contracts',
-        expect.objectContaining({ name: 'New Contract', client_id: 'c1', type: 'project', squad_id: 's-uuid' })
+        expect.objectContaining({ name: 'New Contract', client_id: 'c1', type: 'project' })
       );
     });
+    // squad_id ya no se envía desde el cliente — lo resuelve el backend
+    const payload = apiV2.apiPost.mock.calls[0][1];
+    expect(payload).not.toHaveProperty('squad_id');
   });
 
   it('deletes with confirmation', async () => {

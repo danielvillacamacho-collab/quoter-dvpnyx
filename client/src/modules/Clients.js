@@ -27,6 +27,14 @@ const TIERS = [
   { value: 'smb',        label: 'SMB' },
 ];
 
+// Países de Latinoamérica en orden alfabético (incluye Caribe hispano + Brasil).
+const LATAM_COUNTRIES = [
+  'Argentina', 'Belice', 'Bolivia', 'Brasil', 'Chile', 'Colombia', 'Costa Rica',
+  'Cuba', 'Ecuador', 'El Salvador', 'Guatemala', 'Guyana', 'Haití', 'Honduras',
+  'México', 'Nicaragua', 'Panamá', 'Paraguay', 'Perú', 'Puerto Rico',
+  'República Dominicana', 'Surinam', 'Uruguay', 'Venezuela',
+];
+
 const EMPTY = {
   name: '', legal_name: '', country: '', industry: '', tier: '',
   preferred_currency: 'USD', notes: '', tags: [],
@@ -64,7 +72,14 @@ function ClientForm({ initial, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>País</label>
-          <input style={s.input} value={form.country || ''} onChange={(e) => set('country', e.target.value)} placeholder="Colombia" />
+          <select
+            style={{ ...s.input, padding: '8px 10px' }}
+            value={form.country || ''}
+            onChange={(e) => set('country', e.target.value)}
+          >
+            <option value="">—</option>
+            {LATAM_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
         </div>
         <div>
           <label style={s.label}>Industria</label>
@@ -193,7 +208,15 @@ export default function Clients() {
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>País</label>
-            <input style={s.input} value={country} onChange={(e) => setCountry(e.target.value)} placeholder="Cualquiera" />
+            <select
+              style={s.input}
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+              aria-label="Filtro por país"
+            >
+              <option value="">Todos</option>
+              {LATAM_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Tier</label>

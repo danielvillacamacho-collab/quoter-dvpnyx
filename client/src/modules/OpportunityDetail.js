@@ -165,7 +165,6 @@ export default function OpportunityDetail() {
           <Field label="Cierre esperado">{opp.expected_close_date ? String(opp.expected_close_date).slice(0, 10) : null}</Field>
           <Field label="Owner (comercial)">{opp.account_owner_id}</Field>
           <Field label="Preventa lead">{opp.presales_lead_id}</Field>
-          <Field label="Squad">{opp.squad_id}</Field>
           <Field label="Outcome">{opp.outcome_reason}</Field>
         </div>
       </div>

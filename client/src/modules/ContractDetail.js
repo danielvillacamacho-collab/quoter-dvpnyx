@@ -77,7 +77,6 @@ export default function ContractDetail() {
               : null}
           </Field>
           <Field label="Cotización ganadora">{contract.winning_quotation_name}</Field>
-          <Field label="Squad">{contract.squad_id}</Field>
           <Field label="Account owner">{contract.account_owner_id}</Field>
           <Field label="Delivery manager">{contract.delivery_manager_id}</Field>
           <Field label="Capacity manager">{contract.capacity_manager_id}</Field>
