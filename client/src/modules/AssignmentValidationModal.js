@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { STATUS_META, CHECK_LABEL } from '../utils/validationMeta';
 
 /**
  * AssignmentValidationModal — US-VAL-4
@@ -18,20 +19,6 @@ import React, { useState } from 'react';
  * intentionally flat so an AI layer can later produce these same
  * payloads and the UI Just Works.
  */
-
-const STATUS_META = {
-  pass: { label: 'OK',          icon: '✓', color: 'var(--success, #1b9e4a)' },
-  warn: { label: 'Advertencia', icon: '!', color: '#c77700' },
-  fail: { label: 'Falla',       icon: '✕', color: 'var(--danger, #c0392b)' },
-  info: { label: 'Info',        icon: 'i', color: 'var(--teal-mid, #2a8fa0)' },
-};
-
-const CHECK_LABEL = {
-  area_match:    'Área',
-  level_match:   'Nivel',
-  capacity:      'Capacidad semanal',
-  date_conflict: 'Fechas',
-};
 
 const s = {
   bg: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 },
