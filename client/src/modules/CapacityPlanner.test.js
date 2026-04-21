@@ -74,6 +74,17 @@ const plannerResponse = () => ({
     { id: 'ct3', name: 'Contrato Gamma', client_name: 'Initech', color: '#E98B3F' },
   ],
   meta: { total_employees: 2, active_employees: 1, avg_utilization_pct: 50, overbooked_count: 0, open_request_count: 1 },
+  alerts: [
+    {
+      type: 'overbooked', severity: 'red', employee_id: 'e1',
+      week_indices: [0, 1], peak_pct: 130,
+      message: 'Ana García sobre-asignada S17-S18 (130%).',
+    },
+    {
+      type: 'open_request', severity: 'amber', request_id: 'rr9',
+      message: 'Initech: QA Sr L6 sin cubrir desde S19 (2 vacantes).',
+    },
+  ],
   filters_applied: { contract_id: null, area_id: null, level_min: null, level_max: null, search: null },
 });
 
@@ -225,6 +236,56 @@ describe('CapacityPlanner module', () => {
       const lastCall = apiV2.apiGet.mock.calls[apiV2.apiGet.mock.calls.length - 1][0];
       expect(String(lastCall)).toMatch(/start=\d{4}-\d{2}-\d{2}/);
     });
+  });
+
+  it('renders the alerts strip with severity counts (US-PLN-6)', async () => {
+    mount();
+    const strip = await screen.findByTestId('alerts-strip');
+    expect(within(strip).getByText(/1 críticas/)).toBeInTheDocument();
+    expect(within(strip).getByText(/1 advertencias/)).toBeInTheDocument();
+    expect(within(strip).getByText(/Ana García sobre-asignada/)).toBeInTheDocument();
+    expect(within(strip).getByText(/QA Sr L6 sin cubrir/)).toBeInTheDocument();
+  });
+
+  it('clicking an overbooked alert scrolls the employee row into view (US-PLN-6)', async () => {
+    mount();
+    await screen.findByTestId('alerts-strip');
+    const empRow = screen.getByTestId('emp-row-e1');
+    const scrollSpy = jest.fn();
+    empRow.scrollIntoView = scrollSpy;
+
+    fireEvent.click(screen.getByTestId('alert-overbooked-e1'));
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it('clicking an open_request alert scrolls its unassigned row into view', async () => {
+    mount();
+    await screen.findByTestId('alerts-strip');
+    const row = screen.getByTestId('unassigned-row-rr9');
+    const scrollSpy = jest.fn();
+    row.scrollIntoView = scrollSpy;
+
+    fireEvent.click(screen.getByTestId('alert-open_request-rr9'));
+    expect(scrollSpy).toHaveBeenCalled();
+  });
+
+  it('the alerts strip can be collapsed', async () => {
+    mount();
+    const strip = await screen.findByTestId('alerts-strip');
+    expect(within(strip).getByText(/Ana García sobre-asignada/)).toBeInTheDocument();
+    fireEvent.click(within(strip).getByRole('button', { name: /Ocultar/i }));
+    expect(within(strip).queryByText(/Ana García sobre-asignada/)).not.toBeInTheDocument();
+  });
+
+  it('does not render the alerts strip when there are no alerts', async () => {
+    apiV2.apiGet.mockImplementation((url) => {
+      if (url.startsWith('/api/capacity/planner')) return Promise.resolve({ ...plannerResponse(), alerts: [] });
+      if (url.startsWith('/api/areas')) return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+    mount();
+    await screen.findByTestId('emp-row-e1');
+    expect(screen.queryByTestId('alerts-strip')).not.toBeInTheDocument();
   });
 
   it('shows error banner when the API fails', async () => {

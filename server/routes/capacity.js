@@ -28,6 +28,7 @@ const {
   computeWeeklyForEmployee,
   colorFor,
   aggregateMeta,
+  computeAlerts,
   mondayOf,
   parseDateUTC,
   formatDateUTC,
@@ -139,10 +140,12 @@ router.get('/planner', async (req, res) => {
           `SELECT asg.id, asg.employee_id, asg.contract_id, asg.resource_request_id,
                   asg.role_title, asg.weekly_hours, asg.start_date, asg.end_date, asg.status,
                   c.name AS contract_name, c.status AS contract_status,
-                  cl.name AS client_name
+                  cl.name AS client_name,
+                  rr.level AS request_level, rr.area_id AS request_area_id
              FROM assignments asg
              JOIN contracts c ON c.id = asg.contract_id
              LEFT JOIN clients cl ON cl.id = c.client_id
+             LEFT JOIN resource_requests rr ON rr.id = asg.resource_request_id
              WHERE ${asgWhere}`,
           asgParams,
         )).rows
@@ -203,6 +206,8 @@ router.get('/planner', async (req, res) => {
         status: a.status,
         color,
         week_range: range, // [first, last] or null
+        request_level: a.request_level || null,
+        request_area_id: a.request_area_id || null,
       };
       if (!asgByEmp.has(a.employee_id)) asgByEmp.set(a.employee_id, []);
       asgByEmp.get(a.employee_id).push(enriched);
@@ -262,6 +267,7 @@ router.get('/planner', async (req, res) => {
     });
 
     const meta = aggregateMeta(employees, openRequests);
+    const alerts = computeAlerts(employees, openRequests, weekWindows);
 
     res.json({
       window: {
@@ -274,6 +280,7 @@ router.get('/planner', async (req, res) => {
       open_requests: openRequests,
       contracts: Array.from(contractsMap.values()).sort((a, b) => a.name.localeCompare(b.name)),
       meta,
+      alerts,
       filters_applied: {
         contract_id: p.contractId,
         area_id: p.areaId,
