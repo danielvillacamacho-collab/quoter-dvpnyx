@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import AssignmentValidationModal from './AssignmentValidationModal';
+import AssignmentValidationInline from './AssignmentValidationInline';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -44,6 +45,59 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
 
   // When the user picks a request, auto-fill contract_id.
   const selectedRequest = requests.find((r) => r.id === form.resource_request_id);
+
+  /* --- US-VAL-4: live pre-validation --------------------------------
+   * Debounce-call GET /api/assignments/validate whenever the four
+   * inputs (employee, request, hours, start_date) are populated. The
+   * response drives <AssignmentValidationInline /> so the user sees
+   * area/level/capacity/date feedback before hitting Save.
+   *
+   * On edit we pass `ignore_assignment_id` so the endpoint excludes
+   * the current assignment from the committed-hours sum — otherwise
+   * we'd double-count the user's own hours and report false positives.
+   */
+  const [preVal, setPreVal] = useState({
+    loading: false, validation: null, error: null,
+  });
+  const hasInputs = Boolean(
+    form.resource_request_id && form.employee_id &&
+    Number(form.weekly_hours) > 0 && form.start_date,
+  );
+  useEffect(() => {
+    if (!hasInputs) {
+      setPreVal({ loading: false, validation: null, error: null });
+      return undefined;
+    }
+    let cancelled = false;
+    setPreVal((p) => ({ ...p, loading: true, error: null }));
+    const qs = new URLSearchParams({
+      employee_id: form.employee_id,
+      request_id:  form.resource_request_id,
+      weekly_hours: String(form.weekly_hours),
+      start_date: String(form.start_date).slice(0, 10),
+    });
+    if (form.end_date) qs.set('end_date', String(form.end_date).slice(0, 10));
+    if (initial?.id) qs.set('ignore_assignment_id', initial.id);
+    const timer = setTimeout(async () => {
+      try {
+        const v = await apiGet(`/api/assignments/validate?${qs.toString()}`);
+        if (!cancelled) setPreVal({ loading: false, validation: v, error: null });
+      } catch (ex) {
+        if (!cancelled) {
+          setPreVal({ loading: false, validation: null, error: ex.message || 'Error' });
+        }
+      }
+    }, 350); // debounce
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [
+    hasInputs,
+    form.employee_id,
+    form.resource_request_id,
+    form.weekly_hours,
+    form.start_date,
+    form.end_date,
+    initial?.id,
+  ]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -120,11 +174,11 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
         <label style={s.label}>Notas</label>
         <textarea style={{ ...s.input, minHeight: 50, resize: 'vertical' }} value={form.notes || ''} onChange={(e) => set('notes', e.target.value)} />
       </div>
-      <div style={{ fontSize: 12, color: 'var(--text-light)', background: 'var(--bg-soft, #fafafa)', padding: 10, borderRadius: 8, border: '1px solid var(--border, #eee)' }}>
-        El sistema valida área, nivel, capacidad y fechas al guardar. Si hay
-        incompatibilidades, se te pedirá justificación antes de crear la
-        asignación.
-      </div>
+      <AssignmentValidationInline
+        validation={preVal.validation}
+        loading={preVal.loading}
+        error={preVal.error}
+      />
       {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
