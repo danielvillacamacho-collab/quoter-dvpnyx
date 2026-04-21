@@ -16,6 +16,7 @@ import Employees from './modules/Employees';
 import Contracts from './modules/Contracts';
 import ResourceRequests from './modules/ResourceRequests';
 import Assignments from './modules/Assignments';
+import CapacityPlanner from './modules/CapacityPlanner';
 import TimeMe from './modules/TimeMe';
 import Reports from './modules/Reports';
 import DashboardMe from './modules/DashboardMe';
@@ -77,6 +78,7 @@ function Layout() {
         { path: '/contracts', label: '📑 Contratos' },
         { path: '/resource-requests', label: '🧾 Solicitudes' },
         { path: '/assignments', label: '🗓 Asignaciones' },
+        { path: '/capacity/planner', label: '📅 Planner' },
       ],
     },
     {
@@ -167,6 +169,7 @@ function Layout() {
           <Route path="/contracts/:id" element={<ContractDetail />} />
           <Route path="/resource-requests" element={<ResourceRequests />} />
           <Route path="/assignments" element={<Assignments />} />
+          <Route path="/capacity/planner" element={<CapacityPlanner />} />
           <Route path="/time" element={<TimeMe />} />
           <Route path="/time/me" element={<TimeMe />} />
           <Route path="/time/team" element={<ComingSoon />} />
