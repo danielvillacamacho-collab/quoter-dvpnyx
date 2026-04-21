@@ -51,9 +51,27 @@ const css = {
   th: dsTh,
   td: dsTd,
   badge: (color) => ({ display: 'inline-block', padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: color + '20', color }),
-  metric: { textAlign: 'center', padding: '16px' },
-  metricValue: { fontSize: 28, fontWeight: 700, fontFamily: 'Montserrat', color: 'var(--purple-dark)' },
-  metricLabel: { fontSize: 11, color: 'var(--text-light)', marginTop: 4 },
+  // UI refresh Phase 5 — metric cards now consume DS tokens (tabular numerals
+  // on the big number, uppercase label, no more purple-dark accent so the
+  // card sits on the DS soft/border palette like the ExecutiveKpis strip).
+  metric: { textAlign: 'left', padding: '14px 16px' },
+  metricValue: {
+    fontSize: 26,
+    fontWeight: 500,
+    fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
+    fontFeatureSettings: "'tnum'",
+    letterSpacing: '-0.02em',
+    color: 'var(--ds-text)',
+    lineHeight: 1.1,
+  },
+  metricLabel: {
+    fontSize: 11,
+    color: 'var(--ds-text-dim)',
+    marginTop: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.04,
+    fontWeight: 500,
+  },
 };
 
 /* ========== LAYOUT ========== */
@@ -276,8 +294,19 @@ function ExecutiveKpis() {
     transition: 'transform .1s ease, box-shadow .1s ease',
     display: 'flex', flexDirection: 'column', gap: 4,
   };
-  const label = { fontSize: 11, color: 'var(--ds-text-dim, #888)', textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 600 };
-  const value = { fontSize: 24, fontWeight: 700, fontFamily: 'Montserrat', color: 'var(--ds-text, #222)', lineHeight: 1.1 };
+  // Phase 5 refresh — KPI strip now uses the same design tokens as the
+  // shared `.ds-*` palette: mono tabular numerals on the big value so
+  // numbers align across the grid, uppercase micro-label.
+  const label = { fontSize: 11, color: 'var(--ds-text-dim, #888)', textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 500 };
+  const value = {
+    fontSize: 26,
+    fontWeight: 500,
+    fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
+    fontFeatureSettings: "'tnum'",
+    letterSpacing: '-0.02em',
+    color: 'var(--ds-text, #222)',
+    lineHeight: 1.1,
+  };
   const sub   = { fontSize: 11, color: 'var(--ds-text-muted, #666)' };
 
   const kpis = [
@@ -342,7 +371,7 @@ function Dashboard() {
     <div>
       <ExecutiveKpis />
       <div className="page-header">
-        <h1 style={{ fontSize: 24, color: 'var(--purple-dark)' }}>Cotizaciones</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ds-text)', margin: 0 }}>Cotizaciones</h1>
         <div className="page-header-actions">
           <button style={css.btn('var(--teal-mid)')} onClick={() => nav('/quotation/new/staff_aug')}>+ Staff Augmentation</button>
           <button style={css.btn('var(--orange)')} onClick={() => nav('/quotation/new/fixed_scope')}>+ Proyecto Alcance Fijo</button>
@@ -351,10 +380,12 @@ function Dashboard() {
 
       <div className="metrics-grid">
         {[
-          { label: 'Total', value: quots.length, color: 'var(--purple-dark)' },
-          { label: 'Borradores', value: quots.filter(q => q.status === 'draft').length, color: 'var(--text-light)' },
-          { label: 'Enviadas', value: quots.filter(q => q.status === 'sent').length, color: 'var(--orange)' },
-          { label: 'Aprobadas', value: quots.filter(q => q.status === 'approved').length, color: 'var(--success)' },
+          // Phase 5 — tone maps onto the DS semaphore: total/drafts stay
+          // neutral, sent = warn (pending reply), approved = ok.
+          { label: 'Total', value: quots.length, color: 'var(--ds-text)' },
+          { label: 'Borradores', value: quots.filter(q => q.status === 'draft').length, color: 'var(--ds-text-dim)' },
+          { label: 'Enviadas', value: quots.filter(q => q.status === 'sent').length, color: 'var(--ds-warn, var(--orange))' },
+          { label: 'Aprobadas', value: quots.filter(q => q.status === 'approved').length, color: 'var(--ds-ok, var(--success))' },
         ].map((m, i) => (
           <div key={i} style={{ ...css.card, ...css.metric }}>
             <div style={{ ...css.metricValue, color: m.color }}>{m.value}</div>
