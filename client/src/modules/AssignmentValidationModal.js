@@ -87,7 +87,7 @@ export default function AssignmentValidationModal({
   const [err, setErr] = useState('');
 
   if (!validation) return null;
-  const { checks = [], summary = {}, requires_justification, can_override } = validation;
+  const { checks = [], summary = {}, can_override } = validation;
   const nonOverridable = summary.non_overridable_fails > 0;
 
   const bannerColor = nonOverridable ? 'var(--danger, #c0392b)' : '#c77700';
