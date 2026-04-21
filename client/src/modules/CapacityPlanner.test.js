@@ -288,6 +288,85 @@ describe('CapacityPlanner module', () => {
     expect(screen.queryByTestId('alerts-strip')).not.toBeInTheDocument();
   });
 
+  it('toggles between Personas and Proyectos views and persists in URL (US-PLN-4)', async () => {
+    mount();
+    await screen.findByTestId('emp-row-e1');
+
+    // Default view = employees
+    expect(screen.getByTestId('view-toggle-employees')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('view-toggle-projects')).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(screen.getByTestId('view-toggle-projects'));
+    await waitFor(() => {
+      expect(screen.getByTestId('loc').getAttribute('data-search')).toMatch(/view=projects/);
+    });
+    // Employee rows disappear; contract rows appear.
+    expect(screen.queryByTestId('emp-row-e1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('contract-row-ct1')).toBeInTheDocument();
+    expect(screen.getByTestId('contract-row-ct3')).toBeInTheDocument();
+    // Header label swaps to project/solicitud.
+    expect(screen.getByText(/Proyecto \/ solicitud/)).toBeInTheDocument();
+
+    // Toggle back.
+    fireEvent.click(screen.getByTestId('view-toggle-employees'));
+    await waitFor(() => {
+      expect(screen.getByTestId('loc').getAttribute('data-search')).not.toMatch(/view=/);
+    });
+    expect(screen.getByTestId('emp-row-e1')).toBeInTheDocument();
+  });
+
+  it('projects view shows assignments under their contract with employee bars', async () => {
+    mount('/capacity/planner?view=projects');
+    const ct1Row = await screen.findByTestId('contract-row-ct1');
+    expect(within(ct1Row).getByText('Contrato Alpha')).toBeInTheDocument();
+    // Ana is assigned to ct1 via assignment a1 (rr1). Her name should appear
+    // in contract cells for weeks 0..7.
+    for (let i = 0; i <= 7; i += 1) {
+      expect(within(screen.getByTestId(`contract-cell-ct1-${i}`)).getByText('Ana García')).toBeInTheDocument();
+    }
+    expect(within(screen.getByTestId(`contract-cell-ct1-8`)).queryByText('Ana García')).not.toBeInTheDocument();
+  });
+
+  it('projects view renders unfilled requests with dashed "Sin asignar" bars', async () => {
+    mount('/capacity/planner?view=projects');
+    const row = await screen.findByTestId('project-request-row-rr9');
+    // Unassigned bar in the request's week range.
+    expect(within(row).getAllByText(/Sin asignar/).length).toBeGreaterThan(0);
+    expect(within(row).getByText(/faltan 2/)).toBeInTheDocument();
+  });
+
+  it('clicking an unfilled request sub-row opens candidates modal', async () => {
+    apiV2.apiGet.mockImplementation((url) => {
+      if (url.startsWith('/api/capacity/planner')) return Promise.resolve(plannerResponse());
+      if (url.startsWith('/api/resource-requests/rr9/candidates')) {
+        return Promise.resolve({
+          request: { id: 'rr9', role_title: 'QA Sr', level: 'L6', area_name: 'Testing', weekly_hours: 40, required_skills: [], nice_to_have_skills: [] },
+          candidates: [],
+          skills_lookup: {},
+          meta: { employee_pool_size: 0, returned: 0, area_only: false, include_ineligible: true },
+        });
+      }
+      if (url.startsWith('/api/areas')) return Promise.resolve({ data: [] });
+      return Promise.resolve({});
+    });
+    mount('/capacity/planner?view=projects');
+    const row = await screen.findByTestId('project-request-row-rr9');
+    fireEvent.click(row);
+    expect(await screen.findByRole('dialog', { name: /Candidatos/i })).toBeInTheDocument();
+  });
+
+  it('projects view preserves filters when toggling', async () => {
+    mount('/capacity/planner?view=projects&contract_id=ct1&search=Ana');
+    await screen.findByTestId('contract-row-ct1');
+    // Filters still applied to the API call.
+    const last = apiV2.apiGet.mock.calls
+      .map((c) => String(c[0]))
+      .filter((u) => u.startsWith('/api/capacity/planner'))
+      .pop();
+    expect(last).toMatch(/contract_id=ct1/);
+    expect(last).toMatch(/search=Ana/);
+  });
+
   it('shows error banner when the API fails', async () => {
     apiV2.apiGet.mockImplementation((url) => {
       if (url.startsWith('/api/capacity/planner')) return Promise.reject(new Error('boom'));
