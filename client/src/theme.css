@@ -426,6 +426,61 @@
   font-weight: 500;
 }
 
+/* =====================================================================
+   Dense Tables (DVPNYX design handoff — Phase 2)
+   =====================================================================
+   Applied via `<table className="ds-table">`. The modules still ship
+   their own `s.th` / `s.td` inline style objects (pointing at DS
+   tokens), so the CSS here is intentionally minimal: it owns only what
+   inline styles CAN'T express — :hover, zebra, scroll container shape.
+   Inline styles still win for per-cell overrides like text-align.
+   ===================================================================== */
+.ds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  color: var(--ds-text);
+  font-feature-settings: 'tnum';
+}
+.ds-table thead th {
+  /* Inline style still sets background/padding; these only add polish
+     that inline styles don't reach (position sticky for long tables
+     in scrollable cards, for example). */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.ds-table tbody tr {
+  transition: background 0.08s;
+}
+.ds-table tbody tr:hover { background: var(--ds-hover); }
+.ds-table tbody tr:last-child td { border-bottom: 0; }
+
+/* Numeric cells — tabular numerals so columns align vertically. */
+.ds-table .num,
+.ds-table td.num { font-family: var(--font-mono); font-feature-settings: 'tnum'; }
+
+/* Small badges shown inline inside table cells (status pills, etc.). */
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--ds-border);
+  color: var(--ds-text-muted);
+  background: var(--ds-surface);
+  line-height: 17px;
+  white-space: nowrap;
+}
+.ds-badge.ok   { background: var(--ds-ok-soft);   color: oklch(0.4 0.12 155); border-color: transparent; }
+.ds-badge.warn { background: var(--ds-warn-soft); color: oklch(0.45 0.12 80); border-color: transparent; }
+.ds-badge.bad  { background: var(--ds-bad-soft);  color: oklch(0.45 0.18 25); border-color: transparent; }
+.ds-badge.accent { background: var(--ds-accent-soft); color: var(--ds-accent-text); border-color: transparent; }
+
 /* ---------- Scrollbars ---------- */
 .sidebar::-webkit-scrollbar,
 .ds-sb-scroll::-webkit-scrollbar,

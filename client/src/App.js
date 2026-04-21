@@ -8,6 +8,7 @@ import Wiki from './Wiki';
 import Footer from './shell/Footer';
 import Topbar from './shell/Topbar';
 import Sidebar from './shell/Sidebar';
+import { th as dsTh, td as dsTd, TABLE_CLASS } from './shell/tableStyles';
 import CommandPalette from './shell/CommandPalette';
 import NotificationsDrawer from './shell/NotificationsDrawer';
 import { apiGet } from './utils/apiV2';
@@ -46,8 +47,9 @@ const css = {
   input: { width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, outline: 'none', transition: 'border .15s' },
   select: { padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, background: '#fff', cursor: 'pointer', outline: 'none' },
   label: { fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 4, display: 'block' },
-  th: { padding: '10px 12px', fontSize: 11, fontWeight: 700, color: '#fff', background: 'var(--purple-dark)', textAlign: 'left', whiteSpace: 'nowrap' },
-  td: { padding: '8px 12px', fontSize: 13, borderBottom: '1px solid var(--border)' },
+  // UI refresh Phase 2 — list tables now consume the shared DS tokens.
+  th: dsTh,
+  td: dsTd,
   badge: (color) => ({ display: 'inline-block', padding: '2px 10px', borderRadius: 12, fontSize: 11, fontWeight: 600, background: color + '20', color }),
   metric: { textAlign: 'center', padding: '16px' },
   metricValue: { fontSize: 28, fontWeight: 700, fontFamily: 'Montserrat', color: 'var(--purple-dark)' },
@@ -370,7 +372,7 @@ function Dashboard() {
           </div>
         ) : (
           <div className="table-wrapper">
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
+            <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 700 }}>
               <thead><tr>
                 {['Proyecto', 'Cliente', 'Tipo', 'Estado', 'Líneas', 'Creada', 'Acciones'].map(h => <th key={h} style={css.th}>{h}</th>)}
               </tr></thead>
@@ -536,7 +538,7 @@ function StaffAugEditor({ params, context }) {
           <button style={css.btn('var(--teal-mid)')} onClick={addLine}>+ Agregar recurso</button>
         </div>
         <div className="table-wrapper">
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1200 }}>
+          <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 1200 }}>
             <thead><tr>
               {['#', 'Especialidad', 'Rol / Título', 'Nivel', 'País', 'Bilingüe', 'Herramientas', 'Stack', 'Modalidad', 'Cant', 'Meses', 'Tarifa/Mes', 'Total', ''].map(h => <th key={h} style={{ ...css.th, fontSize: 10, padding: '8px 6px' }}>{h}</th>)}
             </tr></thead>
@@ -604,9 +606,9 @@ function AdminParams() {
         <div key={cat} style={css.card}>
           <h3 style={{ fontSize: 14, color: 'var(--purple-dark)', marginBottom: 12 }}>{categoryLabels[cat] || cat}</h3>
           <div className="table-wrapper">
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
-                {['Parámetro', 'Valor', 'Descripción', 'Acción'].map(h => <th key={h} style={{ ...css.th, background: 'var(--teal-mid)' }}>{h}</th>)}
+                {['Parámetro', 'Valor', 'Descripción', 'Acción'].map(h => <th key={h} style={css.th}>{h}</th>)}
               </tr></thead>
               <tbody>{items.sort((a, b) => a.sort_order - b.sort_order).map(p => (
                 <tr key={p.id}>
