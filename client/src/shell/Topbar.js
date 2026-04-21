@@ -9,31 +9,32 @@ import Breadcrumb from './Breadcrumb';
  * (design_handoff_dvpnyx_ui): breadcrumb → flex spacer → search pill
  * → notifications icon.
  *
- * The Topbar intentionally wraps the existing <Breadcrumb /> component
- * so that:
- *   1. The legacy `.breadcrumb` DOM contract tests rely on still holds.
- *   2. Pages that render above the breadcrumb (e.g. no-op on `/`) keep
- *      their existing behaviour — <Breadcrumb /> returns `null` on `/`.
- *
- * The search input is presentational for now. When we wire the global
- * command palette (Phase 2+), this is the hook.
+ * Props:
+ *   - onOpenSearch?: when provided, the search pill becomes clickable
+ *     and opens the global Command Palette. When absent (e.g. in the
+ *     standalone shell tests), the pill renders disabled — matching the
+ *     pre-palette behavior.
  */
-export default function Topbar() {
+export default function Topbar({ onOpenSearch }) {
+  const searchEnabled = typeof onOpenSearch === 'function';
   return (
     <div className="ds-topbar" role="navigation" aria-label="Barra superior">
       <Breadcrumb />
       <div className="ds-topbar-spacer" />
 
-      <label className="ds-search" aria-label="Buscar">
+      <button
+        type="button"
+        className="ds-search"
+        aria-label="Abrir búsqueda global"
+        title={searchEnabled ? 'Búsqueda global (⌘K)' : 'Búsqueda global — próximamente'}
+        onClick={searchEnabled ? onOpenSearch : undefined}
+        disabled={!searchEnabled}
+        data-testid="topbar-search"
+      >
         <Search size={13} aria-hidden="true" />
-        <input
-          type="search"
-          placeholder="Buscar…"
-          disabled
-          title="Búsqueda global — próximamente"
-        />
+        <span className="ds-search-placeholder">Buscar…</span>
         <kbd>⌘K</kbd>
-      </label>
+      </button>
 
       <button
         type="button"

@@ -40,10 +40,24 @@ describe('Topbar', () => {
     expect(container.querySelector('.ds-topbar')).not.toBeNull();
   });
 
-  it('renders a disabled search placeholder', () => {
+  it('renders a disabled search button when no onOpenSearch prop is provided', () => {
     renderAt('/clients');
-    const search = screen.getByPlaceholderText('Buscar…');
+    const search = screen.getByRole('button', { name: /Abrir búsqueda global/i });
     expect(search).toBeDisabled();
+    expect(screen.getByText('Buscar…')).toBeInTheDocument();
+  });
+
+  it('enables the search button when onOpenSearch is provided and fires it on click', () => {
+    const onOpenSearch = jest.fn();
+    render(
+      <MemoryRouter initialEntries={['/clients']}>
+        <Topbar onOpenSearch={onOpenSearch} />
+      </MemoryRouter>
+    );
+    const search = screen.getByRole('button', { name: /Abrir búsqueda global/i });
+    expect(search).not.toBeDisabled();
+    search.click();
+    expect(onOpenSearch).toHaveBeenCalledTimes(1);
   });
 
   it('renders a disabled notifications button', () => {
