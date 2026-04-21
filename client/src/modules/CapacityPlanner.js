@@ -135,6 +135,35 @@ const s = {
   alertType: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, opacity: 0.8, minWidth: 90 },
   alertMsg: { flex: 1 },
   rowFlash: { animation: 'dvpnyxAlertFlash 1.6s ease-out' },
+
+  // US-PLN-4 projects view
+  toggle: { display: 'inline-flex', border: '1px solid var(--border, #ddd)', borderRadius: 6, overflow: 'hidden' },
+  toggleBtn: (active) => ({
+    padding: '6px 12px', fontSize: 13, cursor: 'pointer',
+    border: 'none',
+    background: active ? 'var(--purple-dark, #3b1d52)' : '#fff',
+    color:      active ? '#fff' : 'var(--text, #1b1b1b)',
+    fontWeight: active ? 700 : 500,
+  }),
+  contractRow: (weeksLen) => ({
+    display: 'grid',
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    borderTop: '2px solid var(--purple-dark, #3b1d52)',
+    minHeight: 60,
+    background: '#faf7ff',
+  }),
+  contractCell: { padding: '10px 12px', borderRight: '1px solid var(--border, #eee)', background: '#faf7ff', position: 'sticky', left: 0, zIndex: 2 },
+  contractName: { fontSize: 13, fontWeight: 700, color: 'var(--purple-dark, #3b1d52)', fontFamily: 'Montserrat' },
+  contractClient: { fontSize: 11, color: 'var(--text-light)', marginTop: 2 },
+  requestSubRow: (weeksLen) => ({
+    display: 'grid',
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    borderTop: '1px solid var(--border, #eee)',
+    minHeight: 52,
+  }),
+  requestSubCell: { padding: '8px 12px 8px 28px', borderRight: '1px solid var(--border, #eee)', background: '#fff', position: 'sticky', left: 0, zIndex: 2 },
+  requestTitle: { fontSize: 12, fontWeight: 600, color: 'var(--text, #1b1b1b)' },
+  requestMeta: { fontSize: 10, color: 'var(--text-light)', marginTop: 2 },
 };
 
 const ALERT_TYPE_LABELS = {
@@ -351,6 +380,218 @@ function AlertsStrip({ alerts }) {
   );
 }
 
+/* ── US-PLN-4: projects view ─────────────────────────────────────── */
+
+/**
+ * Transform the planner payload (employee-centric) into a contract-centric
+ * shape:
+ *
+ *   [
+ *     {
+ *       contract: { id, name, client_name, color },
+ *       summary: Assignment[],      // all filled assignments for this contract
+ *       requests: [                 // one entry per resource_request
+ *         { request: RR|null, assignments: Assignment[] },
+ *       ],
+ *       unkeyed: Assignment[],      // assignments without a request (edge case)
+ *     },
+ *     ...
+ *   ]
+ *
+ * Contracts that have neither assignments nor open requests in the viewport
+ * are dropped so the screen only shows what's actually visible.
+ */
+function buildProjectsView(data) {
+  if (!data) return [];
+  const byId = new Map();
+  for (const c of data.contracts || []) {
+    byId.set(c.id, {
+      contract: c,
+      summary: [],
+      requests: new Map(),
+      unkeyed: [],
+    });
+  }
+  // Filled assignments come nested under employees.
+  for (const e of data.employees || []) {
+    for (const a of e.assignments || []) {
+      const bucket = byId.get(a.contract_id);
+      if (!bucket) continue;
+      const enriched = { ...a, employee_id: e.id, employee_name: e.full_name };
+      bucket.summary.push(enriched);
+      const rid = a.resource_request_id;
+      if (rid) {
+        if (!bucket.requests.has(rid)) bucket.requests.set(rid, { request: null, assignments: [] });
+        bucket.requests.get(rid).assignments.push(enriched);
+      } else {
+        bucket.unkeyed.push(enriched);
+      }
+    }
+  }
+  // Merge in the open (unfilled / partially filled) requests.
+  for (const rr of data.open_requests || []) {
+    const bucket = byId.get(rr.contract_id);
+    if (!bucket) continue;
+    if (!bucket.requests.has(rr.id)) {
+      bucket.requests.set(rr.id, { request: rr, assignments: [] });
+    } else {
+      bucket.requests.get(rr.id).request = rr;
+    }
+  }
+  // Drop empty contracts and stabilize the order.
+  const out = [];
+  for (const bucket of byId.values()) {
+    if (bucket.summary.length === 0 && bucket.requests.size === 0 && bucket.unkeyed.length === 0) continue;
+    out.push({
+      ...bucket,
+      requests: Array.from(bucket.requests.values()),
+    });
+  }
+  out.sort((a, b) => (a.contract.name || '').localeCompare(b.contract.name || ''));
+  return out;
+}
+
+/**
+ * One row per contract. Shows every assigned employee in its week range; a
+ * single bar per assignment labeled with the employee's name.
+ */
+function ContractRow({ bucket, weeks }) {
+  const byWeek = useMemo(() => {
+    const m = new Map();
+    for (const a of bucket.summary) {
+      if (!a.week_range) continue;
+      for (let i = a.week_range[0]; i <= a.week_range[1]; i += 1) {
+        if (!m.has(i)) m.set(i, []);
+        m.get(i).push(a);
+      }
+    }
+    return m;
+  }, [bucket.summary]);
+
+  return (
+    <div style={s.contractRow(weeks.length)} data-testid={`contract-row-${bucket.contract.id}`}>
+      <div style={s.contractCell}>
+        <div style={s.contractName}>{bucket.contract.name}</div>
+        <div style={s.contractClient}>{bucket.contract.client_name || '—'}</div>
+      </div>
+      {weeks.map((w, i) => {
+        const items = byWeek.get(i) || [];
+        return (
+          <div key={w.index} style={s.weekCell('transparent')} data-testid={`contract-cell-${bucket.contract.id}-${i}`}>
+            {items.map((a) => (
+              <div
+                key={`${a.id}-${i}`}
+                style={s.bar(a.color || bucket.contract.color || '#6B5B95')}
+                title={`${a.employee_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem`}
+              >
+                {a.employee_name}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Sub-row per resource_request: either shows the employee(s) filling it, or
+ * a dashed "Sin asignar" bar across the request's week range.
+ */
+function RequestSubRow({ bucket, entry, weeks, onOpenCandidates }) {
+  const { request, assignments } = entry;
+  const assignByWeek = useMemo(() => {
+    const m = new Map();
+    for (const a of assignments) {
+      if (!a.week_range) continue;
+      for (let i = a.week_range[0]; i <= a.week_range[1]; i += 1) {
+        if (!m.has(i)) m.set(i, []);
+        m.get(i).push(a);
+      }
+    }
+    return m;
+  }, [assignments]);
+
+  const rid = request?.id || assignments[0]?.resource_request_id || 'unknown';
+  const title = request?.role_title || assignments[0]?.role_title || 'Solicitud';
+  const level = request?.level || assignments[0]?.request_level || '';
+  const missing = request?.missing || 0;
+
+  const open = () => {
+    if (missing > 0 && onOpenCandidates) onOpenCandidates(rid);
+  };
+  const clickable = missing > 0 ? { cursor: 'pointer' } : {};
+
+  return (
+    <div
+      style={{ ...s.requestSubRow(weeks.length), ...clickable }}
+      data-testid={`project-request-row-${rid}`}
+      role={missing > 0 ? 'button' : undefined}
+      tabIndex={missing > 0 ? 0 : undefined}
+      onClick={open}
+      onKeyDown={(e) => { if (missing > 0 && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } }}
+    >
+      <div style={s.requestSubCell}>
+        <div style={s.requestTitle}>
+          {title}
+          {missing > 0 && <span style={{ opacity: 0.6, fontWeight: 400 }}> · faltan {missing}</span>}
+        </div>
+        <div style={s.requestMeta}>{level}{level && ' · '}{request?.weekly_hours || assignments[0]?.weekly_hours || 0}h/sem</div>
+      </div>
+      {weeks.map((w, i) => {
+        const items = assignByWeek.get(i) || [];
+        const inOpenRange = request && request.week_range && i >= request.week_range[0] && i <= request.week_range[1];
+        const showUnassigned = items.length === 0 && inOpenRange && missing > 0;
+        const cellStyle = showUnassigned
+          ? { ...s.weekCell('repeating-linear-gradient(45deg, #fffbea, #fffbea 10px, #fff7d6 10px, #fff7d6 20px)') }
+          : s.weekCell('transparent');
+        return (
+          <div key={w.index} style={cellStyle}>
+            {items.map((a) => (
+              <div
+                key={`${a.id}-${i}`}
+                style={s.bar(a.color || bucket.contract.color || '#6B5B95')}
+                title={`${a.employee_name} · ${a.weekly_hours}h/sem`}
+              >
+                {a.employee_name}
+              </div>
+            ))}
+            {showUnassigned && (
+              <div style={s.unassignedBar(request.color || bucket.contract.color || '#e98b3f')} title={`Sin asignar · ${title}`}>
+                Sin asignar
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ProjectsView({ projects, weeks, onOpenCandidates }) {
+  if (projects.length === 0) {
+    return <div style={s.empty}>No hay proyectos en el rango seleccionado.</div>;
+  }
+  return (
+    <>
+      {projects.map((bucket) => (
+        <React.Fragment key={bucket.contract.id}>
+          <ContractRow bucket={bucket} weeks={weeks} />
+          {bucket.requests.map((entry) => (
+            <RequestSubRow
+              key={entry.request?.id || entry.assignments[0]?.id}
+              bucket={bucket}
+              entry={entry}
+              weeks={weeks}
+              onOpenCandidates={onOpenCandidates}
+            />
+          ))}
+        </React.Fragment>
+      ))}
+    </>
+  );
+}
+
 /* ── Main ────────────────────────────────────────────────────────── */
 
 export default function CapacityPlanner() {
@@ -369,6 +610,9 @@ export default function CapacityPlanner() {
   const levelMin   = searchParams.get('level_min')   || '';
   const levelMax   = searchParams.get('level_max')   || '';
   const search     = searchParams.get('search')      || '';
+  // US-PLN-4: view toggle. 'employees' (default) or 'projects'. The param
+  // rides along with the other filters so sharing a link keeps the angle.
+  const view       = searchParams.get('view') === 'projects' ? 'projects' : 'employees';
 
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
@@ -419,6 +663,7 @@ export default function CapacityPlanner() {
 
   const contracts = data?.contracts || [];
   const wks = data?.weeks || [];
+  const projects = useMemo(() => buildProjectsView(data), [data]);
 
   return (
     <div style={s.page}>
@@ -435,6 +680,28 @@ export default function CapacityPlanner() {
 
       {/* Toolbar */}
       <div style={s.toolbar}>
+        {/* US-PLN-4: view toggle (Personas | Proyectos). */}
+        <div style={s.toggle} role="group" aria-label="Vista">
+          <button
+            type="button"
+            style={s.toggleBtn(view === 'employees')}
+            onClick={() => patchParams({ view: '' })}
+            data-testid="view-toggle-employees"
+            aria-pressed={view === 'employees'}
+          >
+            Personas
+          </button>
+          <button
+            type="button"
+            style={s.toggleBtn(view === 'projects')}
+            onClick={() => patchParams({ view: 'projects' })}
+            data-testid="view-toggle-projects"
+            aria-pressed={view === 'projects'}
+          >
+            Proyectos
+          </button>
+        </div>
+
         <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, -28) })} aria-label="4 semanas atrás">← 4 sem</button>
         <button type="button" style={s.btn} onClick={() => patchParams({ start: todayMondayIso() })}>Hoy</button>
         <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, 28) })} aria-label="4 semanas adelante">4 sem →</button>
@@ -477,7 +744,7 @@ export default function CapacityPlanner() {
               {/* Header row */}
               <div style={s.headRow(wks.length)}>
                 <div style={{ ...s.headCell, textAlign: 'left', borderLeft: 'none', fontSize: 12, fontWeight: 700 }}>
-                  Empleado
+                  {view === 'projects' ? 'Proyecto / solicitud' : 'Empleado'}
                 </div>
                 {wks.map((w) => (
                   <div key={w.index} style={s.headCell} data-testid={`week-${w.iso_week}`}>
@@ -487,21 +754,31 @@ export default function CapacityPlanner() {
                 ))}
               </div>
 
-              {/* Employees */}
-              {data.employees.length === 0 && (
-                <div style={s.empty}>No hay empleados que cumplan los filtros.</div>
-              )}
-              {data.employees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} />)}
+              {view === 'employees' ? (
+                <>
+                  {/* Employees */}
+                  {data.employees.length === 0 && (
+                    <div style={s.empty}>No hay empleados que cumplan los filtros.</div>
+                  )}
+                  {data.employees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} />)}
 
-              {/* Unassigned requests (US-PLN-5 + US-RR-3: click → candidates modal) */}
-              {data.open_requests.map((r) => (
-                <UnassignedRow
-                  key={r.id}
-                  request={r}
+                  {/* Unassigned requests (US-PLN-5 + US-RR-3: click → candidates modal) */}
+                  {data.open_requests.map((r) => (
+                    <UnassignedRow
+                      key={r.id}
+                      request={r}
+                      weeks={wks}
+                      onOpen={(req) => setOpenCandidatesFor(req.id)}
+                    />
+                  ))}
+                </>
+              ) : (
+                <ProjectsView
+                  projects={projects}
                   weeks={wks}
-                  onOpen={(req) => setOpenCandidatesFor(req.id)}
+                  onOpenCandidates={(rid) => setOpenCandidatesFor(rid)}
                 />
-              ))}
+              )}
             </div>
           </div>
         </div>
