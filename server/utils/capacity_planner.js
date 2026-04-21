@@ -250,6 +250,142 @@ function aggregateMeta(employees, openRequests = []) {
   };
 }
 
+/* ── Alerts (US-PLN-6) ──────────────────────────────────────────── */
+
+const LEVEL_ORDER = ['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'];
+const levelRank = (lvl) => {
+  const i = LEVEL_ORDER.indexOf(String(lvl || '').toUpperCase());
+  return i === -1 ? null : i + 1;
+};
+
+/**
+ * Collapse a sorted ascending array of integers to "Sx", "Sx-Sy", "Sx,Sy"
+ * so overbooking alerts read naturally: "S17-S18" instead of "S17, S18".
+ */
+function formatWeekRanges(indices, weekWindows) {
+  if (!indices.length) return '';
+  const labels = indices
+    .slice()
+    .sort((a, b) => a - b)
+    .map((i) => weekWindows[i]?.label)
+    .filter(Boolean);
+  if (!labels.length) return '';
+  // Re-collapse to contiguous runs using the sorted original indices.
+  const sorted = indices.slice().sort((a, b) => a - b);
+  const runs = [];
+  let runStart = sorted[0];
+  let prev = sorted[0];
+  for (let k = 1; k < sorted.length; k += 1) {
+    if (sorted[k] === prev + 1) { prev = sorted[k]; continue; }
+    runs.push([runStart, prev]);
+    runStart = sorted[k]; prev = sorted[k];
+  }
+  runs.push([runStart, prev]);
+  return runs
+    .map(([a, b]) => a === b
+      ? weekWindows[a]?.label
+      : `${weekWindows[a]?.label}-${weekWindows[b]?.label}`)
+    .filter(Boolean)
+    .join(', ');
+}
+
+/**
+ * Build the "Alertas" strip rendered at the bottom of the planner.
+ *
+ * Alert shape:
+ *   { type, severity, message,
+ *     employee_id?, request_id?, week_indices?, peak_pct? }
+ *
+ * Types:
+ *   - overbooked      (red)   weeks where an employee's bucket = overbooked
+ *   - level_mismatch  (amber) assignments where employee level < request level
+ *                             (gap >= 2) or is under by 1 (informational amber)
+ *   - open_request    (amber) every open / partially-filled request in the
+ *                             viewport
+ *
+ * The function is pure and does not mutate inputs.
+ */
+function computeAlerts(employees, openRequests = [], weekWindows = []) {
+  const alerts = [];
+
+  // Overbooking — per-employee, collapsed by week.
+  for (const e of employees) {
+    const overWeeks = [];
+    let peak = 0;
+    for (const w of (e.weekly || [])) {
+      if (w.bucket === 'overbooked') {
+        overWeeks.push(w.week_index);
+        if (w.utilization_pct > peak) peak = w.utilization_pct;
+      }
+    }
+    if (overWeeks.length) {
+      const ranges = formatWeekRanges(overWeeks, weekWindows);
+      alerts.push({
+        type: 'overbooked',
+        severity: 'red',
+        employee_id: e.id,
+        week_indices: overWeeks,
+        peak_pct: peak,
+        message: `${e.full_name || `${e.first_name || ''} ${e.last_name || ''}`.trim()} sobre-asignado ${ranges} (${Math.round(peak)}%).`,
+      });
+    }
+  }
+
+  // Level mismatches — per-assignment. Requires the assignment row to
+  // carry request_level (enriched by the route).
+  for (const e of employees) {
+    const empLvl = levelRank(e.level);
+    if (empLvl == null) continue;
+    for (const a of (e.assignments || [])) {
+      const reqLvl = levelRank(a.request_level);
+      if (reqLvl == null) continue;
+      const gap = reqLvl - empLvl;
+      if (gap >= 2) {
+        alerts.push({
+          type: 'level_mismatch',
+          severity: 'red',
+          employee_id: e.id,
+          request_id: a.resource_request_id || null,
+          gap,
+          message: `${e.full_name || `${e.first_name} ${e.last_name}`.trim()} es ${e.level}, la solicitud "${a.role_title || a.contract_name}" pide ${a.request_level} (gap ${gap}).`,
+        });
+      } else if (gap === 1) {
+        alerts.push({
+          type: 'level_mismatch',
+          severity: 'amber',
+          employee_id: e.id,
+          request_id: a.resource_request_id || null,
+          gap,
+          message: `${e.full_name || `${e.first_name} ${e.last_name}`.trim()} es ${e.level}, la solicitud pide ${a.request_level} (un nivel por debajo).`,
+        });
+      }
+    }
+  }
+
+  // Uncovered open requests.
+  for (const rr of openRequests) {
+    if ((rr.missing || 0) <= 0) continue;
+    const firstWeek = rr.week_range ? weekWindows[rr.week_range[0]] : null;
+    const since = firstWeek ? ` desde ${firstWeek.label}` : '';
+    alerts.push({
+      type: 'open_request',
+      severity: 'amber',
+      request_id: rr.id,
+      message: `${rr.client_name || rr.contract_name}: ${rr.role_title} ${rr.level || ''} sin cubrir${since} (${rr.missing} vacantes).`.replace(/\s+/g, ' ').trim(),
+    });
+  }
+
+  // Sort: red before amber, then by type so the UI groups cleanly.
+  const sevRank = { red: 0, amber: 1 };
+  const typeRank = { overbooked: 0, level_mismatch: 1, open_request: 2 };
+  alerts.sort((x, y) => {
+    const s = (sevRank[x.severity] ?? 9) - (sevRank[y.severity] ?? 9);
+    if (s !== 0) return s;
+    return (typeRank[x.type] ?? 9) - (typeRank[y.type] ?? 9);
+  });
+  return alerts;
+}
+
 module.exports = {
   // date helpers
   parseDateUTC,
@@ -265,5 +401,6 @@ module.exports = {
   computeWeeklyForEmployee,
   colorFor,
   aggregateMeta,
+  computeAlerts,
   CONTRACT_COLORS,
 };

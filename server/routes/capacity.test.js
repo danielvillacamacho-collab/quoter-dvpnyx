@@ -146,6 +146,17 @@ describe('GET /api/capacity/planner', () => {
       overbooked_count: 1,
       open_request_count: 1,
     });
+
+    // US-PLN-6: alerts in the payload (at least the overbooked + open_request).
+    expect(Array.isArray(res.body.alerts)).toBe(true);
+    const overAlert = res.body.alerts.find((a) => a.type === 'overbooked');
+    expect(overAlert).toBeDefined();
+    expect(overAlert.severity).toBe('red');
+    expect(overAlert.employee_id).toBe('e1');
+    const openAlert = res.body.alerts.find((a) => a.type === 'open_request');
+    expect(openAlert).toBeDefined();
+    expect(openAlert.severity).toBe('amber');
+    expect(openAlert.request_id).toBe('rr9');
   });
 
   it('defaults to current-week Monday and 12 weeks when params are omitted', async () => {

@@ -2,6 +2,7 @@ const {
   parseDateUTC, formatDateUTC, mondayOf, isoWeekNumber,
   buildWeekWindows, rangesOverlap, weekRangeForAssignment,
   utilizationBucket, computeWeeklyForEmployee, colorFor, aggregateMeta,
+  computeAlerts,
   CONTRACT_COLORS,
 } = require('./capacity_planner');
 
@@ -161,5 +162,112 @@ describe('aggregateMeta', () => {
     expect(meta.overbooked_count).toBe(1);      // only e2 tips over
     expect(meta.open_request_count).toBe(2);
     expect(meta.avg_utilization_pct).toBeGreaterThan(0);
+  });
+});
+
+describe('computeAlerts (US-PLN-6)', () => {
+  const windows = buildWeekWindows('2026-04-20', 4); // S17..S20
+
+  it('returns [] when everything is healthy', () => {
+    const employees = [
+      {
+        id: 'e1', full_name: 'Ana García', level: 'L5',
+        assignments: [],
+        weekly: windows.map((_, i) => ({ week_index: i, hours: 0, utilization_pct: 0, bucket: 'idle' })),
+      },
+    ];
+    expect(computeAlerts(employees, [], windows)).toEqual([]);
+  });
+
+  it('collapses contiguous overbooked weeks into a single alert with Sx-Sy range', () => {
+    const employees = [
+      {
+        id: 'e1', full_name: 'Ana García', level: 'L5', assignments: [],
+        weekly: [
+          { week_index: 0, hours: 50, utilization_pct: 125, bucket: 'overbooked' },
+          { week_index: 1, hours: 50, utilization_pct: 130, bucket: 'overbooked' },
+          { week_index: 2, hours: 20, utilization_pct: 50,  bucket: 'light' },
+          { week_index: 3, hours: 45, utilization_pct: 112, bucket: 'overbooked' },
+        ],
+      },
+    ];
+    const alerts = computeAlerts(employees, [], windows);
+    const over = alerts.filter((a) => a.type === 'overbooked');
+    expect(over).toHaveLength(1);
+    expect(over[0].severity).toBe('red');
+    expect(over[0].employee_id).toBe('e1');
+    expect(over[0].week_indices).toEqual([0, 1, 3]);
+    expect(over[0].peak_pct).toBe(130);
+    // Sx-Sy with gaps uses comma
+    expect(over[0].message).toMatch(/S17-S18, S20/);
+  });
+
+  it('flags level mismatches: red when gap >= 2, amber when gap === 1', () => {
+    const employees = [
+      {
+        id: 'eRed', full_name: 'Pedro Z', level: 'L3',
+        assignments: [{ id: 'a1', resource_request_id: 'rr1', role_title: 'Lead',
+                        request_level: 'L6' }],
+        weekly: windows.map((_, i) => ({ week_index: i, hours: 0, utilization_pct: 0, bucket: 'idle' })),
+      },
+      {
+        id: 'eAmber', full_name: 'Lía M', level: 'L4',
+        assignments: [{ id: 'a2', resource_request_id: 'rr2', role_title: 'QA',
+                        request_level: 'L5' }],
+        weekly: windows.map((_, i) => ({ week_index: i, hours: 0, utilization_pct: 0, bucket: 'idle' })),
+      },
+      {
+        id: 'eOK', full_name: 'Sam N', level: 'L6',
+        assignments: [{ id: 'a3', resource_request_id: 'rr3', role_title: 'Sr',
+                        request_level: 'L5' }], // overqualified -> no alert
+        weekly: windows.map((_, i) => ({ week_index: i, hours: 0, utilization_pct: 0, bucket: 'idle' })),
+      },
+    ];
+    const mm = computeAlerts(employees, [], windows).filter((a) => a.type === 'level_mismatch');
+    expect(mm).toHaveLength(2);
+    const red = mm.find((a) => a.employee_id === 'eRed');
+    const amber = mm.find((a) => a.employee_id === 'eAmber');
+    expect(red.severity).toBe('red');
+    expect(red.gap).toBe(3);
+    expect(amber.severity).toBe('amber');
+    expect(amber.gap).toBe(1);
+  });
+
+  it('emits an amber open_request alert per uncovered request (skips fully filled)', () => {
+    const openRequests = [
+      { id: 'rr9', client_name: 'Acme', contract_name: 'Alpha',
+        role_title: 'Backend', level: 'L5', missing: 2, week_range: [1, 3] },
+      { id: 'rr10', client_name: 'Initech', contract_name: 'Beta',
+        role_title: 'QA', level: 'L4', missing: 0, week_range: [0, 2] }, // filled
+    ];
+    const alerts = computeAlerts([], openRequests, windows).filter((a) => a.type === 'open_request');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].severity).toBe('amber');
+    expect(alerts[0].request_id).toBe('rr9');
+    expect(alerts[0].message).toMatch(/S18/); // week_range[0] = 1 -> S18
+    expect(alerts[0].message).toMatch(/2 vacantes/);
+  });
+
+  it('sorts red alerts before amber, then by type', () => {
+    const employees = [
+      {
+        id: 'e1', full_name: 'Over', level: 'L5',
+        assignments: [{ id: 'a1', resource_request_id: 'rr1', role_title: 'X', request_level: 'L6' }], // amber lvl
+        weekly: [
+          { week_index: 0, hours: 50, utilization_pct: 125, bucket: 'overbooked' },
+          ...windows.slice(1).map((_, i) => ({ week_index: i + 1, hours: 0, utilization_pct: 0, bucket: 'idle' })),
+        ],
+      },
+    ];
+    const openRequests = [
+      { id: 'rr9', client_name: 'X', contract_name: 'Y', role_title: 'R', level: 'L5', missing: 1, week_range: [0, 1] },
+    ];
+    const alerts = computeAlerts(employees, openRequests, windows);
+    // red overbooked first, then amber level_mismatch, then amber open_request
+    expect(alerts.map((a) => [a.severity, a.type])).toEqual([
+      ['red', 'overbooked'],
+      ['amber', 'level_mismatch'],
+      ['amber', 'open_request'],
+    ]);
   });
 });

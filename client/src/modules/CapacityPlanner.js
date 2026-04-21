@@ -115,6 +115,32 @@ const s = {
   empty: { padding: 40, textAlign: 'center', color: 'var(--text-light)', fontSize: 14 },
   error: { padding: 16, background: '#fff0f0', color: '#9a1e1e', borderRadius: 8, fontSize: 13 },
   loading: { padding: 40, textAlign: 'center', color: 'var(--text-light)' },
+
+  // US-PLN-6 alerts strip
+  alertsBox: { marginBottom: 14, border: '1px solid var(--border, #e5e5e5)', borderRadius: 10, background: '#fff', overflow: 'hidden' },
+  alertsHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#faf7ff', borderBottom: '1px solid var(--border, #eee)', fontSize: 12, color: 'var(--purple-dark, #3b1d52)', fontWeight: 700 },
+  alertsList: { maxHeight: 200, overflowY: 'auto' },
+  alertItem: (sev) => ({
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '8px 14px', borderTop: '1px solid var(--border, #f1f1f1)',
+    cursor: 'pointer', fontSize: 12,
+    background: sev === 'red' ? '#fff5f5' : '#fffaf0',
+    color: sev === 'red' ? '#9a1e1e' : '#8a5a00',
+  }),
+  alertDot: (sev) => ({
+    width: 8, height: 8, borderRadius: '50%',
+    background: sev === 'red' ? '#d9534f' : '#e3a008',
+    flexShrink: 0,
+  }),
+  alertType: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, opacity: 0.8, minWidth: 90 },
+  alertMsg: { flex: 1 },
+  rowFlash: { animation: 'dvpnyxAlertFlash 1.6s ease-out' },
+};
+
+const ALERT_TYPE_LABELS = {
+  overbooked: 'Sobrecarga',
+  level_mismatch: 'Nivel',
+  open_request: 'Sin cubrir',
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -246,6 +272,85 @@ function UnassignedRow({ request, weeks, onOpen }) {
   );
 }
 
+/**
+ * US-PLN-6 alerts strip.
+ *
+ * Renders a collapsible panel that lists every alert returned by the backend.
+ * Clicking an alert scrolls the matching employee/unassigned row into view and
+ * briefly flashes it, so the operator can jump from "cosa que revisar" to
+ * "dónde está en el timeline" without losing context.
+ */
+function AlertsStrip({ alerts }) {
+  const [collapsed, setCollapsed] = useState(false);
+  if (!alerts || alerts.length === 0) return null;
+
+  const redCount = alerts.filter((a) => a.severity === 'red').length;
+  const amberCount = alerts.length - redCount;
+
+  const focusRow = (testId) => {
+    if (typeof document === 'undefined') return;
+    const el = document.querySelector(`[data-testid="${testId}"]`);
+    if (!el) return;
+    if (typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+    // Brief highlight so users visually confirm the jump.
+    const prev = el.style.boxShadow;
+    el.style.boxShadow = 'inset 0 0 0 2px #6B5B95';
+    setTimeout(() => { el.style.boxShadow = prev; }, 1400);
+  };
+
+  const onAlertClick = (a) => {
+    if (a.type === 'open_request' && a.request_id) {
+      focusRow(`unassigned-row-${a.request_id}`);
+    } else if (a.employee_id) {
+      focusRow(`emp-row-${a.employee_id}`);
+    }
+  };
+
+  return (
+    <div style={s.alertsBox} data-testid="alerts-strip">
+      <div style={s.alertsHead}>
+        <span>
+          Alertas
+          {' · '}
+          <span style={{ color: '#9a1e1e' }}>{redCount} críticas</span>
+          {' · '}
+          <span style={{ color: '#8a5a00' }}>{amberCount} advertencias</span>
+        </span>
+        <button
+          type="button"
+          style={{ ...s.btn, fontSize: 11, padding: '3px 8px' }}
+          onClick={() => setCollapsed((v) => !v)}
+          aria-expanded={!collapsed}
+          aria-controls="alerts-list"
+        >
+          {collapsed ? 'Mostrar' : 'Ocultar'}
+        </button>
+      </div>
+      {!collapsed && (
+        <div id="alerts-list" style={s.alertsList}>
+          {alerts.map((a, i) => (
+            <div
+              key={`${a.type}-${a.employee_id || a.request_id || i}-${i}`}
+              style={s.alertItem(a.severity)}
+              role="button"
+              tabIndex={0}
+              onClick={() => onAlertClick(a)}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAlertClick(a); } }}
+              data-testid={`alert-${a.type}-${a.employee_id || a.request_id || i}`}
+            >
+              <span style={s.alertDot(a.severity)} aria-hidden />
+              <span style={s.alertType}>{ALERT_TYPE_LABELS[a.type] || a.type}</span>
+              <span style={s.alertMsg}>{a.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Main ────────────────────────────────────────────────────────── */
 
 export default function CapacityPlanner() {
@@ -362,6 +467,8 @@ export default function CapacityPlanner() {
 
       {err && <div style={s.error} role="alert">{err}</div>}
       {loading && !data && <div style={s.loading}>Cargando planner…</div>}
+
+      {data && <AlertsStrip alerts={data.alerts || []} />}
 
       {data && (
         <div style={s.frame}>
