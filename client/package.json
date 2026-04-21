@@ -4,13 +4,16 @@
   "private": true,
   "proxy": "http://localhost:4000",
   "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/montserrat": "^5.2.8",
+    "jspdf": "^2.5.1",
+    "jspdf-autotable": "^3.8.1",
+    "lucide-react": "^0.294.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.20.0",
-    "react-scripts": "5.0.1",
-    "jspdf": "^2.5.1",
-    "jspdf-autotable": "^3.8.1",
-    "lucide-react": "^0.294.0"
+    "react-scripts": "5.0.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^5.17.0",
@@ -22,5 +25,12 @@
     "build": "react-scripts build",
     "test": "react-scripts test"
   },
-  "browserslist": { "production": [">0.2%"], "development": ["last 1 chrome version"] }
+  "browserslist": {
+    "production": [
+      ">0.2%"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
+  }
 }
