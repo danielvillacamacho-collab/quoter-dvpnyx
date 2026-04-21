@@ -10,6 +10,7 @@ import Topbar from './shell/Topbar';
 import Sidebar from './shell/Sidebar';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from './shell/tableStyles';
 import CommandPalette from './shell/CommandPalette';
+import StatusBadge from './shell/StatusBadge';
 import NotificationsDrawer from './shell/NotificationsDrawer';
 import { apiGet } from './utils/apiV2';
 import ComingSoon from './shell/ComingSoon';
@@ -412,7 +413,7 @@ function Dashboard() {
                   <td style={{ ...css.td, fontWeight: 600 }}>{q.project_name}</td>
                   <td style={css.td}>{q.client_name}</td>
                   <td style={css.td}><span style={css.badge(q.type === 'staff_aug' ? 'var(--teal-mid)' : 'var(--orange)')}>{q.type === 'staff_aug' ? 'Staff Aug' : 'Proyecto'}</span></td>
-                  <td style={css.td}><span style={css.badge(statusColor[q.status])}>{statusLabel[q.status]}</span></td>
+                  <td style={css.td}><StatusBadge domain="quotation" value={q.status} label={statusLabel[q.status]} /></td>
                   <td style={{ ...css.td, textAlign: 'center' }}>{q.line_count}</td>
                   <td style={css.td}>{new Date(q.created_at).toLocaleDateString('es-CO')}</td>
                   <td style={css.td} onClick={e => e.stopPropagation()}>

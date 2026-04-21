@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
+import StatusBadge from '../shell/StatusBadge';
 
 const s = {
   page:   { maxWidth: 1200, margin: '0 auto' },
@@ -124,10 +125,7 @@ export default function OpportunityDetail() {
             Cliente:{' '}
             {opp.client ? <Link to={`/clients/${opp.client.id}`} style={s.link}>{opp.client.name}</Link> : '—'}
             {' · '}
-            <span style={{
-              display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700,
-              background: STATUS_COLOR[opp.status] || 'var(--text-light)', color: '#fff',
-            }}>{STATUS_LABEL[opp.status] || opp.status}</span>
+            <StatusBadge domain="opportunity" value={opp.status} label={STATUS_LABEL[opp.status]} />
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

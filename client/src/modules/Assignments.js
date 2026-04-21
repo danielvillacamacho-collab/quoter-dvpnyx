@@ -3,6 +3,7 @@ import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2'
 import AssignmentValidationModal from './AssignmentValidationModal';
 import AssignmentValidationInline from './AssignmentValidationInline';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import StatusBadge from '../shell/StatusBadge';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -370,10 +371,7 @@ export default function Assignments() {
                   <td style={{ ...s.td, fontSize: 12 }}>{a.start_date ? String(a.start_date).slice(0, 10) : '—'}</td>
                   <td style={{ ...s.td, fontSize: 12 }}>{a.end_date ? String(a.end_date).slice(0, 10) : '—'}</td>
                   <td style={s.td}>
-                    <span style={{
-                      display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700,
-                      background: STATUS_COLOR[a.status] || 'var(--text-light)', color: '#fff',
-                    }}>{STATUS_LABEL[a.status] || a.status}</span>
+                    <StatusBadge domain="assignment" value={a.status} label={STATUS_LABEL[a.status]} />
                   </td>
                   <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
                     <button style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, marginRight: 4 }}

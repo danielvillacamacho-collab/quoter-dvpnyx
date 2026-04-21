@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiGet } from '../utils/apiV2';
+import StatusBadge from '../shell/StatusBadge';
 
 const s = {
   page:   { maxWidth: 1100, margin: '0 auto' },
@@ -69,10 +70,7 @@ export default function EmployeeDetail() {
       <div style={s.sub}>
         {emp.area_name || '—'} · <strong>{emp.level}</strong> · {emp.country}
         {' · '}
-        <span style={{
-          display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 11, fontWeight: 700,
-          background: STATUS_COLOR[emp.status] || 'var(--text-light)', color: '#fff',
-        }}>{STATUS_LABEL[emp.status] || emp.status}</span>
+        <StatusBadge domain="employee" value={emp.status} label={STATUS_LABEL[emp.status]} />
       </div>
 
       <div style={s.card}>

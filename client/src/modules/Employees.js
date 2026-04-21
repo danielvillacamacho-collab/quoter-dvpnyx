@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import StatusBadge from '../shell/StatusBadge';
+import Avatar from '../shell/Avatar';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -498,8 +500,13 @@ export default function Employees() {
               {state.data.map((emp) => (
                 <tr key={emp.id}>
                   <td style={{ ...s.td, fontWeight: 600 }}>
-                    <div><Link to={`/employees/${emp.id}`} style={{ color: 'var(--purple-dark)', textDecoration: 'none' }} aria-label={`Ver ${emp.first_name} ${emp.last_name}`}>{emp.first_name} {emp.last_name}</Link></div>
-                    {emp.corporate_email && <div style={{ fontSize: 11, color: 'var(--text-light)' }}>{emp.corporate_email}</div>}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <Avatar name={`${emp.first_name} ${emp.last_name}`} size={28} />
+                      <div>
+                        <div><Link to={`/employees/${emp.id}`} style={{ color: 'var(--ds-text, var(--purple-dark))', textDecoration: 'none' }} aria-label={`Ver ${emp.first_name} ${emp.last_name}`}>{emp.first_name} {emp.last_name}</Link></div>
+                        {emp.corporate_email && <div style={{ fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', fontWeight: 400 }}>{emp.corporate_email}</div>}
+                      </div>
+                    </div>
                   </td>
                   <td style={s.td}>{emp.area_name || '—'}</td>
                   <td style={{ ...s.td, fontFamily: 'monospace' }}>{emp.level}</td>
@@ -507,10 +514,7 @@ export default function Employees() {
                   <td style={{ ...s.td, textAlign: 'center' }}>{Number(emp.weekly_capacity_hours || 0)}h</td>
                   <td style={{ ...s.td, textAlign: 'center' }}>{emp.skills_count ?? 0}</td>
                   <td style={s.td}>
-                    <span style={{
-                      display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700,
-                      background: STATUS_COLOR[emp.status] || 'var(--text-light)', color: '#fff',
-                    }}>{STATUS_LABEL[emp.status] || emp.status}</span>
+                    <StatusBadge domain="employee" value={emp.status} label={STATUS_LABEL[emp.status]} />
                   </td>
                   <td style={{ ...s.td, fontSize: 12 }}>{emp.start_date ? String(emp.start_date).slice(0, 10) : '—'}</td>
                   <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
