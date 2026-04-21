@@ -6,7 +6,7 @@ import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from 
 import ProjectEditor from './ProjectEditor';
 import Wiki from './Wiki';
 import Footer from './shell/Footer';
-import Breadcrumb from './shell/Breadcrumb';
+import Topbar from './shell/Topbar';
 import ComingSoon from './shell/ComingSoon';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
@@ -27,6 +27,7 @@ import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import BulkImport from './modules/BulkImport';
 import Users from './modules/Users';
+import './theme.css';
 import './App.css';
 
 /* ========== STYLES ========== */
@@ -149,7 +150,7 @@ function Layout() {
       </div>
 
       <div className="main-content">
-        <Breadcrumb />
+        <Topbar />
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
