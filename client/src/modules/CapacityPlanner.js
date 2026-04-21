@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiGet } from '../utils/apiV2';
+import CandidatesModal from './CandidatesModal';
 
 /**
  * Capacity Planner — US-PLN-1 (timeline) + US-PLN-2 (metric cards).
@@ -268,6 +269,9 @@ export default function CapacityPlanner() {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
   const [areas, setAreas] = useState([]);
+  // US-RR-3: when an unassigned row is clicked we open the candidates
+  // modal here instead of navigating away — the user stays in-context.
+  const [openCandidatesFor, setOpenCandidatesFor] = useState(null);
 
   // Small helper so every control mutates the URL, not component state.
   // Passing '' removes the key (keeps the URL tidy when a filter is cleared).
@@ -382,18 +386,37 @@ export default function CapacityPlanner() {
               )}
               {data.employees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} />)}
 
-              {/* Unassigned requests (US-PLN-5: clickable → solicitudes) */}
+              {/* Unassigned requests (US-PLN-5 + US-RR-3: click → candidates modal) */}
               {data.open_requests.map((r) => (
                 <UnassignedRow
                   key={r.id}
                   request={r}
                   weeks={wks}
-                  onOpen={(req) => navigate(`/resource-requests?contract_id=${encodeURIComponent(req.contract_id)}&request_id=${encodeURIComponent(req.id)}`)}
+                  onOpen={(req) => setOpenCandidatesFor(req.id)}
                 />
               ))}
             </div>
           </div>
         </div>
+      )}
+
+      {openCandidatesFor && (
+        <CandidatesModal
+          requestId={openCandidatesFor}
+          onClose={() => setOpenCandidatesFor(null)}
+          onPick={(candidate, request) => {
+            // Hand the user off to the Assignments module with a prefill hint
+            // in the URL — that module will read it and open the create form
+            // with employee + request + hours prefilled.
+            const qs = new URLSearchParams({
+              new: '1',
+              request_id: request.id,
+              employee_id: candidate.employee_id,
+              weekly_hours: String(request.weekly_hours),
+            }).toString();
+            navigate(`/assignments?${qs}`);
+          }}
+        />
       )}
     </div>
   );

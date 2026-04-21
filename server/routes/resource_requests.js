@@ -25,6 +25,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { rankCandidates } = require('../utils/candidate_matcher');
 
 router.use(auth);
 
@@ -128,6 +129,129 @@ router.get('/:id', async (req, res) => {
       stored_status: r.status,
     });
   } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+});
+
+/* -------- CANDIDATES (US-RR-2) --------
+ * GET /api/resource-requests/:id/candidates
+ *
+ * Returns a ranked list of employees that could fill this request, with
+ * a composite score and structured match breakdown. Pure scoring lives
+ * in server/utils/candidate_matcher.js; this handler just fans out 3
+ * SELECTs (request, employees+skills, overlapping assignments) and hands
+ * them to the matcher.
+ *
+ * Query params:
+ *   • limit     — max candidates (default 25, clamped 1..100)
+ *   • include_ineligible — "false" to hide score < 30 (default "true")
+ *   • area_only — "true" to pre-filter employees by request.area_id
+ */
+router.get('/:id/candidates', async (req, res) => {
+  try {
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 25));
+    const includeIneligible = req.query.include_ineligible !== 'false';
+    const areaOnly = req.query.area_only === 'true';
+
+    // 1) Fetch the request (must not be cancelled/deleted).
+    const rq = await pool.query(
+      `SELECT rr.id, rr.contract_id, rr.role_title, rr.area_id, rr.level,
+              rr.required_skills, rr.nice_to_have_skills,
+              rr.weekly_hours, rr.start_date, rr.end_date,
+              rr.status, a.name AS area_name
+         FROM resource_requests rr
+         LEFT JOIN areas a ON a.id = rr.area_id
+         WHERE rr.id = $1 AND rr.deleted_at IS NULL`,
+      [req.params.id],
+    );
+    if (!rq.rows.length) return res.status(404).json({ error: 'Solicitud no encontrada' });
+    const request = rq.rows[0];
+
+    // 2) Fetch candidate employees + their skill ids in one trip.
+    //    We skip terminated rows in SQL; the matcher also skips them defensively.
+    const empParams = [];
+    const empWhere = [`e.deleted_at IS NULL`, `e.status <> 'terminated'`];
+    if (areaOnly && request.area_id) {
+      empParams.push(request.area_id);
+      empWhere.push(`e.area_id = $${empParams.length}`);
+    }
+    const emp = await pool.query(
+      `SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
+              e.weekly_capacity_hours, a.name AS area_name,
+              COALESCE(
+                (SELECT ARRAY_AGG(skill_id) FROM employee_skills es WHERE es.employee_id = e.id),
+                ARRAY[]::int[]
+              ) AS skill_ids
+         FROM employees e
+         LEFT JOIN areas a ON a.id = e.area_id
+         WHERE ${empWhere.join(' AND ')}
+         ORDER BY e.first_name, e.last_name
+         LIMIT 500`,
+      empParams,
+    );
+    const employees = emp.rows.map((e) => ({
+      ...e,
+      full_name: `${e.first_name} ${e.last_name}`.trim(),
+      skill_ids: Array.isArray(e.skill_ids) ? e.skill_ids : [],
+    }));
+
+    // 3) Overlapping, non-cancelled assignments during the request window.
+    const asg = await pool.query(
+      `SELECT employee_id, weekly_hours, start_date, end_date, status
+         FROM assignments
+         WHERE deleted_at IS NULL
+           AND status <> 'cancelled'
+           AND start_date <= $2::date
+           AND (end_date IS NULL OR end_date >= $1::date)`,
+      [request.start_date, request.end_date || '9999-12-31'],
+    );
+
+    const candidates = rankCandidates(request, employees, asg.rows, { limit, includeIneligible });
+
+    // Attach skill-name lookups so the UI can render chips without another roundtrip.
+    const skillIds = new Set();
+    for (const c of candidates) {
+      for (const id of c.match.required_skills.matched_ids || []) skillIds.add(id);
+      for (const id of c.match.required_skills.missing_ids || []) skillIds.add(id);
+      for (const id of c.match.nice_skills.matched_ids || [])     skillIds.add(id);
+    }
+    (request.required_skills || []).forEach((id) => skillIds.add(id));
+    (request.nice_to_have_skills || []).forEach((id) => skillIds.add(id));
+    let skillMap = {};
+    if (skillIds.size > 0) {
+      const sk = await pool.query(
+        `SELECT id, name FROM skills WHERE id = ANY($1::int[])`,
+        [Array.from(skillIds)],
+      );
+      skillMap = Object.fromEntries(sk.rows.map((r) => [r.id, r.name]));
+    }
+
+    res.json({
+      request: {
+        id: request.id,
+        contract_id: request.contract_id,
+        role_title: request.role_title,
+        area_id: request.area_id,
+        area_name: request.area_name,
+        level: request.level,
+        weekly_hours: Number(request.weekly_hours),
+        start_date: request.start_date instanceof Date ? request.start_date.toISOString().slice(0, 10) : request.start_date,
+        end_date: request.end_date instanceof Date ? request.end_date.toISOString().slice(0, 10) : (request.end_date || null),
+        required_skills: request.required_skills || [],
+        nice_to_have_skills: request.nice_to_have_skills || [],
+      },
+      candidates,
+      skills_lookup: skillMap,
+      meta: {
+        employee_pool_size: employees.length,
+        returned: candidates.length,
+        area_only: areaOnly,
+        include_ineligible: includeIneligible,
+      },
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /api/resource-requests/:id/candidates failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
 });
 
 /* -------- CREATE (admin+) -------- */
