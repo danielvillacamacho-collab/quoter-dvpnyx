@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import StatusBadge from '../shell/StatusBadge';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -399,10 +400,7 @@ export default function Opportunities() {
                     </td>
                     <td style={s.td}>{o.client_name || '—'}</td>
                     <td style={s.td}>
-                      <span style={{
-                        display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700,
-                        background: STATUS_COLORS[o.status] || 'var(--text-light)', color: '#fff',
-                      }}>{STATUS_LABEL[o.status] || o.status}</span>
+                      <StatusBadge domain="opportunity" value={o.status} label={STATUS_LABEL[o.status]} />
                     </td>
                     <td style={{ ...s.td, textAlign: 'center' }}>{o.quotations_count ?? 0}</td>
                     <td style={s.td}>{o.expected_close_date ? String(o.expected_close_date).slice(0, 10) : '—'}</td>

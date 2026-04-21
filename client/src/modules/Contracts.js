@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import StatusBadge from '../shell/StatusBadge';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -296,10 +297,7 @@ export default function Contracts() {
                     <td style={s.td}>{c.client_name || '—'}</td>
                     <td style={{ ...s.td, fontSize: 12 }}>{TYPE_LABEL[c.type] || c.type}</td>
                     <td style={s.td}>
-                      <span style={{
-                        display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700,
-                        background: STATUS_COLOR[c.status] || 'var(--text-light)', color: '#fff',
-                      }}>{STATUS_LABEL[c.status] || c.status}</span>
+                      <StatusBadge domain="contract" value={c.status} label={STATUS_LABEL[c.status]} />
                     </td>
                     <td style={{ ...s.td, fontSize: 12 }}>{c.start_date ? String(c.start_date).slice(0, 10) : '—'}</td>
                     <td style={{ ...s.td, textAlign: 'center' }}>{c.open_requests_count ?? 0}</td>

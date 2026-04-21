@@ -1,5 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
+import Avatar from './Avatar';
 import {
   Home, UserPlus, FileText, Building2, Briefcase, FileCheck2,
   ClipboardList, CalendarDays, LayoutGrid, Users, Layers, Tag,
@@ -174,7 +175,7 @@ export default function Sidebar({
 
       <div className="ds-sb-foot">
         <div className="ds-sb-user">
-          <div className="ds-sb-avatar" aria-hidden="true">{initials(user?.name)}</div>
+          <Avatar name={user?.name} size={28} />
           <div className="ds-sb-user-info">
             <div className="ds-sb-user-name">{user?.name || '—'}</div>
             <div className="ds-sb-user-role">{user?.role || ''}</div>
