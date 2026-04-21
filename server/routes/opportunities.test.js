@@ -356,3 +356,28 @@ describe('DELETE /api/opportunities/:id (admin+)', () => {
     expect(res.body.message).toMatch(/eliminada/i);
   });
 });
+
+describe('GET /api/opportunities/export.csv', () => {
+  it('streams a CSV with BOM + header + rows and honors status filter', async () => {
+    queryQueue.push({ rows: [
+      { id: 'o1', name: 'Deal A', status: 'open', outcome: null, outcome_reason: null,
+        expected_close_date: '2026-06-30', closed_at: null, description: 'big "one"',
+        created_at: '2026-01-01T00:00:00Z', client_name: 'Acme' },
+    ] });
+    const res = await client.call('GET', '/api/opportunities/export.csv?status=open');
+    expect(res.status).toBe(200);
+    expect(res.body.charCodeAt(0)).toBe(0xFEFF);
+    expect(res.body).toMatch(/Nombre,Cliente,Estado/);
+    expect(res.body).toMatch(/Deal A,Acme,open/);
+    // Embedded quote in description must be CSV-escaped
+    expect(res.body).toMatch(/"big ""one"""/);
+    const exec = issuedQueries.find((q) => /FROM opportunities o/.test(q.sql));
+    expect(exec.params).toContain('open');
+  });
+
+  it('returns 500 when the DB throws', async () => {
+    queryQueue.push(new Error('boom'));
+    const res = await client.call('GET', '/api/opportunities/export.csv');
+    expect(res.status).toBe(500);
+  });
+});

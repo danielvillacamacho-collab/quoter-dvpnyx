@@ -31,6 +31,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { stringifyCsv } = require('../utils/csv');
 
 router.use(auth);
 
@@ -97,6 +98,58 @@ router.get('/', async (req, res) => {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('GET /opportunities failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+/* -------- EXPORT CSV -------- */
+const EXPORT_LIMIT = 10000;
+router.get('/export.csv', async (req, res) => {
+  try {
+    const wheres = ['o.deleted_at IS NULL'];
+    const params = [];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+
+    if (req.query.search) {
+      const like = '%' + req.query.search + '%';
+      wheres.push(`(LOWER(o.name) LIKE LOWER(${add(like)}) OR LOWER(o.description) LIKE LOWER(${add(like)}))`);
+    }
+    if (req.query.client_id) wheres.push(`o.client_id = ${add(req.query.client_id)}`);
+    if (req.query.status)    wheres.push(`o.status = ${add(req.query.status)}`);
+    if (req.query.owner_id)  wheres.push(`o.account_owner_id = ${add(req.query.owner_id)}`);
+    if (req.query.from_expected_close) wheres.push(`o.expected_close_date >= ${add(req.query.from_expected_close)}`);
+    if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
+
+    const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
+    const { rows } = await pool.query(
+      `SELECT o.id, o.name, o.status, o.outcome, o.outcome_reason,
+              o.expected_close_date, o.closed_at, o.description, o.created_at,
+              c.name AS client_name
+         FROM opportunities o
+         LEFT JOIN clients c ON c.id = o.client_id
+         ${where}
+         ORDER BY o.created_at DESC
+         LIMIT ${EXPORT_LIMIT}`,
+      params
+    );
+    const csv = stringifyCsv(rows, [
+      { key: 'id',                   header: 'ID' },
+      { key: 'name',                 header: 'Nombre' },
+      { key: 'client_name',          header: 'Cliente' },
+      { key: 'status',               header: 'Estado' },
+      { key: 'outcome',              header: 'Resultado' },
+      { key: 'outcome_reason',       header: 'Motivo' },
+      { key: 'expected_close_date',  header: 'Cierre esperado' },
+      { key: 'closed_at',            header: 'Cerrada' },
+      { key: 'description',          header: 'Descripción' },
+      { key: 'created_at',           header: 'Creada' },
+    ]);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="oportunidades.csv"');
+    res.send(csv);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /opportunities/export.csv failed:', err);
     res.status(500).json({ error: 'Error interno' });
   }
 });

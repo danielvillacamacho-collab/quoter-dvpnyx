@@ -133,4 +133,17 @@ describe('Contracts module', () => {
     mount();
     await waitFor(() => expect(screen.getByText(/No hay contratos que coincidan/i)).toBeInTheDocument());
   });
+
+  it('Descargar CSV button calls apiDownload with active filters', async () => {
+    apiV2.apiDownload.mockResolvedValue();
+    mount();
+    await screen.findByText('Contrato Alpha');
+    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'active' } });
+    fireEvent.click(screen.getByTestId('contracts-export-csv'));
+    await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));
+    const [url, filename] = apiV2.apiDownload.mock.calls[0];
+    expect(url).toMatch(/^\/api\/contracts\/export\.csv\?/);
+    expect(url).toContain('status=active');
+    expect(filename).toBe('contratos.csv');
+  });
 });

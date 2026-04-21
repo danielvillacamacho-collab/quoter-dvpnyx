@@ -284,3 +284,39 @@ describe('DELETE /api/contracts/:id', () => {
     expect(evt).toBeTruthy();
   });
 });
+
+describe('GET /api/contracts/export.csv', () => {
+  it('streams a CSV with header row + data rows using the same filters as list', async () => {
+    queryQueue.push({ rows: [
+      { id: 'ct1', name: 'Alpha', type: 'project', status: 'active',
+        start_date: '2026-01-01', end_date: null, notes: 'keep, going',
+        created_at: '2026-01-01T00:00:00Z', client_name: 'Acme' },
+    ] });
+    const res = await client.call('GET', '/api/contracts/export.csv?status=active');
+    expect(res.status).toBe(200);
+    expect(typeof res.body).toBe('string');
+    const csv = res.body;
+    // UTF-8 BOM so Excel opens it correctly on Windows
+    expect(csv.charCodeAt(0)).toBe(0xFEFF);
+    expect(csv).toMatch(/Nombre,Cliente,Tipo,Estado/);
+    expect(csv).toMatch(/Alpha,Acme,project,active/);
+    // Comma-bearing notes must be quoted
+    expect(csv).toMatch(/"keep, going"/);
+    // Filter was pushed into the WHERE
+    const exec = issuedQueries.find((q) => /FROM contracts c/.test(q.sql));
+    expect(exec.params).toContain('active');
+  });
+
+  it('returns a header-only CSV when there are no rows', async () => {
+    queryQueue.push({ rows: [] });
+    const res = await client.call('GET', '/api/contracts/export.csv');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatch(/Nombre,Cliente,Tipo,Estado/);
+  });
+
+  it('returns 500 when the DB throws', async () => {
+    queryQueue.push(new Error('boom'));
+    const res = await client.call('GET', '/api/contracts/export.csv');
+    expect(res.status).toBe(500);
+  });
+});
