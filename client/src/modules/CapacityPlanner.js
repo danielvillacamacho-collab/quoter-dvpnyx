@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiGet } from '../utils/apiV2';
 
 /**
@@ -212,9 +213,22 @@ function EmployeeRow({ emp, weeks }) {
   );
 }
 
-function UnassignedRow({ request, weeks }) {
+function UnassignedRow({ request, weeks, onOpen }) {
+  // US-PLN-5: clicking any part of the row jumps to the resource-requests
+  // module filtered to this row's contract so the user can resolve it.
+  const clickable = { cursor: 'pointer' };
+  const open = () => onOpen && onOpen(request);
+  const onKey = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
   return (
-    <div style={s.unassignedRow(weeks.length)} data-testid={`unassigned-row-${request.id}`}>
+    <div
+      style={{ ...s.unassignedRow(weeks.length), ...clickable }}
+      data-testid={`unassigned-row-${request.id}`}
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={onKey}
+      title="Ir a Solicitudes"
+    >
       <div style={s.unassignedCell}>
         <div style={s.unassignedTitle}>{request.role_title} <span style={{ opacity: 0.6 }}>(faltan {request.missing})</span></div>
         <div style={s.unassignedMeta}>{request.contract_name} · {request.level} · {request.area_name || '—'}</div>
@@ -234,18 +248,39 @@ function UnassignedRow({ request, weeks }) {
 /* ── Main ────────────────────────────────────────────────────────── */
 
 export default function CapacityPlanner() {
-  const [start, setStart] = useState(todayMondayIso());
-  const [weeks] = useState(12);
-  const [contractId, setContractId] = useState('');
-  const [areaId, setAreaId] = useState('');
-  const [levelMin, setLevelMin] = useState('');
-  const [levelMax, setLevelMax] = useState('');
-  const [search, setSearch] = useState('');
+  // US-PLN-3: the URL is the single source of truth for the planner view.
+  // That makes the page shareable ("mándame el link con esos filtros") and
+  // keeps Back/Forward working naturally. `start` defaults to this week's
+  // Monday; `weeks` defaults to 12.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+
+  const start      = searchParams.get('start')     || todayMondayIso();
+  const weeksParam = Number(searchParams.get('weeks'));
+  const weeks      = Number.isFinite(weeksParam) && weeksParam > 0 ? Math.min(26, Math.trunc(weeksParam)) : 12;
+  const contractId = searchParams.get('contract_id') || '';
+  const areaId     = searchParams.get('area_id')     || '';
+  const levelMin   = searchParams.get('level_min')   || '';
+  const levelMax   = searchParams.get('level_max')   || '';
+  const search     = searchParams.get('search')      || '';
 
   const [data, setData] = useState(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
   const [areas, setAreas] = useState([]);
+
+  // Small helper so every control mutates the URL, not component state.
+  // Passing '' removes the key (keeps the URL tidy when a filter is cleared).
+  const patchParams = useCallback((patch) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === '' || v == null) next.delete(k);
+        else next.set(k, String(v));
+      }
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   const filters = useMemo(() => ({
     start, weeks,
@@ -291,30 +326,34 @@ export default function CapacityPlanner() {
 
       {/* Toolbar */}
       <div style={s.toolbar}>
-        <button type="button" style={s.btn} onClick={() => setStart(shiftIso(start, -28))} aria-label="4 semanas atrás">← 4 sem</button>
-        <button type="button" style={s.btn} onClick={() => setStart(todayMondayIso())}>Hoy</button>
-        <button type="button" style={s.btn} onClick={() => setStart(shiftIso(start, 28))} aria-label="4 semanas adelante">4 sem →</button>
+        <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, -28) })} aria-label="4 semanas atrás">← 4 sem</button>
+        <button type="button" style={s.btn} onClick={() => patchParams({ start: todayMondayIso() })}>Hoy</button>
+        <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, 28) })} aria-label="4 semanas adelante">4 sem →</button>
 
-        <select style={s.select} value={contractId} onChange={(e) => setContractId(e.target.value)} aria-label="Filtro contrato">
+        <select style={s.select} value={contractId} onChange={(e) => patchParams({ contract_id: e.target.value })} aria-label="Filtro contrato">
           <option value="">Todos los contratos</option>
           {contracts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
 
-        <select style={s.select} value={areaId} onChange={(e) => setAreaId(e.target.value)} aria-label="Filtro área">
+        <select style={s.select} value={areaId} onChange={(e) => patchParams({ area_id: e.target.value })} aria-label="Filtro área">
           <option value="">Todas las áreas</option>
           {areas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
         </select>
 
-        <select style={s.select} value={levelMin} onChange={(e) => setLevelMin(e.target.value)} aria-label="Nivel mínimo">
+        <select style={s.select} value={levelMin} onChange={(e) => patchParams({ level_min: e.target.value })} aria-label="Nivel mínimo">
           <option value="">Nivel min</option>
           {['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => <option key={l} value={l}>{l}</option>)}
         </select>
-        <select style={s.select} value={levelMax} onChange={(e) => setLevelMax(e.target.value)} aria-label="Nivel máximo">
+        <select style={s.select} value={levelMax} onChange={(e) => patchParams({ level_max: e.target.value })} aria-label="Nivel máximo">
           <option value="">Nivel max</option>
           {['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => <option key={l} value={l}>{l}</option>)}
         </select>
 
-        <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Buscar empleado" />
+        {(contractId || areaId || levelMin || levelMax || search) && (
+          <button type="button" style={s.btn} onClick={() => patchParams({ contract_id: '', area_id: '', level_min: '', level_max: '', search: '' })}>Limpiar filtros</button>
+        )}
+
+        <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => patchParams({ search: e.target.value })} aria-label="Buscar empleado" />
       </div>
 
       {err && <div style={s.error} role="alert">{err}</div>}
@@ -343,8 +382,15 @@ export default function CapacityPlanner() {
               )}
               {data.employees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} />)}
 
-              {/* Unassigned requests */}
-              {data.open_requests.map((r) => <UnassignedRow key={r.id} request={r} weeks={wks} />)}
+              {/* Unassigned requests (US-PLN-5: clickable → solicitudes) */}
+              {data.open_requests.map((r) => (
+                <UnassignedRow
+                  key={r.id}
+                  request={r}
+                  weeks={wks}
+                  onOpen={(req) => navigate(`/resource-requests?contract_id=${encodeURIComponent(req.contract_id)}&request_id=${encodeURIComponent(req.id)}`)}
+                />
+              ))}
             </div>
           </div>
         </div>
