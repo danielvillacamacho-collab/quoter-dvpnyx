@@ -35,3 +35,4 @@ export const createQuotation = (data) => api('/quotations', { method: 'POST', bo
 export const updateQuotation = (id, data) => api(`/quotations/${id}`, { method: 'PUT', body: data });
 export const duplicateQuotation = (id) => api(`/quotations/${id}/duplicate`, { method: 'POST' });
 export const deleteQuotation = (id) => api(`/quotations/${id}`, { method: 'DELETE' });
+export const getDashboardOverview = () => api('/dashboard/overview');
