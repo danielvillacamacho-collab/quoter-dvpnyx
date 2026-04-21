@@ -5,7 +5,7 @@ import {
   Home, UserPlus, FileText, Building2, Briefcase, FileCheck2,
   ClipboardList, CalendarDays, LayoutGrid, Users, Layers, Tag,
   Clock, TrendingUp, BarChart3, BookOpen, Settings, UserCog, Upload,
-  LogOut,
+  Palette, LogOut,
 } from 'lucide-react';
 
 /**
@@ -55,6 +55,7 @@ const ICONS = {
   '/admin/params':            Settings,
   '/admin/users':             UserCog,
   '/admin/bulk-import':       Upload,
+  '/preferencias':            Palette,
 };
 
 /** Build the grouped nav model; admin-only sections are filtered here. */
@@ -98,8 +99,9 @@ export function buildGroups(isAdmin) {
     },
     {
       title: null, items: [
-        { path: '/reports', label: 'Reportes' },
-        { path: '/wiki',    label: 'Wiki' },
+        { path: '/reports',      label: 'Reportes' },
+        { path: '/wiki',         label: 'Wiki' },
+        { path: '/preferencias', label: 'Preferencias' },
       ],
     },
   ];
