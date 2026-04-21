@@ -37,13 +37,13 @@ import './App.css';
 
 /* ========== STYLES ========== */
 const css = {
-  logo: { padding: '24px 20px 8px', fontFamily: 'Montserrat', fontWeight: 800, fontSize: 22, color: 'var(--teal)', letterSpacing: 1 },
+  logo: { padding: '24px 20px 8px', fontFamily: 'var(--font-ui, inherit)', fontWeight: 700, fontSize: 22, color: 'var(--teal)', letterSpacing: 1 },
   tagline: { padding: '0 20px 24px', fontSize: 10, color: '#998899', fontStyle: 'italic' },
   nav: { flex: 1, padding: '0 12px', overflowY: 'auto', overflowX: 'hidden' },
   navItem: (active) => ({ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 500, marginBottom: 2, textDecoration: 'none', color: active ? '#fff' : '#ccbbcc', background: active ? 'rgba(0,216,212,0.15)' : 'transparent', transition: 'all .15s' }),
   card: { background: '#fff', borderRadius: 12, border: '1px solid var(--border)', padding: '24px', marginBottom: 20 },
-  btn: (color = 'var(--purple-dark)') => ({ background: color, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'opacity .15s' }),
-  btnOutline: { background: 'transparent', color: 'var(--purple-dark)', border: '1px solid var(--purple-dark)', borderRadius: 8, padding: '9px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+  btn: (color = 'var(--ds-accent, var(--purple-dark))') => ({ background: color, color: '#fff', border: 'none', borderRadius: 'var(--ds-radius, 8px)', padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'opacity .15s', fontFamily: 'var(--font-ui, inherit)' }),
+  btnOutline: { background: 'transparent', color: 'var(--ds-text, var(--purple-dark))', border: '1px solid var(--ds-border, var(--purple-dark))', borderRadius: 'var(--ds-radius, 8px)', padding: '9px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'var(--font-ui, inherit)' },
   input: { width: '100%', padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, outline: 'none', transition: 'border .15s' },
   select: { padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, background: '#fff', cursor: 'pointer', outline: 'none' },
   label: { fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 4, display: 'block' },
@@ -219,7 +219,7 @@ function Login() {
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(135deg, #56234d 0%, #1e0f1c 100%)' }}>
       <div className="login-card">
         <div style={{ textAlign: 'center', marginBottom: 32 }}>
-          <div style={{ fontFamily: 'Montserrat', fontSize: 32, fontWeight: 800, color: 'var(--teal)' }}>DVPNYX</div>
+          <div style={{ fontFamily: 'var(--font-ui, inherit)', fontSize: 32, fontWeight: 700, color: 'var(--teal)', letterSpacing: '-0.015em' }}>DVPNYX</div>
           <div style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4 }}>Cotizador de Servicios</div>
         </div>
         {!changePw ? (
@@ -233,7 +233,7 @@ function Login() {
               <input style={css.input} type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" required />
             </div>
             {err && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12, textAlign: 'center' }}>{err}</div>}
-            <button style={{ ...css.btn('var(--purple-dark)'), width: '100%', padding: 14, fontSize: 15 }} disabled={loading}>{loading ? 'Ingresando...' : 'Ingresar'}</button>
+            <button style={{ ...css.btn('var(--ds-accent, var(--purple-dark))'), width: '100%', padding: 14, fontSize: 15 }} disabled={loading}>{loading ? 'Ingresando...' : 'Ingresar'}</button>
           </form>
         ) : (
           <form onSubmit={handleChangePw}>
@@ -524,7 +524,7 @@ function StaffAugEditor({ params, context }) {
       <div className="editor-header">
         <div>
           <button onClick={() => nav('/')} style={{ ...css.btnOutline, padding: '6px 12px', fontSize: 11, marginRight: 12 }}>← Volver</button>
-          <span style={{ fontSize: 20, fontWeight: 700, color: 'var(--purple-dark)', fontFamily: 'Montserrat' }}>
+          <span style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ds-text, var(--purple-dark))', fontFamily: 'var(--font-ui, inherit)' }}>
             {isNew ? 'Nueva Cotización' : 'Editar Cotización'} — {data.type === 'staff_aug' ? 'Staff Augmentation' : 'Alcance Fijo'}
           </span>
         </div>
@@ -536,7 +536,7 @@ function StaffAugEditor({ params, context }) {
 
       {/* Project info */}
       <div style={css.card}>
-        <h3 style={{ fontSize: 14, color: 'var(--purple-dark)', marginBottom: 16 }}>Datos del Proyecto</h3>
+        <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ds-text, var(--purple-dark))', marginBottom: 16, textTransform: 'uppercase', letterSpacing: 0.04 }}>Datos del Proyecto</h3>
         <div className="project-info-grid">
           {[
             ['project_name', 'Nombre del Proyecto'],
@@ -565,7 +565,7 @@ function StaffAugEditor({ params, context }) {
       {/* Lines */}
       <div style={css.card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h3 style={{ fontSize: 14, color: 'var(--purple-dark)' }}>Recursos ({data.lines.length})</h3>
+          <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ds-text, var(--purple-dark))', margin: 0, textTransform: 'uppercase', letterSpacing: 0.04 }}>Recursos ({data.lines.length})</h3>
           <button style={css.btn('var(--teal-mid)')} onClick={addLine}>+ Agregar recurso</button>
         </div>
         <div className="table-wrapper">
@@ -586,7 +586,7 @@ function StaffAugEditor({ params, context }) {
                 <td style={css.td}><select style={{ ...css.select, width: 100, fontSize: 11 }} value={line.modality} onChange={e => updateLine(idx, 'modality', e.target.value)}>{modalities.map(m => <option key={m}>{m}</option>)}</select></td>
                 <td style={css.td}><input style={{ ...css.input, width: 45, fontSize: 12, padding: 6, textAlign: 'center' }} type="number" min={1} value={line.quantity} onChange={e => updateLine(idx, 'quantity', Number(e.target.value))} /></td>
                 <td style={css.td}><input style={{ ...css.input, width: 45, fontSize: 12, padding: 6, textAlign: 'center' }} type="number" min={1} value={line.duration_months} onChange={e => updateLine(idx, 'duration_months', Number(e.target.value))} /></td>
-                <td style={{ ...css.td, fontWeight: 600, color: 'var(--purple-dark)', whiteSpace: 'nowrap' }}>{formatUSD(line.rate_month)}</td>
+                <td style={{ ...css.td, fontWeight: 600, color: 'var(--ds-text, var(--purple-dark))', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)', fontFeatureSettings: "'tnum'" }}>{formatUSD(line.rate_month)}</td>
                 <td style={{ ...css.td, fontWeight: 700, color: 'var(--success)', whiteSpace: 'nowrap' }}>{formatUSD(line.total)}</td>
                 <td style={css.td}><button onClick={() => removeLine(idx)} style={{ border: 'none', background: 'none', color: 'var(--danger)', cursor: 'pointer', fontSize: 16 }}>✕</button></td>
               </tr>
@@ -632,10 +632,10 @@ function AdminParams() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 24, color: 'var(--purple-dark)', marginBottom: 24 }}>⚙️ Administración de Parámetros</h1>
+      <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ds-text, var(--purple-dark))', margin: '0 0 24px', fontFamily: 'var(--font-ui, inherit)' }}>⚙️ Administración de Parámetros</h1>
       {params && Object.entries(params).map(([cat, items]) => (
         <div key={cat} style={css.card}>
-          <h3 style={{ fontSize: 14, color: 'var(--purple-dark)', marginBottom: 12 }}>{categoryLabels[cat] || cat}</h3>
+          <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ds-text, var(--purple-dark))', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.04 }}>{categoryLabels[cat] || cat}</h3>
           <div className="table-wrapper">
             <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead><tr>
@@ -648,7 +648,7 @@ function AdminParams() {
                     {editing === p.id ? (
                       <input style={{ ...css.input, width: 100, padding: 6 }} type="number" step="any" value={newVal} onChange={e => setNewVal(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && handleSave(p)} />
                     ) : (
-                      <span style={{ color: 'var(--purple-dark)', fontWeight: 600, fontFamily: 'monospace' }}>
+                      <span style={{ color: 'var(--ds-text, var(--purple-dark))', fontWeight: 600, fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)', fontFeatureSettings: "'tnum'" }}>
                         {['level', 'tools'].includes(cat) ? formatUSD(p.value) : ['margin', 'project'].includes(cat) && p.value < 1000 && p.key !== 'hours_month' ? formatPct(p.value) : p.value}
                       </span>
                     )}
