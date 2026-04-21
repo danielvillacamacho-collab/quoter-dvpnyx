@@ -206,4 +206,17 @@ describe('Assignments module', () => {
       expect(urls.some((u) => u.includes('status=active'))).toBe(true);
     });
   });
+
+  it('Descargar CSV button calls apiDownload with active filters', async () => {
+    apiV2.apiDownload.mockResolvedValue();
+    mount();
+    await screen.findByText('Ana García');
+    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'active' } });
+    fireEvent.click(screen.getByTestId('assignments-export-csv'));
+    await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));
+    const [url, filename] = apiV2.apiDownload.mock.calls[0];
+    expect(url).toMatch(/^\/api\/assignments\/export\.csv\?/);
+    expect(url).toContain('status=active');
+    expect(filename).toBe('asignaciones.csv');
+  });
 });

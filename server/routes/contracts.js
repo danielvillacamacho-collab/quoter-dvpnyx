@@ -20,6 +20,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { stringifyCsv } = require('../utils/csv');
 
 router.use(auth);
 
@@ -90,6 +91,55 @@ router.get('/', async (req, res) => {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('GET /contracts failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+/* -------- EXPORT CSV -------- */
+const EXPORT_LIMIT = 10000;
+router.get('/export.csv', async (req, res) => {
+  try {
+    const wheres = ['c.deleted_at IS NULL'];
+    const params = [];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+
+    if (req.query.search) {
+      const like = '%' + req.query.search + '%';
+      wheres.push(`(LOWER(c.name) LIKE LOWER(${add(like)}))`);
+    }
+    if (req.query.client_id) wheres.push(`c.client_id = ${add(req.query.client_id)}`);
+    if (req.query.status)    wheres.push(`c.status = ${add(normalizeStatus(req.query.status))}`);
+    if (req.query.type)      wheres.push(`c.type = ${add(req.query.type)}`);
+
+    const where = `WHERE ${wheres.join(' AND ')}`;
+    const { rows } = await pool.query(
+      `SELECT c.id, c.name, c.type, c.status, c.start_date, c.end_date,
+              c.notes, c.created_at,
+              cl.name AS client_name
+         FROM contracts c
+         LEFT JOIN clients cl ON cl.id = c.client_id
+         ${where}
+         ORDER BY c.updated_at DESC
+         LIMIT ${EXPORT_LIMIT}`,
+      params
+    );
+    const csv = stringifyCsv(rows, [
+      { key: 'id',           header: 'ID' },
+      { key: 'name',         header: 'Nombre' },
+      { key: 'client_name',  header: 'Cliente' },
+      { key: 'type',         header: 'Tipo' },
+      { key: 'status',       header: 'Estado' },
+      { key: 'start_date',   header: 'Inicio' },
+      { key: 'end_date',     header: 'Fin' },
+      { key: 'notes',        header: 'Notas' },
+      { key: 'created_at',   header: 'Creado' },
+    ]);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="contratos.csv"');
+    res.send(csv);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /contracts/export.csv failed:', err);
     res.status(500).json({ error: 'Error interno' });
   }
 });

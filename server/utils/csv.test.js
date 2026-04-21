@@ -1,4 +1,4 @@
-const { parseCsv } = require('./csv');
+const { parseCsv, stringifyCsv } = require('./csv');
 
 describe('parseCsv', () => {
   it('returns empty on empty input', () => {
@@ -56,5 +56,47 @@ describe('parseCsv', () => {
   it('preserves embedded newlines in quoted fields', () => {
     const out = parseCsv('a,b\n"line1\nline2",x');
     expect(out.rows[0]).toEqual({ a: 'line1\nline2', b: 'x' });
+  });
+});
+
+describe('stringifyCsv', () => {
+  const cols = [
+    { key: 'name', header: 'Name' },
+    { key: 'age',  header: 'Age' },
+  ];
+
+  it('emits a BOM + header row even when there are no data rows', () => {
+    const out = stringifyCsv([], cols);
+    expect(out).toBe('\uFEFFName,Age\r\n');
+  });
+
+  it('stringifies scalar values with CRLF line endings', () => {
+    const out = stringifyCsv([{ name: 'Alice', age: 30 }, { name: 'Bob', age: 25 }], cols);
+    expect(out).toBe('\uFEFFName,Age\r\nAlice,30\r\nBob,25\r\n');
+  });
+
+  it('quotes fields containing commas, quotes, or newlines', () => {
+    const out = stringifyCsv(
+      [{ name: 'Smith, John', age: 'has "quote"' }, { name: 'line\nbreak', age: 'ok' }],
+      cols,
+      { bom: false }
+    );
+    expect(out).toBe(
+      'Name,Age\r\n"Smith, John","has ""quote"""\r\n"line\nbreak",ok\r\n'
+    );
+  });
+
+  it('supports a value() accessor for computed columns', () => {
+    const out = stringifyCsv(
+      [{ first: 'Ana', last: 'García' }],
+      [{ header: 'Full', value: (r) => `${r.first} ${r.last}` }],
+      { bom: false }
+    );
+    expect(out).toBe('Full\r\nAna García\r\n');
+  });
+
+  it('renders null/undefined as empty strings', () => {
+    const out = stringifyCsv([{ name: null, age: undefined }], cols, { bom: false });
+    expect(out).toBe('Name,Age\r\n,\r\n');
   });
 });

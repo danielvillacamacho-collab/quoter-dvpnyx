@@ -527,3 +527,27 @@ describe('DELETE /api/assignments/:id — EN-5', () => {
     expect(evt).toBeTruthy();
   });
 });
+
+describe('GET /api/assignments/export.csv', () => {
+  it('streams a CSV with header + rows and honors status filter', async () => {
+    queryQueue.push({ rows: [
+      { id: 'a1', status: 'active', weekly_hours: 40,
+        start_date: '2026-01-01', end_date: null, role_title: 'Dev', notes: null,
+        created_at: '2026-01-01T00:00:00Z',
+        employee_name: 'Ana García', contract_name: 'Acme', request_role_title: 'Senior Dev' },
+    ] });
+    const res = await client.call('GET', '/api/assignments/export.csv?status=active');
+    expect(res.status).toBe(200);
+    expect(res.body.charCodeAt(0)).toBe(0xFEFF);
+    expect(res.body).toMatch(/Empleado,Contrato,Rol \(solicitud\),Rol \(asignación\),Estado/);
+    expect(res.body).toMatch(/Ana García,Acme,Senior Dev,Dev,active,40/);
+    const exec = issuedQueries.find((q) => /FROM assignments a/.test(q.sql));
+    expect(exec.params).toContain('active');
+  });
+
+  it('returns 500 when the DB throws', async () => {
+    queryQueue.push(new Error('boom'));
+    const res = await client.call('GET', '/api/assignments/export.csv');
+    expect(res.status).toBe(500);
+  });
+});

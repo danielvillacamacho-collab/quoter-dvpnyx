@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -310,9 +310,36 @@ export default function Opportunities() {
           <h1 style={s.h1}>💼 Oportunidades</h1>
           <div style={s.sub}>Pipeline comercial. Una oportunidad agrupa cotizaciones de un mismo deal.</div>
         </div>
-        <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
-          + Nueva Oportunidad
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            style={{
+              background: 'transparent',
+              color: 'var(--ds-text, #222)',
+              border: '1px solid var(--ds-border, #ccc)',
+              borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'Montserrat',
+            }}
+            onClick={async () => {
+              try {
+                const qs = new URLSearchParams();
+                if (search)        qs.set('search', search);
+                if (clientFilter)  qs.set('client_id', clientFilter);
+                if (statusFilter)  qs.set('status', statusFilter);
+                await apiDownload(`/api/opportunities/export.csv${qs.toString() ? `?${qs}` : ''}`, 'oportunidades.csv');
+              } catch (e) {
+                // eslint-disable-next-line no-alert
+                alert(`No se pudo descargar: ${e.message}`);
+              }
+            }}
+            data-testid="opportunities-export-csv"
+          >
+            ⤓ Descargar CSV
+          </button>
+          <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
+            + Nueva Oportunidad
+          </button>
+        </div>
       </div>
 
       <div style={s.card}>

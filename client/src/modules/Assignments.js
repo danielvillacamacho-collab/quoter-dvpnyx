@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 import AssignmentValidationModal from './AssignmentValidationModal';
 import AssignmentValidationInline from './AssignmentValidationInline';
 
@@ -299,9 +299,34 @@ export default function Assignments() {
           <h1 style={s.h1}>🗓 Asignaciones</h1>
           <div style={s.sub}>Compromiso entre empleado, contrato y solicitud. Chequeo de overbooking automático.</div>
         </div>
-        <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
-          + Nueva Asignación
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            style={{
+              background: 'transparent',
+              color: 'var(--ds-text, #222)',
+              border: '1px solid var(--ds-border, #ccc)',
+              borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'Montserrat',
+            }}
+            onClick={async () => {
+              try {
+                const qs = new URLSearchParams();
+                if (statusFilter) qs.set('status', statusFilter);
+                await apiDownload(`/api/assignments/export.csv${qs.toString() ? `?${qs}` : ''}`, 'asignaciones.csv');
+              } catch (e) {
+                // eslint-disable-next-line no-alert
+                alert(`No se pudo descargar: ${e.message}`);
+              }
+            }}
+            data-testid="assignments-export-csv"
+          >
+            ⤓ Descargar CSV
+          </button>
+          <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
+            + Nueva Asignación
+          </button>
+        </div>
       </div>
 
       <div style={s.card}>

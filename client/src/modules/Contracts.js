@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -203,9 +203,37 @@ export default function Contracts() {
           <h1 style={s.h1}>📑 Contratos</h1>
           <div style={s.sub}>Compromisos de entrega con clientes. Generan solicitudes y asignaciones.</div>
         </div>
-        <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
-          + Nuevo Contrato
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            style={{
+              background: 'transparent',
+              color: 'var(--ds-text, #222)',
+              border: '1px solid var(--ds-border, #ccc)',
+              borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'Montserrat',
+            }}
+            onClick={async () => {
+              try {
+                const qs = new URLSearchParams();
+                if (search)        qs.set('search', search);
+                if (clientFilter)  qs.set('client_id', clientFilter);
+                if (statusFilter)  qs.set('status', statusFilter);
+                if (typeFilter)    qs.set('type', typeFilter);
+                await apiDownload(`/api/contracts/export.csv${qs.toString() ? `?${qs}` : ''}`, 'contratos.csv');
+              } catch (e) {
+                // eslint-disable-next-line no-alert
+                alert(`No se pudo descargar: ${e.message}`);
+              }
+            }}
+            data-testid="contracts-export-csv"
+          >
+            ⤓ Descargar CSV
+          </button>
+          <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
+            + Nuevo Contrato
+          </button>
+        </div>
       </div>
 
       <div style={s.card}>

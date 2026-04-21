@@ -33,6 +33,7 @@ const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { notify, notifyMany } = require('../utils/notifications');
 const { runAllChecks } = require('../utils/assignment_validation');
+const { stringifyCsv } = require('../utils/csv');
 
 router.use(auth);
 
@@ -260,6 +261,64 @@ router.get('/', async (req, res) => {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('GET /assignments failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+/* -------- EXPORT CSV --------
+ *
+ * Honors the SAME filter params as GET '/', but ignores pagination and
+ * caps at EXPORT_LIMIT so a bad filter doesn't stream megabytes. The
+ * ordering matches the list so what the user sees in the UI is what
+ * they get in the file. Any authenticated user can export.
+ */
+const EXPORT_LIMIT = 10000;
+router.get('/export.csv', async (req, res) => {
+  try {
+    const wheres = ['a.deleted_at IS NULL'];
+    const params = [];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+
+    if (req.query.employee_id)         wheres.push(`a.employee_id = ${add(req.query.employee_id)}`);
+    if (req.query.contract_id)         wheres.push(`a.contract_id = ${add(req.query.contract_id)}`);
+    if (req.query.resource_request_id) wheres.push(`a.resource_request_id = ${add(req.query.resource_request_id)}`);
+    if (req.query.status)              wheres.push(`a.status = ${add(req.query.status)}`);
+
+    const where = `WHERE ${wheres.join(' AND ')}`;
+    const { rows } = await pool.query(
+      `SELECT a.id, a.status, a.weekly_hours, a.start_date, a.end_date, a.role_title, a.notes,
+              a.created_at,
+              (e.first_name || ' ' || e.last_name) AS employee_name,
+              c.name AS contract_name,
+              rr.role_title AS request_role_title
+         FROM assignments a
+         LEFT JOIN employees         e  ON e.id = a.employee_id
+         LEFT JOIN contracts         c  ON c.id = a.contract_id
+         LEFT JOIN resource_requests rr ON rr.id = a.resource_request_id
+         ${where}
+         ORDER BY a.start_date DESC
+         LIMIT ${EXPORT_LIMIT}`,
+      params
+    );
+    const csv = stringifyCsv(rows, [
+      { key: 'id',                  header: 'ID' },
+      { key: 'employee_name',       header: 'Empleado' },
+      { key: 'contract_name',       header: 'Contrato' },
+      { key: 'request_role_title',  header: 'Rol (solicitud)' },
+      { key: 'role_title',          header: 'Rol (asignación)' },
+      { key: 'status',              header: 'Estado' },
+      { key: 'weekly_hours',        header: 'Horas/semana' },
+      { key: 'start_date',          header: 'Inicio' },
+      { key: 'end_date',            header: 'Fin' },
+      { key: 'notes',               header: 'Notas' },
+      { key: 'created_at',          header: 'Creada' },
+    ]);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="asignaciones.csv"');
+    res.send(csv);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /assignments/export.csv failed:', err);
     res.status(500).json({ error: 'Error interno' });
   }
 });
