@@ -10,13 +10,20 @@ import Breadcrumb from './Breadcrumb';
  * → notifications icon.
  *
  * Props:
- *   - onOpenSearch?: when provided, the search pill becomes clickable
- *     and opens the global Command Palette. When absent (e.g. in the
- *     standalone shell tests), the pill renders disabled — matching the
- *     pre-palette behavior.
+ *   onOpenSearch?        → when present, search pill is clickable and
+ *                          fires this. Otherwise renders disabled.
+ *   onOpenNotifications? → when present, the bell is clickable and
+ *                          fires this. Otherwise renders disabled.
+ *   unreadCount?         → number; if > 0, a red badge sits on the bell
+ *                          with the count (capped at "9+"). The dot is
+ *                          also preserved for screen-reader clarity.
  */
-export default function Topbar({ onOpenSearch }) {
+export default function Topbar({ onOpenSearch, onOpenNotifications, unreadCount = 0 }) {
   const searchEnabled = typeof onOpenSearch === 'function';
+  const bellEnabled   = typeof onOpenNotifications === 'function';
+  const hasUnread     = Number(unreadCount) > 0;
+  const badgeText     = unreadCount > 9 ? '9+' : String(unreadCount);
+
   return (
     <div className="ds-topbar" role="navigation" aria-label="Barra superior">
       <Breadcrumb />
@@ -39,12 +46,16 @@ export default function Topbar({ onOpenSearch }) {
       <button
         type="button"
         className="ds-icon-btn"
-        aria-label="Notificaciones"
+        aria-label={hasUnread ? `Notificaciones (${unreadCount} sin leer)` : 'Notificaciones'}
         title="Notificaciones"
-        disabled
+        onClick={bellEnabled ? onOpenNotifications : undefined}
+        disabled={!bellEnabled}
+        data-testid="topbar-bell"
       >
         <Bell size={16} aria-hidden="true" />
-        <span className="ds-dot" />
+        {hasUnread && (
+          <span className="ds-badge" data-testid="topbar-bell-badge">{badgeText}</span>
+        )}
       </button>
     </div>
   );

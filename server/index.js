@@ -39,7 +39,7 @@ app.use('/api/search',            require('./routes/search'));       // ✅ Comm
 app.use('/api/bulk-import',       require('./routes/bulk_import'));  // ✅ Sprint 9 (admin+)
 app.use('/api/squads',            _stubs.squads);
 app.use('/api/events',            _stubs.events);
-app.use('/api/notifications',     _stubs.notifications);
+app.use('/api/notifications',     require('./routes/notifications')); // ✅ In-app notifications
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.

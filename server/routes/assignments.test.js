@@ -31,6 +31,14 @@ jest.mock('../utils/events', () => ({
   buildUpdatePayload: jest.requireActual('../utils/events').buildUpdatePayload,
 }));
 
+// Post-mutation notification producers run in a best-effort try/catch
+// and are exercised end-to-end in their own test file. Mock them here
+// so the assignments POST tests stay focused on validation + events.
+jest.mock('../utils/notifications', () => ({
+  notify: jest.fn(async () => null),
+  notifyMany: jest.fn(async () => []),
+}));
+
 let mockCurrentUser = { id: 'u1', role: 'admin' };
 jest.mock('../middleware/auth', () => ({
   auth: (req, _res, next) => { req.user = { ...mockCurrentUser }; next(); },
@@ -153,6 +161,7 @@ describe('POST /api/assignments — EN-1', () => {
     queryQueue.push({ rows: [happyEmp({ status: 'on_leave' })] });
     queryQueue.push({ rows: [{ total: 0 }] });          // overlap sum
     queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] }); // INSERT
+    queryQueue.push({ rows: [] });                      // notification context lookup
 
     const res = await client.call('POST', '/api/assignments', validBody);
     expect(res.status).toBe(201);
@@ -186,6 +195,7 @@ describe('POST /api/assignments — EN-1', () => {
     // committed=45 ≥ cap=40 → available ≤ 0 → FAIL overridable.
     queryQueue.push({ rows: [{ total: 45 }] });
     queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
+    queryQueue.push({ rows: [] });                      // notification context lookup
 
     const res = await client.call('POST', '/api/assignments', {
       ...validBody,
@@ -224,6 +234,72 @@ describe('POST /api/assignments — EN-1', () => {
     expect(res.body.error).toMatch(/override_reason/);
   });
 
+  it('notifies the assigned employee when their user_id is linked (different from actor)', async () => {
+    const { notify } = require('../utils/notifications');
+    notify.mockClear();
+    queryQueue.push({ rows: [happyRR()] });
+    queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
+    queryQueue.push({ rows: [happyEmp()] });
+    queryQueue.push({ rows: [{ total: 10 }] });
+    queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
+    // Producer context: employee has user_id u42, managers are somebody else.
+    queryQueue.push({ rows: [{
+      employee_user_id: 'u42', employee_name: 'Ana G',
+      contract_name: 'MSA-2026',
+      delivery_manager_id: 'dm1', capacity_manager_id: null,
+    }] });
+
+    const res = await client.call('POST', '/api/assignments', validBody);
+    expect(res.status).toBe(201);
+    const target = notify.mock.calls.find((c) => c[1].user_id === 'u42');
+    expect(target).toBeTruthy();
+    expect(target[1].type).toBe('assignment.created');
+    expect(target[1].title).toMatch(/asignaron/i);
+  });
+
+  it('does NOT notify the employee when they are the actor', async () => {
+    const { notify } = require('../utils/notifications');
+    notify.mockClear();
+    mockCurrentUser = { id: 'u42', role: 'admin' }; // actor == employee user
+    queryQueue.push({ rows: [happyRR()] });
+    queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
+    queryQueue.push({ rows: [happyEmp()] });
+    queryQueue.push({ rows: [{ total: 10 }] });
+    queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
+    queryQueue.push({ rows: [{
+      employee_user_id: 'u42', employee_name: 'Ana G',
+      contract_name: 'MSA-2026',
+      delivery_manager_id: null, capacity_manager_id: null,
+    }] });
+
+    await client.call('POST', '/api/assignments', validBody);
+    expect(notify.mock.calls.find((c) => c[1].user_id === 'u42')).toBeFalsy();
+  });
+
+  it('notifies delivery + capacity managers on override (excluding the actor)', async () => {
+    const { notifyMany } = require('../utils/notifications');
+    notifyMany.mockClear();
+    queryQueue.push({ rows: [happyRR()] });
+    queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
+    queryQueue.push({ rows: [happyEmp()] });
+    queryQueue.push({ rows: [{ total: 45 }] });            // saturates → fail override
+    queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
+    queryQueue.push({ rows: [{
+      employee_user_id: null, employee_name: 'Ana G',
+      contract_name: 'MSA-2026',
+      delivery_manager_id: 'dm1', capacity_manager_id: 'u1', // u1 is the actor — should be filtered out
+    }] });
+
+    const res = await client.call('POST', '/api/assignments', {
+      ...validBody,
+      override_reason: 'Cliente estratégico — aprobado por COO para cubrir hito crítico.',
+    });
+    expect(res.status).toBe(201);
+    const call = notifyMany.mock.calls[0];
+    expect(call[1]).toEqual(['dm1']); // capacity manager (u1) == actor, dropped
+    expect(call[2].type).toBe('assignment.overridden');
+  });
+
   it('creates assignment within capacity (clean validation)', async () => {
     const { emitEvent } = require('../utils/events');
     emitEvent.mockClear();
@@ -232,6 +308,7 @@ describe('POST /api/assignments — EN-1', () => {
     queryQueue.push({ rows: [happyEmp()] });
     queryQueue.push({ rows: [{ total: 10 }] });
     queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
+    queryQueue.push({ rows: [] });                      // notification context lookup
 
     const res = await client.call('POST', '/api/assignments', validBody);
     expect(res.status).toBe(201);
