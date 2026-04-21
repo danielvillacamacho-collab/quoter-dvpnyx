@@ -49,7 +49,7 @@ const TRANSITIONS = {
 const EMPTY = {
   name: '', client_id: '', opportunity_id: '', winning_quotation_id: '',
   type: 'project', start_date: '', end_date: '',
-  delivery_manager_id: '', notes: '',
+  squad_id: '', delivery_manager_id: '', notes: '',
 };
 
 function ContractForm({ initial, clients, onSave, onCancel, saving }) {
@@ -64,6 +64,7 @@ function ContractForm({ initial, clients, onSave, onCancel, saving }) {
     if (!form.client_id) return setErr('Cliente es requerido');
     if (!form.type) return setErr('Tipo es requerido');
     if (!form.start_date) return setErr('Fecha de inicio es requerida');
+    if (!form.squad_id) return setErr('squad_id es requerido');
     try { await onSave(form); }
     catch (ex) { setErr(ex.message || 'Error guardando'); }
   };
@@ -100,6 +101,13 @@ function ContractForm({ initial, clients, onSave, onCancel, saving }) {
         <div>
           <label style={s.label}>Fecha fin</label>
           <input type="date" style={s.input} value={form.end_date ? String(form.end_date).slice(0, 10) : ''} onChange={(e) => set('end_date', e.target.value || null)} aria-label="Fecha fin" />
+        </div>
+      </div>
+      <div>
+        <label style={s.label}>Squad ID *</label>
+        <input style={s.input} value={form.squad_id || ''} onChange={(e) => set('squad_id', e.target.value)} placeholder="UUID del squad" aria-label="Squad ID" required />
+        <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 2 }}>
+          Entra el UUID manualmente; el selector de squads llega en un sprint posterior.
         </div>
       </div>
       <div>
@@ -161,7 +169,7 @@ export default function Contracts() {
       const payload = {
         name: form.name, client_id: form.client_id, type: form.type,
         start_date: form.start_date, end_date: form.end_date || null,
-        notes: form.notes,
+        squad_id: form.squad_id, notes: form.notes,
         opportunity_id: form.opportunity_id || null,
         winning_quotation_id: form.winning_quotation_id || null,
       };

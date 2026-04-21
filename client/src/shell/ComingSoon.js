@@ -19,6 +19,7 @@ const ROUTE_META = {
   '/reports':          { title: 'Reportes',            sprint: 'Sprint 6', spec: 'docs/specs/v2/04_modules/06_reports.md' },
   '/admin/areas':      { title: 'Catálogo de Áreas',   sprint: 'Sprint 3', spec: 'docs/specs/v2/04_modules/03_employees_and_skills.md' },
   '/admin/skills':     { title: 'Catálogo de Skills',  sprint: 'Sprint 3', spec: 'docs/specs/v2/04_modules/03_employees_and_skills.md' },
+  '/admin/squads':     { title: 'Squads',              sprint: 'Sprint 1', spec: 'docs/specs/v2/02_glossary_and_roles.md' },
 };
 
 export default function ComingSoon() {

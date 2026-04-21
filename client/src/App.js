@@ -1,7 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link, useParams } from 'react-router-dom';
 import * as api from './utils/api';
-import { AuthProvider, useAuth } from './AuthContext';
 import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
 import ProjectEditor from './ProjectEditor';
 import Wiki from './Wiki';
@@ -25,14 +24,51 @@ import ContractDetail from './modules/ContractDetail';
 import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import BulkImport from './modules/BulkImport';
-import Users from './modules/Users';
 import './App.css';
+
+/* ========== AUTH CONTEXT ========== */
+const AuthCtx = createContext();
+const useAuth = () => useContext(AuthCtx);
+
+function AuthProvider({ children }) {
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [params, setParams] = useState(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem('dvpnyx_token');
+    if (token) {
+      // Fetch user and params concurrently, then set both in the same state update
+      Promise.all([api.getMe(), api.getParams()])
+        .then(([u, p]) => { setUser(u); setParams(p); })
+        .catch(() => localStorage.removeItem('dvpnyx_token'))
+        .finally(() => setLoading(false));
+    } else setLoading(false);
+  }, []);
+
+  // Returns { user, params } — caller is responsible for calling commitLogin
+  // so all state (user, params, changePw) is set in the same React batch.
+  const doLogin = async (email, pw) => {
+    const { token, user: u } = await api.login(email, pw);
+    localStorage.setItem('dvpnyx_token', token);
+    const p = await api.getParams();
+    return { user: u, params: p };
+  };
+  // Commit user + params atomically (called by Login after doLogin resolves)
+  const commitLogin = (u, p) => { setUser(u); setParams(p); };
+  const doLogout = () => { localStorage.removeItem('dvpnyx_token'); setUser(null); setParams(null); };
+  const refreshParams = async () => { const p = await api.getParams(); setParams(p); };
+  const isAdmin = user && ['admin', 'superadmin'].includes(user.role);
+
+  if (loading) return <div style={{ display: 'flex', height: '100vh', alignItems: 'center', justifyContent: 'center' }}><div style={{ color: 'var(--purple-dark)', fontSize: 18 }}>Cargando...</div></div>;
+  return <AuthCtx.Provider value={{ user, params, doLogin, commitLogin, doLogout, refreshParams, isAdmin }}>{children}</AuthCtx.Provider>;
+}
 
 /* ========== STYLES ========== */
 const css = {
   logo: { padding: '24px 20px 8px', fontFamily: 'Montserrat', fontWeight: 800, fontSize: 22, color: 'var(--teal)', letterSpacing: 1 },
   tagline: { padding: '0 20px 24px', fontSize: 10, color: '#998899', fontStyle: 'italic' },
-  nav: { flex: 1, padding: '0 12px', overflowY: 'auto', overflowX: 'hidden' },
+  nav: { flex: 1, padding: '0 12px' },
   navItem: (active) => ({ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 500, marginBottom: 2, textDecoration: 'none', color: active ? '#fff' : '#ccbbcc', background: active ? 'rgba(0,216,212,0.15)' : 'transparent', transition: 'all .15s' }),
   card: { background: '#fff', borderRadius: 12, border: '1px solid var(--border)', padding: '24px', marginBottom: 20 },
   btn: (color = 'var(--purple-dark)') => ({ background: color, color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'opacity .15s' }),
@@ -85,6 +121,7 @@ function Layout() {
         ...(isAdmin ? [
           { path: '/admin/areas',  label: '🧭 Áreas' },
           { path: '/admin/skills', label: '🏷 Skills' },
+          // Squads ship in v2.1 — the default squad is managed by migrate_v2_data.js today
         ] : []),
       ],
     },
@@ -154,7 +191,7 @@ function Layout() {
           <Route path="/quotation/:id" element={<QuotationRouter />} />
           <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
-          {isAdmin && <Route path="/admin/users" element={<Users />} />}
+          {isAdmin && <Route path="/admin/users" element={<AdminUsers />} />}
           {isAdmin && <Route path="/admin/bulk-import" element={<BulkImport />} />}
           {/* V2 modules — placeholders until they ship in later sprints */}
           <Route path="/clients" element={<Clients />} />
@@ -570,6 +607,134 @@ function AdminParams() {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ========== ADMIN USERS ========== */
+function AdminUsers() {
+  const { user } = useAuth();
+  const [users, setUsers] = useState([]);
+  const [showNew, setShowNew] = useState(false);
+  const [form, setForm] = useState({ email: '', name: '', role: 'preventa', password: '000000' });
+
+  useEffect(() => { api.getUsers().then(setUsers).catch(console.error); }, []);
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    try {
+      await api.createUser(form);
+      const u = await api.getUsers();
+      setUsers(u);
+      setShowNew(false);
+      setForm({ email: '', name: '', role: 'preventa', password: '000000' });
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
+  const handleReset = async (id) => {
+    if (window.confirm('¿Resetear contraseña a 000000?')) {
+      await api.resetUserPassword(id);
+      alert('Contraseña reseteada');
+    }
+  };
+
+  const handleToggle = async (id, active) => {
+    await api.updateUser(id, { active: !active });
+    setUsers(users.map(u => u.id === id ? { ...u, active: !active } : u));
+  };
+
+  const handleRoleChange = async (id, role) => {
+    try {
+      const updated = await api.updateUser(id, { role });
+      setUsers(users.map(u => u.id === id ? { ...u, role: updated.role } : u));
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
+  const handleDelete = async (u) => {
+    if (!window.confirm(`¿Eliminar permanentemente a ${u.name} (${u.email})? Esta acción no se puede deshacer.`)) return;
+    try {
+      await api.deleteUser(u.id);
+      setUsers(users.filter(x => x.id !== u.id));
+    } catch (e) { alert('Error: ' + e.message); }
+  };
+
+  const isSuperadmin = user.role === 'superadmin';
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1 style={{ fontSize: 24, color: 'var(--purple-dark)' }}>👤 Gestión de Usuarios</h1>
+        <button style={css.btn('var(--teal-mid)')} onClick={() => setShowNew(true)}>+ Nuevo usuario</button>
+      </div>
+
+      {showNew && (
+        <div style={{ ...css.card, border: '2px solid var(--teal)', marginBottom: 20 }}>
+          <h3 style={{ fontSize: 14, color: 'var(--teal-mid)', marginBottom: 12 }}>Nuevo Usuario</h3>
+          <form onSubmit={handleCreate} className="users-form-grid">
+            <div><label style={css.label}>Nombre</label><input style={css.input} required value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
+            <div><label style={css.label}>Email</label><input style={css.input} type="email" required value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></div>
+            <div><label style={css.label}>Rol</label>
+              <select style={{ ...css.select, width: '100%' }} value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
+                <option value="preventa">Pre-venta</option>
+                {user.role === 'superadmin' && <option value="admin">Administrador</option>}
+              </select>
+            </div>
+            <div><label style={css.label}>Contraseña inicial</label><input style={css.input} value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="submit" style={css.btn('var(--success)')}>Crear</button>
+              <button type="button" style={css.btnOutline} onClick={() => setShowNew(false)}>Cancelar</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <div style={css.card}>
+        <div className="table-wrapper">
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>{['Nombre', 'Email', 'Rol', 'Estado', 'Creado', 'Acciones'].map(h => <th key={h} style={css.th}>{h}</th>)}</tr></thead>
+            <tbody>{users.map(u => {
+              // A superadmin row, the current user's own row, can't have role changed / be deleted
+              const isProtected = u.role === 'superadmin' || u.id === user.id;
+              const canEditRole = isSuperadmin && !isProtected;
+              return (
+              <tr key={u.id}>
+                <td style={{ ...css.td, fontWeight: 600 }}>{u.name}</td>
+                <td style={css.td}>{u.email}</td>
+                <td style={css.td}>
+                  {canEditRole ? (
+                    <select
+                      style={{ ...css.select, fontSize: 12, padding: '4px 8px' }}
+                      value={u.role}
+                      onChange={e => handleRoleChange(u.id, e.target.value)}
+                      aria-label={`Rol de ${u.name}`}
+                    >
+                      <option value="preventa">Pre-venta</option>
+                      <option value="admin">Administrador</option>
+                    </select>
+                  ) : (
+                    <span style={css.badge(u.role === 'superadmin' ? 'var(--purple-dark)' : u.role === 'admin' ? 'var(--teal-mid)' : 'var(--orange)')}>{u.role}</span>
+                  )}
+                </td>
+                <td style={css.td}><span style={css.badge(u.active ? 'var(--success)' : 'var(--danger)')}>{u.active ? 'Activo' : 'Inactivo'}</span></td>
+                <td style={css.td}>{new Date(u.created_at).toLocaleDateString('es-CO')}</td>
+                <td style={css.td}>
+                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    <button style={{ ...css.btnOutline, padding: '4px 8px', fontSize: 10 }} onClick={() => handleReset(u.id)}>Reset clave</button>
+                    <button style={{ ...css.btn(u.active ? 'var(--danger)' : 'var(--success)'), padding: '4px 8px', fontSize: 10 }} onClick={() => handleToggle(u.id, u.active)}>{u.active ? 'Desactivar' : 'Activar'}</button>
+                    {isSuperadmin && !isProtected && (
+                      <button
+                        style={{ ...css.btn('var(--danger)'), padding: '4px 8px', fontSize: 10 }}
+                        onClick={() => handleDelete(u)}
+                        aria-label={`Eliminar ${u.name}`}
+                      >Eliminar</button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            );})}</tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }

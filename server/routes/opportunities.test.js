@@ -193,20 +193,14 @@ describe('POST /api/opportunities', () => {
     expect(insertParams[5]).toBe('s-from-user');   // squad pulled from users table
   });
 
-  it('self-heals by auto-creating the default squad when the user has none', async () => {
-    // Squads are internal (hidden from UI). When the user has no squad AND
-    // no default squad exists yet, the route auto-creates "DVPNYX Global".
-    queryQueue.push({ rows: [{ id: 'c1', active: true }] });    // client
-    queryQueue.push({ rows: [{ squad_id: null }] });            // user squad
-    queryQueue.push({ rows: [] });                              // no default squad
-    queryQueue.push({ rows: [{ id: 's-auto' }] });              // INSERT default squad
-    queryQueue.push({ rows: [{ id: 'o-new', name: 'Deal A', client_id: 'c1', status: 'open' }] });
+  it('returns 400 when the user has no squad assigned and none is provided', async () => {
+    queryQueue.push({ rows: [{ id: 'c1', active: true }] });
+    queryQueue.push({ rows: [{ squad_id: null }] });
     const res = await client.call('POST', '/api/opportunities', {
       client_id: 'c1', name: 'Deal A',
     });
-    expect(res.status).toBe(201);
-    const insertParams = issuedQueries[issuedQueries.length - 1].params;
-    expect(insertParams[5]).toBe('s-auto'); // opportunity inserted with auto-created squad
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/squad/i);
   });
 
   it('creates an opportunity and emits opportunity.created', async () => {

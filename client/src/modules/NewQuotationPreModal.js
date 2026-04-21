@@ -6,8 +6,8 @@
  * Minimal viable UX:
  *  - Cliente dropdown (active only, up to 100). Fallback: link to /clients.
  *  - Oportunidad dropdown filtered by the selected cliente.
- *  - "+ Nueva oportunidad" inline sub-form (captures name; owner
- *    defaults server-side from req.user).
+ *  - "+ Nueva oportunidad" inline sub-form (captures name; owner/squad
+ *    default server-side from req.user).
  *
  * Picking a client does NOT auto-create legacy data — that migration
  * is handled by `migrate_v2_data.js` at infra level.
