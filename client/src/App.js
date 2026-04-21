@@ -33,6 +33,7 @@ import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import BulkImport from './modules/BulkImport';
 import Users from './modules/Users';
+import Preferencias from './modules/Preferencias';
 import './theme.css';
 import './App.css';
 
@@ -173,6 +174,7 @@ function Layout() {
           <Route path="/dashboard/me" element={<DashboardMe />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
+          <Route path="/preferencias" element={<Preferencias />} />
         </Routes>
         <Footer />
       </div>

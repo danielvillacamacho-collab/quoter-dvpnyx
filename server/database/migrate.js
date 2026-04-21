@@ -452,6 +452,10 @@ const V2_ALTERS = `
   ALTER TABLE users ADD COLUMN IF NOT EXISTS squad_id UUID NULL REFERENCES squads(id);
   ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
 
+  -- Phase 10 UI refresh: per-user UI preferences (scheme, accent hue, density, …).
+  -- JSONB so we can add more keys later without another migration.
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'::jsonb;
+
   -- Drop old role CHECK (was superadmin/admin/preventa) and add the V2 one.
   -- We keep 'preventa' valid during migration so V1 data doesn't break; data
   -- migration script will convert 'preventa' → 'member' with function='preventa'.
