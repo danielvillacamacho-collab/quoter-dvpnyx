@@ -22,30 +22,45 @@ import CandidatesModal from './CandidatesModal';
 const WEEK_COL_WIDTH = 110;
 const LEFT_COL_WIDTH = 220;
 
+/**
+ * Utilization buckets. Visual language ported to the design-handoff
+ * OKLCH tokens (--ds-*) so the Planner inherits the same accent /
+ * semantic palette as the rest of the app shell. The legacy `--bg-soft`
+ * fallback is kept so existing snapshots / downstream consumers that
+ * predate the tokens don't silently break.
+ */
 const BUCKET_STYLES = {
-  idle:       { bg: 'var(--bg-soft, #f4f5f7)', color: '#6b7280' },
-  light:      { bg: '#fff4dd', color: '#8a5a00' },
-  healthy:    { bg: '#dff5e6', color: '#106b34' },
-  overbooked: { bg: '#fbdcdc', color: '#9a1e1e' },
+  idle:       { bg: 'var(--ds-bg-soft, #f4f5f7)',  color: 'var(--ds-text-dim, #6b7280)' },
+  light:      { bg: 'var(--ds-warn-soft, #fff4dd)', color: 'oklch(0.45 0.12 80)' },
+  healthy:    { bg: 'var(--ds-ok-soft, #dff5e6)',   color: 'oklch(0.4 0.12 155)' },
+  overbooked: { bg: 'var(--ds-bad-soft, #fbdcdc)',  color: 'oklch(0.45 0.18 25)' },
 };
 
 const s = {
-  page: { padding: '20px 24px 40px', fontFamily: 'inherit' },
-  h1: { margin: 0, fontSize: 22, color: 'var(--purple-dark)', fontFamily: 'Montserrat' },
-  sub: { margin: '4px 0 16px', fontSize: 13, color: 'var(--text-light)' },
+  page: { padding: '20px 24px 40px', fontFamily: 'var(--font-ui, inherit)' },
+  h1: { margin: 0, fontSize: 22, color: 'var(--purple-dark)', fontFamily: 'Montserrat', letterSpacing: '-0.01em' },
+  sub: { margin: '4px 0 16px', fontSize: 13, color: 'var(--ds-text-dim, var(--text-light))' },
 
   metrics: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 20 },
-  card: (accent) => ({ background: '#fff', borderLeft: `4px solid ${accent}`, borderRadius: 10, padding: '14px 16px', boxShadow: '0 1px 3px rgba(0,0,0,.05)' }),
-  cardLabel: { fontSize: 11, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 4 },
-  cardValue: { fontSize: 24, fontWeight: 700, color: 'var(--text, #1b1b1b)', fontFamily: 'Montserrat' },
-  cardHint: { fontSize: 11, color: 'var(--text-light)', marginTop: 2 },
+  card: (accent) => ({
+    background: 'var(--ds-surface, #fff)',
+    borderLeft: `3px solid ${accent}`,
+    border: '1px solid var(--ds-border, #eee)',
+    borderLeftWidth: 3,
+    borderRadius: 'var(--ds-radius-lg, 10px)',
+    padding: '14px 16px',
+    boxShadow: 'var(--ds-shadow-sm, 0 1px 3px rgba(0,0,0,.05))',
+  }),
+  cardLabel: { fontSize: 10.5, color: 'var(--ds-text-dim, var(--text-light))', textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 4, fontWeight: 500 },
+  cardValue: { fontSize: 24, fontWeight: 700, color: 'var(--ds-text, #1b1b1b)', fontFamily: 'var(--font-mono, Montserrat)', fontFeatureSettings: "'tnum'" },
+  cardHint: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
 
   toolbar: { display: 'flex', gap: 10, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' },
-  select: { padding: '6px 10px', border: '1px solid var(--border, #ddd)', borderRadius: 6, fontSize: 13, background: '#fff' },
-  input: { padding: '6px 10px', border: '1px solid var(--border, #ddd)', borderRadius: 6, fontSize: 13, minWidth: 180 },
-  btn: { padding: '6px 12px', border: '1px solid var(--border, #ddd)', borderRadius: 6, background: '#fff', cursor: 'pointer', fontSize: 13 },
+  select: { padding: '5px 10px', border: '1px solid var(--ds-border, #ddd)', borderRadius: 'var(--ds-radius, 6px)', fontSize: 12.5, background: 'var(--ds-surface, #fff)', color: 'var(--ds-text)', fontFamily: 'var(--font-ui, inherit)' },
+  input: { padding: '5px 10px', border: '1px solid var(--ds-border, #ddd)', borderRadius: 'var(--ds-radius, 6px)', fontSize: 12.5, minWidth: 180, background: 'var(--ds-surface, #fff)', color: 'var(--ds-text)', fontFamily: 'var(--font-ui, inherit)' },
+  btn: { padding: '5px 11px', border: '1px solid var(--ds-border, #ddd)', borderRadius: 'var(--ds-radius, 6px)', background: 'var(--ds-surface, #fff)', cursor: 'pointer', fontSize: 12.5, color: 'var(--ds-text)', fontWeight: 500 },
 
-  frame: { border: '1px solid var(--border, #e5e5e5)', borderRadius: 10, background: '#fff', overflow: 'hidden' },
+  frame: { border: '1px solid var(--ds-border, #e5e5e5)', borderRadius: 'var(--ds-radius-lg, 10px)', background: 'var(--ds-surface, #fff)', overflow: 'hidden' },
   scroller: { overflowX: 'auto', position: 'relative' },
   grid: { display: 'grid', gridAutoRows: 'min-content', minWidth: '100%' },
 
@@ -57,22 +72,22 @@ const s = {
     color: '#fff',
   }),
   headCell: { padding: '10px 8px', fontSize: 11, borderLeft: '1px solid rgba(255,255,255,.1)', textAlign: 'center' },
-  headCellWeek: { fontWeight: 700, fontSize: 12 },
-  headCellDate: { fontSize: 10, opacity: 0.8 },
+  headCellWeek: { fontWeight: 700, fontSize: 12, fontFamily: 'var(--font-mono, inherit)', fontFeatureSettings: "'tnum'" },
+  headCellDate: { fontSize: 10, opacity: 0.75 },
 
   row: (weeksLen) => ({
     display: 'grid',
     gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
-    borderTop: '1px solid var(--border, #eee)',
+    borderTop: '1px solid var(--ds-border, #eee)',
     minHeight: 72,
   }),
-  empCell: { padding: '10px 12px', borderRight: '1px solid var(--border, #eee)', background: '#fafafa', position: 'sticky', left: 0, zIndex: 2 },
-  empName: { fontSize: 13, fontWeight: 600, color: 'var(--text, #1b1b1b)' },
-  empMeta: { fontSize: 11, color: 'var(--text-light)', marginTop: 2 },
-  empCap: { fontSize: 10, color: 'var(--text-light)', marginTop: 4 },
+  empCell: { padding: '10px 12px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-bg-soft, #fafafa)', position: 'sticky', left: 0, zIndex: 2 },
+  empName: { fontSize: 13, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)' },
+  empMeta: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
+  empCap: { fontSize: 10, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 4, fontFamily: 'var(--font-mono, inherit)' },
 
   weekCell: (bg) => ({
-    borderLeft: '1px solid var(--border, #f0f0f0)',
+    borderLeft: '1px solid var(--ds-border, #f0f0f0)',
     padding: 6, position: 'relative',
     display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'flex-start',
     background: bg,
@@ -82,27 +97,29 @@ const s = {
     borderRadius: 4, padding: '3px 6px',
     fontSize: 10, fontWeight: 600,
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-    boxShadow: '0 1px 2px rgba(0,0,0,.1)',
+    boxShadow: 'var(--ds-shadow-sm, 0 1px 2px rgba(0,0,0,.1))',
   }),
   chip: (bucket) => ({
     marginTop: 'auto',
     alignSelf: 'flex-start',
     fontSize: 10, fontWeight: 700,
-    padding: '2px 6px', borderRadius: 10,
+    padding: '1px 7px', borderRadius: 10,
     background: BUCKET_STYLES[bucket]?.bg || BUCKET_STYLES.idle.bg,
     color:      BUCKET_STYLES[bucket]?.color || BUCKET_STYLES.idle.color,
+    fontFamily: 'var(--font-mono, inherit)',
+    fontFeatureSettings: "'tnum'",
   }),
 
   unassignedRow: (weeksLen) => ({
     display: 'grid',
     gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
-    borderTop: '2px dashed var(--border, #ddd)',
-    background: 'repeating-linear-gradient(45deg, #fffbea, #fffbea 10px, #fff7d6 10px, #fff7d6 20px)',
+    borderTop: '2px dashed var(--ds-border, #ddd)',
+    background: 'var(--ds-warn-soft, #fffbea)',
     minHeight: 56,
   }),
-  unassignedCell: { padding: '8px 12px', borderRight: '1px solid var(--border, #eee)', position: 'sticky', left: 0, background: '#fff8e6', zIndex: 2 },
-  unassignedTitle: { fontSize: 12, fontWeight: 600, color: '#8a5a00' },
-  unassignedMeta: { fontSize: 10, color: '#a07000', marginTop: 2 },
+  unassignedCell: { padding: '8px 12px', borderRight: '1px solid var(--ds-border, #eee)', position: 'sticky', left: 0, background: 'var(--ds-warn-soft, #fff8e6)', zIndex: 2 },
+  unassignedTitle: { fontSize: 12, fontWeight: 600, color: 'oklch(0.45 0.12 80)' },
+  unassignedMeta: { fontSize: 10, color: 'oklch(0.5 0.1 80)', marginTop: 2 },
   unassignedBar: (color) => ({
     background: 'transparent',
     border: `1.5px dashed ${color}`,
@@ -112,24 +129,24 @@ const s = {
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   }),
 
-  empty: { padding: 40, textAlign: 'center', color: 'var(--text-light)', fontSize: 14 },
-  error: { padding: 16, background: '#fff0f0', color: '#9a1e1e', borderRadius: 8, fontSize: 13 },
-  loading: { padding: 40, textAlign: 'center', color: 'var(--text-light)' },
+  empty: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))', fontSize: 14 },
+  error: { padding: 16, background: 'var(--ds-bad-soft, #fff0f0)', color: 'oklch(0.45 0.18 25)', borderRadius: 'var(--ds-radius, 8px)', fontSize: 13 },
+  loading: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))' },
 
   // US-PLN-6 alerts strip
-  alertsBox: { marginBottom: 14, border: '1px solid var(--border, #e5e5e5)', borderRadius: 10, background: '#fff', overflow: 'hidden' },
-  alertsHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: '#faf7ff', borderBottom: '1px solid var(--border, #eee)', fontSize: 12, color: 'var(--purple-dark, #3b1d52)', fontWeight: 700 },
+  alertsBox: { marginBottom: 14, border: '1px solid var(--ds-border, #e5e5e5)', borderRadius: 'var(--ds-radius-lg, 10px)', background: 'var(--ds-surface, #fff)', overflow: 'hidden' },
+  alertsHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', background: 'var(--ds-accent-soft, #faf7ff)', borderBottom: '1px solid var(--ds-border, #eee)', fontSize: 12, color: 'var(--ds-accent-text, var(--purple-dark))', fontWeight: 600, letterSpacing: '0.02em' },
   alertsList: { maxHeight: 200, overflowY: 'auto' },
   alertItem: (sev) => ({
     display: 'flex', alignItems: 'center', gap: 10,
-    padding: '8px 14px', borderTop: '1px solid var(--border, #f1f1f1)',
+    padding: '8px 14px', borderTop: '1px solid var(--ds-border, #f1f1f1)',
     cursor: 'pointer', fontSize: 12,
-    background: sev === 'red' ? '#fff5f5' : '#fffaf0',
-    color: sev === 'red' ? '#9a1e1e' : '#8a5a00',
+    background: sev === 'red' ? 'var(--ds-bad-soft, #fff5f5)' : 'var(--ds-warn-soft, #fffaf0)',
+    color: sev === 'red' ? 'oklch(0.45 0.18 25)' : 'oklch(0.45 0.12 80)',
   }),
   alertDot: (sev) => ({
     width: 8, height: 8, borderRadius: '50%',
-    background: sev === 'red' ? '#d9534f' : '#e3a008',
+    background: sev === 'red' ? 'var(--ds-bad, #d9534f)' : 'var(--ds-warn, #e3a008)',
     flexShrink: 0,
   }),
   alertType: { fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, opacity: 0.8, minWidth: 90 },
@@ -137,33 +154,33 @@ const s = {
   rowFlash: { animation: 'dvpnyxAlertFlash 1.6s ease-out' },
 
   // US-PLN-4 projects view
-  toggle: { display: 'inline-flex', border: '1px solid var(--border, #ddd)', borderRadius: 6, overflow: 'hidden' },
+  toggle: { display: 'inline-flex', border: '1px solid var(--ds-border, #ddd)', borderRadius: 'var(--ds-radius, 6px)', overflow: 'hidden', background: 'var(--ds-surface, #fff)' },
   toggleBtn: (active) => ({
-    padding: '6px 12px', fontSize: 13, cursor: 'pointer',
+    padding: '5px 12px', fontSize: 12.5, cursor: 'pointer',
     border: 'none',
-    background: active ? 'var(--purple-dark, #3b1d52)' : '#fff',
-    color:      active ? '#fff' : 'var(--text, #1b1b1b)',
-    fontWeight: active ? 700 : 500,
+    background: active ? 'var(--ds-accent-soft, #faf7ff)' : 'var(--ds-surface, #fff)',
+    color:      active ? 'var(--ds-accent-text, var(--purple-dark))' : 'var(--ds-text-muted, #555)',
+    fontWeight: active ? 600 : 500,
   }),
   contractRow: (weeksLen) => ({
     display: 'grid',
     gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
-    borderTop: '2px solid var(--purple-dark, #3b1d52)',
+    borderTop: '2px solid var(--ds-accent-border, var(--purple-dark, #3b1d52))',
     minHeight: 60,
-    background: '#faf7ff',
+    background: 'var(--ds-accent-soft, #faf7ff)',
   }),
-  contractCell: { padding: '10px 12px', borderRight: '1px solid var(--border, #eee)', background: '#faf7ff', position: 'sticky', left: 0, zIndex: 2 },
-  contractName: { fontSize: 13, fontWeight: 700, color: 'var(--purple-dark, #3b1d52)', fontFamily: 'Montserrat' },
-  contractClient: { fontSize: 11, color: 'var(--text-light)', marginTop: 2 },
+  contractCell: { padding: '10px 12px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-accent-soft, #faf7ff)', position: 'sticky', left: 0, zIndex: 2 },
+  contractName: { fontSize: 13, fontWeight: 700, color: 'var(--ds-accent-text, var(--purple-dark))', fontFamily: 'Montserrat', letterSpacing: '-0.005em' },
+  contractClient: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
   requestSubRow: (weeksLen) => ({
     display: 'grid',
     gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
-    borderTop: '1px solid var(--border, #eee)',
+    borderTop: '1px solid var(--ds-border, #eee)',
     minHeight: 52,
   }),
-  requestSubCell: { padding: '8px 12px 8px 28px', borderRight: '1px solid var(--border, #eee)', background: '#fff', position: 'sticky', left: 0, zIndex: 2 },
-  requestTitle: { fontSize: 12, fontWeight: 600, color: 'var(--text, #1b1b1b)' },
-  requestMeta: { fontSize: 10, color: 'var(--text-light)', marginTop: 2 },
+  requestSubCell: { padding: '8px 12px 8px 28px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-surface, #fff)', position: 'sticky', left: 0, zIndex: 2 },
+  requestTitle: { fontSize: 12, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)' },
+  requestMeta: { fontSize: 10, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
 };
 
 const ALERT_TYPE_LABELS = {
