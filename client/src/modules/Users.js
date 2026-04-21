@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import * as api from '../utils/api';
 import { useAuth } from '../AuthContext';
+import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 
 /* ── constants ─────────────────────────────────────────────────── */
 const ASSIGNABLE_ROLES = ['admin', 'lead', 'member', 'viewer'];
@@ -64,8 +65,9 @@ const css = {
   label: { display: 'block', fontSize: 11, fontWeight: 700, color: 'var(--text-light)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
   input: { width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontFamily: 'Inter, sans-serif' },
   select: { padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)', fontSize: 13, fontFamily: 'Inter, sans-serif', background: '#fff' },
-  th: { padding: '10px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: '#fff', background: 'var(--purple-dark)', textTransform: 'uppercase', letterSpacing: 0.5 },
-  td: { padding: '10px 14px', fontSize: 13, borderBottom: '1px solid var(--border)', verticalAlign: 'middle' },
+  // UI refresh Phase 2 — table styles from shared DS tokens.
+  th: dsTh,
+  td: dsTd,
   badge: (color) => ({
     display: 'inline-block',
     padding: '2px 10px',
@@ -239,7 +241,7 @@ export default function Users() {
       {/* ── table ── */}
       <div style={css.card}>
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
                 {['Nombre', 'Email', 'Rol', 'Función', 'Estado', 'Desde', 'Acciones'].map(h => (
