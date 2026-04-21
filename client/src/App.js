@@ -259,6 +259,95 @@ function Login() {
 }
 
 /* ========== DASHBOARD ========== */
+/**
+ * Executive cockpit strip — renders above the quotations section on `/`.
+ *
+ * Pulls KPIs from `GET /api/dashboard/overview` (aggregated server-side in
+ * one round-trip). Fails soft: on error / loading / missing data it simply
+ * doesn't render, so the quotations view below keeps working exactly as
+ * before. That's the whole point — the strip is additive.
+ */
+function ExecutiveKpis() {
+  const [data, setData] = useState(null);
+  const [err, setErr]   = useState(null);
+  const nav = useNavigate();
+
+  useEffect(() => {
+    let live = true;
+    // Wrapped in async IIFE + try/catch so a mocked api (returns undefined
+    // in App.test.js auto-mock) or a failing fetch just hides the strip.
+    (async () => {
+      try {
+        const d = await api.getDashboardOverview();
+        if (live && d && typeof d === 'object') setData(d);
+      } catch (e) {
+        if (live) setErr(e?.message || 'Error');
+      }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  if (err || !data) return null; // fail-soft: hide strip, keep rest of dashboard intact.
+
+  const n = (v) => (typeof v === 'number' ? v : 0);
+  const fmtHours = (h) => `${Math.round(n(h))}h`;
+
+  const tile = {
+    background: 'var(--ds-surface, #fff)',
+    border: '1px solid var(--ds-border, #e5e5e5)',
+    borderRadius: 'var(--ds-radius-lg, 10px)',
+    padding: '14px 16px',
+    cursor: 'pointer',
+    transition: 'transform .1s ease, box-shadow .1s ease',
+    display: 'flex', flexDirection: 'column', gap: 4,
+  };
+  const label = { fontSize: 11, color: 'var(--ds-text-dim, #888)', textTransform: 'uppercase', letterSpacing: 0.4, fontWeight: 600 };
+  const value = { fontSize: 24, fontWeight: 700, fontFamily: 'Montserrat', color: 'var(--ds-text, #222)', lineHeight: 1.1 };
+  const sub   = { fontSize: 11, color: 'var(--ds-text-muted, #666)' };
+
+  const kpis = [
+    { k: 'assign',    label: 'Asignaciones activas', value: n(data.assignments?.active_count), sub: `${n(data.assignments?.planned_count)} planificadas`, go: '/assignments' },
+    { k: 'hours',     label: 'Horas comprometidas',  value: fmtHours(data.assignments?.weekly_hours), sub: 'semanal', go: '/capacity/planner' },
+    { k: 'requests',  label: 'Solicitudes abiertas', value: n(data.requests?.open_count),       sub: `${fmtHours(data.requests?.open_hours_weekly)} por cubrir`, go: '/resource-requests' },
+    { k: 'bench',     label: 'Bench',                 value: n(data.employees?.bench),           sub: `${n(data.employees?.total)} empleados`, go: '/employees' },
+    { k: 'pipeline',  label: 'Pipeline comercial',    value: n(data.opportunities?.pipeline_count), sub: `${n(data.contracts?.active_count)} contratos activos`, go: '/opportunities' },
+    { k: 'quots',     label: 'Cotizaciones',          value: n(data.quotations?.total),          sub: `${n(data.quotations?.by_status?.sent || 0)} enviadas`, go: null },
+  ];
+
+  return (
+    <section
+      aria-label="Indicadores ejecutivos"
+      data-testid="exec-kpis"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: 12,
+        marginBottom: 20,
+      }}
+    >
+      {kpis.map((k) => (
+        <div
+          key={k.k}
+          role={k.go ? 'button' : undefined}
+          tabIndex={k.go ? 0 : undefined}
+          aria-label={k.go ? `${k.label}: ${k.value}. Ir a ${k.go}` : undefined}
+          style={tile}
+          onClick={() => k.go && nav(k.go)}
+          onKeyDown={(e) => {
+            if (!k.go) return;
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); nav(k.go); }
+          }}
+          data-testid={`kpi-${k.k}`}
+        >
+          <div style={label}>{k.label}</div>
+          <div style={value}>{k.value}</div>
+          <div style={sub}>{k.sub}</div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function Dashboard() {
   const [quots, setQuots] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -276,6 +365,7 @@ function Dashboard() {
 
   return (
     <div>
+      <ExecutiveKpis />
       <div className="page-header">
         <h1 style={{ fontSize: 24, color: 'var(--purple-dark)' }}>Cotizaciones</h1>
         <div className="page-header-actions">

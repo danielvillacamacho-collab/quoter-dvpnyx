@@ -34,6 +34,7 @@ app.use('/api/assignments',       require('./routes/assignments'));  // ✅ Spri
 app.use('/api/capacity',          require('./routes/capacity'));     // ✅ Sprint 6 US-BK-1 (planner)
 app.use('/api/time-entries',      require('./routes/time_entries')); // ✅ Sprint 5 ET-*
 app.use('/api/reports',           require('./routes/reports'));      // ✅ Sprint 6 EI-* / ED-1
+app.use('/api/dashboard',         require('./routes/dashboard'));    // ✅ Executive Dashboard v2
 app.use('/api/bulk-import',       require('./routes/bulk_import'));  // ✅ Sprint 9 (admin+)
 app.use('/api/squads',            _stubs.squads);
 app.use('/api/events',            _stubs.events);
