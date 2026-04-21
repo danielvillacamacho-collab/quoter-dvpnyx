@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import CapacityPlanner from './CapacityPlanner';
 import * as apiV2 from '../utils/apiV2';
 
@@ -77,7 +77,21 @@ const plannerResponse = () => ({
   filters_applied: { contract_id: null, area_id: null, level_min: null, level_max: null, search: null },
 });
 
-const mount = () => render(<MemoryRouter><CapacityPlanner /></MemoryRouter>);
+// Helper used by some tests to read the current URL from the router.
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc" data-pathname={loc.pathname} data-search={loc.search} />;
+}
+
+const mount = (initialEntry = '/capacity/planner') =>
+  render(
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/capacity/planner" element={<><CapacityPlanner /><LocationProbe /></>} />
+        <Route path="/resource-requests" element={<LocationProbe />} />
+      </Routes>
+    </MemoryRouter>,
+  );
 
 beforeEach(() => {
   jest.resetAllMocks();
@@ -121,7 +135,7 @@ describe('CapacityPlanner module', () => {
     expect(screen.getByText(/faltan 2/)).toBeInTheDocument();
   });
 
-  it('sends contract_id and search filters to the API', async () => {
+  it('sends contract_id and search filters to the API and syncs the URL', async () => {
     mount();
     await screen.findByTestId('emp-row-e1');
 
@@ -129,10 +143,55 @@ describe('CapacityPlanner module', () => {
     await waitFor(() => {
       expect(apiV2.apiGet.mock.calls.some((c) => String(c[0]).includes('contract_id=ct1'))).toBe(true);
     });
+    expect(screen.getByTestId('loc').getAttribute('data-search')).toMatch(/contract_id=ct1/);
 
     fireEvent.change(screen.getByLabelText('Buscar empleado'), { target: { value: 'Ana' } });
     await waitFor(() => {
       expect(apiV2.apiGet.mock.calls.some((c) => String(c[0]).includes('search=Ana'))).toBe(true);
+    });
+    expect(screen.getByTestId('loc').getAttribute('data-search')).toMatch(/search=Ana/);
+  });
+
+  it('hydrates filters from the URL on first render', async () => {
+    mount('/capacity/planner?start=2026-04-20&weeks=4&contract_id=ct1&search=Ana');
+    await waitFor(() => {
+      const lastPlannerCall = apiV2.apiGet.mock.calls
+        .map((c) => String(c[0]))
+        .filter((u) => u.startsWith('/api/capacity/planner'))
+        .pop();
+      expect(lastPlannerCall).toMatch(/start=2026-04-20/);
+      expect(lastPlannerCall).toMatch(/weeks=4/);
+      expect(lastPlannerCall).toMatch(/contract_id=ct1/);
+      expect(lastPlannerCall).toMatch(/search=Ana/);
+    });
+    // Controls reflect the URL
+    expect(screen.getByLabelText('Filtro contrato')).toHaveValue('ct1');
+    expect(screen.getByLabelText('Buscar empleado')).toHaveValue('Ana');
+  });
+
+  it('clicking an unassigned row navigates to /resource-requests with contract+request params', async () => {
+    mount();
+    const row = await screen.findByTestId('unassigned-row-rr9');
+    fireEvent.click(row);
+    await waitFor(() => {
+      const probes = screen.getAllByTestId('loc');
+      // After navigation we render the resource-requests route (which only
+      // contains the probe), so the last probe is the RR one.
+      const last = probes[probes.length - 1];
+      expect(last.getAttribute('data-pathname')).toBe('/resource-requests');
+      expect(last.getAttribute('data-search')).toMatch(/contract_id=ct3/);
+      expect(last.getAttribute('data-search')).toMatch(/request_id=rr9/);
+    });
+  });
+
+  it('"Limpiar filtros" resets all filter params in the URL', async () => {
+    mount('/capacity/planner?start=2026-04-20&contract_id=ct1&search=Ana');
+    const clearBtn = await screen.findByRole('button', { name: /Limpiar filtros/i });
+    fireEvent.click(clearBtn);
+    await waitFor(() => {
+      const search = screen.getByTestId('loc').getAttribute('data-search');
+      expect(search).not.toMatch(/contract_id=/);
+      expect(search).not.toMatch(/search=/);
     });
   });
 
