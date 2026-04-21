@@ -242,7 +242,11 @@ describe('Layout — hamburger sidebar', () => {
     fireEvent.click(screen.getByLabelText('Menú'));
     expect(document.querySelector('.sidebar')).toHaveClass('open');
 
-    fireEvent.click(screen.getByText('📊 Dashboard'));
+    // The sidebar was rebuilt as a lucide-icon + text component (Phase 3
+    // of the UI refresh), so labels no longer include emoji prefixes.
+    // Click the Dashboard link inside the sidebar; the <nav> inside the
+    // Topbar's breadcrumb doesn't expose it, so this remains unambiguous.
+    fireEvent.click(screen.getByRole('link', { name: /^Dashboard$/ }));
     expect(document.querySelector('.sidebar')).not.toHaveClass('open');
   });
 });

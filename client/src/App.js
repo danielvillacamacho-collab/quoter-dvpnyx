@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useLocation, Link, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import { AuthProvider, useAuth } from './AuthContext';
 import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
@@ -7,6 +7,7 @@ import ProjectEditor from './ProjectEditor';
 import Wiki from './Wiki';
 import Footer from './shell/Footer';
 import Topbar from './shell/Topbar';
+import Sidebar from './shell/Sidebar';
 import CommandPalette from './shell/CommandPalette';
 import NotificationsDrawer from './shell/NotificationsDrawer';
 import { apiGet } from './utils/apiV2';
@@ -56,7 +57,6 @@ const css = {
 /* ========== LAYOUT ========== */
 function Layout() {
   const { user, doLogout, isAdmin } = useAuth();
-  const loc = useLocation();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -95,64 +95,6 @@ function Layout() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // Sidebar is organized in groups. Groups 2+ route to ComingSoon screens
-  // until their corresponding module ships. Visibility is role-based; fine-
-  // grained visibility by function lands when users.function is populated.
-  const groups = [
-    {
-      title: null, items: [
-        { path: '/', label: '📊 Dashboard' },
-      ],
-    },
-    {
-      title: 'Comercial', items: [
-        { path: '/quotation/new/staff_aug', label: '👥 Nueva Staff Aug' },
-        { path: '/quotation/new/fixed_scope', label: '📋 Nuevo Proyecto' },
-        { path: '/clients', label: '🏢 Clientes' },
-        { path: '/opportunities', label: '💼 Oportunidades' },
-      ],
-    },
-    {
-      title: 'Delivery', items: [
-        { path: '/contracts', label: '📑 Contratos' },
-        { path: '/resource-requests', label: '🧾 Solicitudes' },
-        { path: '/assignments', label: '🗓 Asignaciones' },
-        { path: '/capacity/planner', label: '📅 Planner' },
-      ],
-    },
-    {
-      title: 'Gente', items: [
-        { path: '/employees', label: '🧑‍💻 Empleados' },
-        ...(isAdmin ? [
-          { path: '/admin/areas',  label: '🧭 Áreas' },
-          { path: '/admin/skills', label: '🏷 Skills' },
-        ] : []),
-      ],
-    },
-    {
-      title: 'Time Tracking', items: [
-        { path: '/time/me',   label: '⏱ Mis horas' },
-        { path: '/time/team', label: '📈 Horas del equipo' },
-      ],
-    },
-    {
-      title: null, items: [
-        { path: '/reports', label: '📊 Reportes' },
-        { path: '/wiki',    label: '📚 Wiki' },
-      ],
-    },
-    ...(isAdmin ? [{
-      title: 'Configuración', items: [
-        { path: '/admin/params',      label: '⚙️ Parámetros' },
-        { path: '/admin/users',       label: '👤 Usuarios' },
-        { path: '/admin/bulk-import', label: '📤 Carga masiva' },
-      ],
-    }] : []),
-  ];
-  // Flattened version kept for compatibility with existing tests and
-  // behavior (any component that expected `items` can still use it).
-  const items = groups.flatMap(g => g.items);
-
   const closeSidebar = () => setSidebarOpen(false);
 
   if (!user) return <Navigate to="/login" />;
@@ -162,30 +104,13 @@ function Layout() {
 
       <div className={`sidebar-overlay${sidebarOpen ? ' open' : ''}`} onClick={closeSidebar} />
 
-      <div className={`sidebar${sidebarOpen ? ' open' : ''}`}>
-        <div style={css.logo}>DVPNYX</div>
-        <div style={css.tagline}>Unconventional People. Disruptive Tech.</div>
-        <nav style={css.nav}>
-          {groups.map((g, gi) => (
-            <React.Fragment key={gi}>
-              {g.title && (
-                <div style={{ padding: '10px 12px 4px', fontSize: 10, fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: 1 }}>
-                  {g.title}
-                </div>
-              )}
-              {g.items.map(i => (
-                <Link key={i.path} to={i.path} style={css.navItem(loc.pathname === i.path)} onClick={closeSidebar}>{i.label}</Link>
-              ))}
-            </React.Fragment>
-          ))}
-        </nav>
-        <div style={{ padding: '16px 20px', borderTop: '1px solid rgba(255,255,255,.1)' }}>
-          <div style={{ fontSize: 12, color: '#ccbbcc' }}>{user.name}</div>
-          <div style={{ fontSize: 10, color: '#998899' }}>{user.email}</div>
-          <div style={{ fontSize: 10, color: 'var(--teal)', marginTop: 2 }}>{user.role.toUpperCase()}</div>
-          <button onClick={() => { doLogout(); nav('/login'); }} style={{ ...css.btn('transparent'), padding: '6px 0', color: '#998899', fontSize: 11, marginTop: 8 }}>Cerrar sesión →</button>
-        </div>
-      </div>
+      <Sidebar
+        user={user}
+        isAdmin={isAdmin}
+        open={sidebarOpen}
+        onNavigate={closeSidebar}
+        onLogout={() => { doLogout(); nav('/login'); }}
+      />
 
       <div className="main-content">
         <Topbar
