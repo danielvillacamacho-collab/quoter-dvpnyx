@@ -1,5 +1,6 @@
 # Gap Analysis — Spec `historias_capacity_planning.docx`
 
+**Estado:** ✅ **ENTREGADO** — a la espera de feedback de preventa sobre develop.
 **Fecha:** 2026-04-22
 **Rama evaluada:** `develop` @ `df5a62f`
 **Evaluó:** CTO delegado (Claude) a pedido del lead de producto

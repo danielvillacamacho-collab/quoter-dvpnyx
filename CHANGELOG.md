@@ -15,6 +15,10 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ## [Unreleased] — entregas en curso
 
+### docs(specs): gap analysis — `historias_capacity_planning.docx` ENTREGADO (2026-04-22)
+
+Preventa compartió un spec marcado como urgente. Auditoría confirma que **15 de 16 historias ya estaban entregadas en Phases 7–12** (pre-handoff). Nuevo documento `docs/specs/GAP_ANALYSIS_capacity_planning_2026-04-22.md` recorre cada criterio de aceptación vs código real. 5 divergencias deliberadas identificadas que requieren decisión de preventa (ninguna es bug). Ticket marcado como entregado — a la espera de feedback de preventa sobre el estado actual en develop.
+
 ### feat(project-editor): editor unificado de proyectos + export xlsx/pdf (2026-04-22)
 
 Respuesta al pedido urgente de preventa (`spec_editor_proyectos.docx`).
