@@ -15,7 +15,16 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ## [Unreleased] — entregas en curso
 
-_Nada pendiente al momento de la entrega. Todas las 6 brechas del audit UI fueron cerradas (Fases 7 → 12)._
+### feat(project-editor): editor unificado de proyectos + export xlsx/pdf (2026-04-22)
+
+Respuesta al pedido urgente de preventa (`spec_editor_proyectos.docx`).
+
+- **Nuevo `ProjectEditorUnified`**: reemplaza el stepper de 6 pasos por una vista de página única con 3 zonas (info colapsable, equipo + matriz + épicas, resumen financiero sticky a la derecha). Recálculo en tiempo real sobre todos los campos, semáforo de margen (🟢 ≥ 50%, 🟡 40–50%, 🔴 < 40%) y overrides editables de buffer/garantía/margen/descuento persistidos en `metadata.financial_overrides`.
+- **Vista clásica como fallback**: toggle "Vista clásica / Vista unificada" con preferencia guardada en `localStorage` (`dvpnyx_project_editor_classic`). El editor original se preserva como `ProjectEditorClassic` sin cambios de comportamiento.
+- **Export**: nuevo endpoint `POST /api/quotations/:id/export?format=xlsx|pdf` — XLSX de 4 hojas (Resumen, Asignación, Pagos, Épicas) con desglose interno de costos, y PDF cliente-facing que omite intencionalmente `cost_hour`, buffer, garantía y margen (solo muestra tarifa/hora y precio final).
+- **Ownership**: creador, admin o superadmin. Usa `parameters_snapshot` si existe (EX-3), si no hace fallback a parámetros canónicos vivos.
+- **Dependencias**: `exceljs ^4.4.0` y `pdfkit ^0.15.0` agregadas al server (require perezoso — si faltan, el endpoint responde 503 sin tirar el proceso).
+- **Tests**: 9 nuevos tests cubren formato inválido, 404, 403 no-owner, admin-override, rechazo de staff_aug / sin perfiles / sin semanas, y headers correctos de xlsx/pdf (465/465 total verde).
 
 ---
 
