@@ -392,18 +392,25 @@ router.post('/:id/duplicate', async (req, res) => {
 });
 
 /**
- * Spec URGENTE (pre-venta, Abril 2026) — export a cotización lista para
- * enviar al comercial / cliente. Solo fixed_scope por ahora.
+ * Export a quotation as xlsx / pdf. Soporta ambos tipos:
+ *   - fixed_scope  → spec_editor_proyectos.docx Spec 2 (Abril 2026)
+ *   - staff_aug    → spec_capacity_editor.docx  Spec 4 (Abril 2026)
  *
  *   POST /api/quotations/:id/export?format=xlsx|pdf
  *
- * Reglas:
+ * Reglas comunes:
  *  - Solo `creado_por` o roles admin/superadmin pueden exportar.
- *  - Cotización debe tener al menos 1 perfil y 1 fase con weeks > 0.
- *  - El XLSX incluye el desglose interno (costo/hora, buffer, garantía,
- *    margen) porque es para ops / finanzas.
- *  - El PDF es una propuesta comercial y OMITE costos internos — solo
- *    muestra tarifa/hora y precio final.
+ *  - Ambos formatos requieren ≥1 recurso / perfil.
+ *  - El XLSX incluye desglose interno (costo/hora, buffer, margen) para
+ *    fixed_scope (ops / finanzas). Para staff_aug solo muestra la
+ *    composición del equipo y tarifa cliente-facing — NUNCA cost empresa.
+ *  - El PDF es siempre propuesta comercial cliente-facing (sin costos
+ *    internos). Para staff_aug omite stack/modalidad/herramientas.
+ *
+ * Validaciones específicas:
+ *  - fixed_scope: además requiere ≥1 fase con semanas > 0.
+ *  - staff_aug: además requiere que las líneas tengan tarifa mensual > 0
+ *    (es decir, que calc haya podido resolver nivel/país/stack).
  */
 router.post('/:id/export', async (req, res) => {
   try {
@@ -422,8 +429,8 @@ router.post('/:id/export', async (req, res) => {
       return res.status(403).json({ error: 'Sin permiso para exportar esta cotización' });
     }
 
-    if (quot.type !== 'fixed_scope') {
-      return res.status(400).json({ error: 'Solo se pueden exportar proyectos de alcance fijo' });
+    if (quot.type !== 'fixed_scope' && quot.type !== 'staff_aug') {
+      return res.status(400).json({ error: 'Tipo de cotización no soportado para exportar' });
     }
 
     const [linesR, phasesR, epicsR, milestonesR] = await Promise.all([
@@ -441,9 +448,19 @@ router.post('/:id/export', async (req, res) => {
       milestones: milestonesR.rows,
     };
 
-    if (!payload.lines.length) return res.status(400).json({ error: 'La cotización necesita al menos 1 perfil' });
-    if (!payload.phases.some((p) => Number(p.weeks || 0) > 0)) {
-      return res.status(400).json({ error: 'La cotización necesita al menos 1 fase con semanas > 0' });
+    if (quot.type === 'fixed_scope') {
+      if (!payload.lines.length) return res.status(400).json({ error: 'La cotización necesita al menos 1 perfil' });
+      if (!payload.phases.some((p) => Number(p.weeks || 0) > 0)) {
+        return res.status(400).json({ error: 'La cotización necesita al menos 1 fase con semanas > 0' });
+      }
+    } else {
+      // staff_aug: solo exige ≥1 recurso con tarifa > 0
+      if (!payload.lines.length) {
+        return res.status(400).json({ error: 'La cotización necesita al menos 1 recurso' });
+      }
+      if (!payload.lines.some((l) => Number(l.rate_month || 0) > 0)) {
+        return res.status(400).json({ error: 'La cotización necesita al menos 1 recurso con tarifa > 0' });
+      }
     }
 
     // Snapshot has priority over live params (freeze post-sent totals).

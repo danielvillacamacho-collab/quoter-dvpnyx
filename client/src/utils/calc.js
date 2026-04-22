@@ -9,8 +9,10 @@ export const calcCostHour = (level, country, bilingual, stack, params) => {
   return (Number(levelParam.value) / Number(hoursMonth)) * Number(geoParam.value) * Number(bilParam.value) * Number(stackParam.value);
 };
 
-export const calcRateHour = (costHour, params) => {
-  const margin = params.margin?.find(p => p.key === 'talent')?.value || 0.35;
+export const calcRateHour = (costHour, params, marginOverride) => {
+  const margin = marginOverride != null
+    ? Number(marginOverride)
+    : (params.margin?.find(p => p.key === 'talent')?.value || 0.35);
   return costHour / (1 - Number(margin));
 };
 
@@ -29,12 +31,12 @@ export const calcModalityFactor = (modality, params) => {
   return mod ? Number(mod.value) : 1;
 };
 
-export const calcStaffAugLine = (line, params) => {
+export const calcStaffAugLine = (line, params, marginOverride) => {
   if (!line.level || !line.country || !line.stack) return { ...line, cost_hour: 0, rate_hour: 0, rate_month: 0, total: 0 };
   const modalityFactor = calcModalityFactor(line.modality, params);
   const baseCostHour = calcCostHour(line.level, line.country, line.bilingual, line.stack, params);
   const costHour = baseCostHour * modalityFactor;
-  const rateHour = calcRateHour(costHour, params);
+  const rateHour = calcRateHour(costHour, params, marginOverride);
   const toolsCost = calcToolsCost(line.tools, params);
   const toolsRate = calcToolsRate(toolsCost, params);
   const rateMonth = rateHour * 160 + toolsRate;
