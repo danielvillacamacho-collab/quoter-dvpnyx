@@ -518,3 +518,69 @@
     padding: 20px 14px;
   }
 }
+
+/* ===== Unified Project Editor (Spec pre-venta, Abril 2026) =====
+   Layout 2 columnas en desktop: main 70% / side sticky 30%.
+   <1024px: single column + mobile footer fijo con los 3 números clave. */
+.project-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+.project-editor-main {
+  min-width: 0; /* evita que tablas anchas exploten el grid */
+}
+.project-editor-side {
+  position: sticky;
+  top: 16px;
+  align-self: start;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+.financial-summary-sticky {
+  /* el card interno ya lleva el sombreado + padding */
+}
+.project-editor-mobile-footer {
+  display: none;
+}
+@media (max-width: 1023px) {
+  .project-editor-grid {
+    grid-template-columns: 1fr;
+  }
+  .project-editor-side {
+    position: static;
+    max-height: none;
+  }
+  /* En mobile, el resumen sticky queda al flujo natural pero
+     además ponemos un footer fijo con los 3 números críticos. */
+  .project-editor-mobile-footer {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #fff;
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.08);
+    padding: 8px 12px;
+    justify-content: space-around;
+    z-index: 40;
+  }
+  .project-editor-mobile-footer > div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 10px;
+    color: var(--text-light);
+  }
+  .project-editor-mobile-footer strong {
+    font-size: 14px;
+    color: var(--text);
+    font-family: Montserrat, sans-serif;
+  }
+  /* Evita que el footer fijo tape el contenido */
+  .project-editor-unified {
+    padding-bottom: 64px;
+  }
+}

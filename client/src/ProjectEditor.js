@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
+import ProjectEditorUnified from './ProjectEditorUnified';
 import {
   calcProjectProfile,
   calcAllocation,
@@ -13,6 +14,14 @@ import {
   DEFAULT_PHASES,
   PHASE_COLORS,
 } from './utils/calc';
+
+/**
+ * Spec URGENTE — Editor de Proyectos (Abril 2026):
+ * por defecto ahora renderizamos la vista single-page; el stepper clásico
+ * queda como fallback accesible desde el toggle "Vista clásica" en el
+ * header. La preferencia del usuario se persiste en localStorage.
+ */
+const CLASSIC_PREF_KEY = 'dvpnyx_project_editor_classic';
 
 /* ========== shared tiny style helpers (not exhaustive) ========== */
 const s = {
@@ -679,6 +688,29 @@ function MetricCard({ value, label, color, sub }) {
 
 /* ========== MAIN PROJECT EDITOR ========== */
 export default function ProjectEditor({ params, context }) {
+  // Per-user preference: start in the unified editor unless the user opted
+  // back to the classic stepper (localStorage flag). Toggle is exposed in
+  // both views' headers so switching is reversible.
+  const [classicView, setClassicView] = useState(() => {
+    try { return localStorage.getItem(CLASSIC_PREF_KEY) === '1'; }
+    catch (_) { return false; }
+  });
+  const switchToClassic = useCallback(() => {
+    try { localStorage.setItem(CLASSIC_PREF_KEY, '1'); } catch (_) {}
+    setClassicView(true);
+  }, []);
+  const switchToUnified = useCallback(() => {
+    try { localStorage.removeItem(CLASSIC_PREF_KEY); } catch (_) {}
+    setClassicView(false);
+  }, []);
+
+  if (!classicView) {
+    return <ProjectEditorUnified params={params} context={context} onSwitchToClassic={switchToClassic} />;
+  }
+  return <ProjectEditorClassic params={params} context={context} onSwitchToUnified={switchToUnified} />;
+}
+
+function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
   const nav = useNavigate();
   const { id: quotId } = useParams();
   const isNew = !quotId;
@@ -774,6 +806,16 @@ export default function ProjectEditor({ params, context }) {
         </div>
         <div className="editor-actions">
           <button type="button" style={s.btnOutline} onClick={() => save('draft')} disabled={saving}>{saving ? 'Guardando...' : '💾 Guardar borrador'}</button>
+          {onSwitchToUnified && (
+            <button
+              type="button"
+              style={{ ...s.btnOutline, padding: '6px 12px', fontSize: 11, marginLeft: 8 }}
+              onClick={onSwitchToUnified}
+              title="Volver a la vista unificada (recomendada)"
+            >
+              Vista unificada
+            </button>
+          )}
         </div>
       </div>
 

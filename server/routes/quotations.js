@@ -3,6 +3,7 @@ const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { emitEvent } = require('../utils/events');
 const { recalcStaffAugLines, detectLineDrift } = require('../utils/calc');
+const quotationExport = require('../utils/quotation_export');
 
 /**
  * Load the full parameter set grouped by category, in the same shape the
@@ -388,6 +389,103 @@ router.post('/:id/duplicate', async (req, res) => {
     await pool.query(`INSERT INTO quotation_epics (quotation_id, sort_order, name, priority, hours_by_profile, total_hours) SELECT $1, sort_order, name, priority, hours_by_profile, total_hours FROM quotation_epics WHERE quotation_id=$2`, [newq.id, req.params.id]);
     res.status(201).json(newq);
   } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
+});
+
+/**
+ * Spec URGENTE (pre-venta, Abril 2026) — export a cotización lista para
+ * enviar al comercial / cliente. Solo fixed_scope por ahora.
+ *
+ *   POST /api/quotations/:id/export?format=xlsx|pdf
+ *
+ * Reglas:
+ *  - Solo `creado_por` o roles admin/superadmin pueden exportar.
+ *  - Cotización debe tener al menos 1 perfil y 1 fase con weeks > 0.
+ *  - El XLSX incluye el desglose interno (costo/hora, buffer, garantía,
+ *    margen) porque es para ops / finanzas.
+ *  - El PDF es una propuesta comercial y OMITE costos internos — solo
+ *    muestra tarifa/hora y precio final.
+ */
+router.post('/:id/export', async (req, res) => {
+  try {
+    const format = String(req.query.format || 'xlsx').toLowerCase();
+    if (format !== 'xlsx' && format !== 'pdf') {
+      return res.status(400).json({ error: 'format inválido — use xlsx o pdf' });
+    }
+
+    const { rows: [quot] } = await pool.query('SELECT * FROM quotations WHERE id=$1', [req.params.id]);
+    if (!quot) return res.status(404).json({ error: 'Cotización no encontrada' });
+
+    // Ownership: creator, admin, superadmin. Preventa puede exportar la suya.
+    const isOwner = quot.created_by === req.user.id;
+    const isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ error: 'Sin permiso para exportar esta cotización' });
+    }
+
+    if (quot.type !== 'fixed_scope') {
+      return res.status(400).json({ error: 'Solo se pueden exportar proyectos de alcance fijo' });
+    }
+
+    const [linesR, phasesR, epicsR, milestonesR] = await Promise.all([
+      pool.query('SELECT * FROM quotation_lines WHERE quotation_id=$1 ORDER BY sort_order', [req.params.id]),
+      pool.query('SELECT * FROM quotation_phases WHERE quotation_id=$1 ORDER BY sort_order', [req.params.id]),
+      pool.query('SELECT * FROM quotation_epics WHERE quotation_id=$1 ORDER BY sort_order', [req.params.id]),
+      pool.query('SELECT * FROM quotation_milestones WHERE quotation_id=$1 ORDER BY sort_order', [req.params.id]),
+    ]);
+
+    const payload = {
+      ...quot,
+      lines: linesR.rows,
+      phases: phasesR.rows,
+      epics: epicsR.rows,
+      milestones: milestonesR.rows,
+    };
+
+    if (!payload.lines.length) return res.status(400).json({ error: 'La cotización necesita al menos 1 perfil' });
+    if (!payload.phases.some((p) => Number(p.weeks || 0) > 0)) {
+      return res.status(400).json({ error: 'La cotización necesita al menos 1 fase con semanas > 0' });
+    }
+
+    // Snapshot has priority over live params (freeze post-sent totals).
+    const params = quot.parameters_snapshot || (await loadCanonicalParams(pool));
+
+    let buffer; let contentType;
+    try {
+      if (format === 'xlsx') {
+        buffer = await quotationExport.generateXlsx(payload, params);
+        contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      } else {
+        buffer = await quotationExport.generatePdf(payload, params);
+        contentType = 'application/pdf';
+      }
+    } catch (err) {
+      if (/Cannot find module/.test(err.message)) {
+        return res.status(503).json({
+          error: `Dependencia para formato ${format} no instalada en el servidor`,
+        });
+      }
+      throw err;
+    }
+
+    const filename = quotationExport.buildFilename(payload, format);
+
+    // Log export for audit (non-fatal)
+    try {
+      await pool.query(
+        `INSERT INTO audit_log (user_id, action, entity, entity_id, details)
+         VALUES ($1, 'export_quotation', 'quotation', $2, $3)`,
+        [req.user.id, quot.id, JSON.stringify({ format, filename })]
+      );
+    } catch (e) { /* best-effort */ }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    return res.end(buffer);
+  } catch (err) {
+    console.error('export error:', err);
+    res.status(500).json({ error: 'Error al generar el archivo' });
+  }
 });
 
 router.delete('/:id', async (req, res) => {

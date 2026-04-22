@@ -39,6 +39,14 @@ jest.mock('../utils/events', () => ({
   buildUpdatePayload: jest.requireActual('../utils/events').buildUpdatePayload,
 }));
 
+// Mock the export generators so we don't require exceljs / pdfkit in tests
+// and can assert on what the route does around them (headers, filename, etc.).
+jest.mock('../utils/quotation_export', () => ({
+  generateXlsx: jest.fn(async () => Buffer.from('FAKE_XLSX_BYTES')),
+  generatePdf: jest.fn(async () => Buffer.from('FAKE_PDF_BYTES')),
+  buildFilename: jest.fn((q, ext) => `DVPNYX_Proyecto_Test_2026-04-22.${ext}`),
+}));
+
 let mockCurrentUser = { id: 'u1', role: 'member', function: 'comercial' };
 jest.mock('../middleware/auth', () => ({
   auth: (req, _res, next) => { req.user = { ...mockCurrentUser }; next(); },
@@ -422,5 +430,123 @@ describe('POST /api/quotations — EX-1 linking requirements', () => {
     expect(insertQ).toBeTruthy();
     // param order: type, project_name, client_id, opportunity_id, client_name, ...
     expect(insertQ.params[4]).toBe('Acme Corp');
+  });
+});
+
+describe('POST /api/quotations/:id/export — fixed-scope export', () => {
+  // Second helper that exposes response headers (the default one only returns
+  // body, and we need Content-Type / Content-Disposition for these tests).
+  const http = require('http');
+  const callWithHeaders = (method, url) => new Promise((resolve, reject) => {
+    const srv = http.createServer(app).listen(0, () => {
+      const { port } = srv.address();
+      const req = http.request(
+        { host: '127.0.0.1', port, path: url, method, headers: { authorization: 'Bearer fake' } },
+        (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => {
+            srv.close();
+            const bodyBuf = Buffer.concat(chunks);
+            let parsedJson = null;
+            try { parsedJson = JSON.parse(bodyBuf.toString()); } catch { /* binary */ }
+            resolve({ status: res.statusCode, headers: res.headers, body: parsedJson, raw: bodyBuf });
+          });
+        },
+      );
+      req.on('error', (e) => { srv.close(); reject(e); });
+      req.end();
+    });
+  });
+
+  const pushQuotation = (overrides = {}) => {
+    queryQueue.push({ rows: [{
+      id: 'q1',
+      type: 'fixed_scope',
+      created_by: 'u1',
+      project_name: 'Proyecto Demo',
+      parameters_snapshot: { project: [] },
+      ...overrides,
+    }] });
+  };
+
+  const pushChildren = ({ lines = [{ id: 'l1' }], phases = [{ id: 'p1', weeks: 4 }], epics = [], milestones = [] } = {}) => {
+    queryQueue.push({ rows: lines });     // SELECT quotation_lines
+    queryQueue.push({ rows: phases });    // SELECT quotation_phases
+    queryQueue.push({ rows: epics });     // SELECT quotation_epics
+    queryQueue.push({ rows: milestones });// SELECT quotation_milestones
+  };
+
+  it('rejects unsupported format without touching the DB', async () => {
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=csv');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/format/);
+    expect(issuedQueries).toHaveLength(0);
+  });
+
+  it('returns 404 when the quotation does not exist', async () => {
+    queryQueue.push({ rows: [] });
+    const res = await callWithHeaders('POST', '/api/quotations/missing/export?format=xlsx');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 403 when non-owner non-admin tries to export', async () => {
+    pushQuotation({ created_by: 'other-user' });
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(403);
+  });
+
+  it('allows admin to export someone else\u2019s quotation', async () => {
+    mockCurrentUser = { id: 'admin1', role: 'admin', function: 'ops' };
+    pushQuotation({ created_by: 'other-user' });
+    pushChildren();
+    queryQueue.push({ rows: [] }); // audit_log insert
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects staff_aug quotations (only fixed_scope is exportable)', async () => {
+    pushQuotation({ type: 'staff_aug' });
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/alcance fijo/);
+  });
+
+  it('rejects when the quotation has no profile lines', async () => {
+    pushQuotation();
+    pushChildren({ lines: [], phases: [{ id: 'p1', weeks: 4 }] });
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/perfil/);
+  });
+
+  it('rejects when no phase has weeks > 0', async () => {
+    pushQuotation();
+    pushChildren({ phases: [{ id: 'p1', weeks: 0 }] });
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/semanas/);
+  });
+
+  it('returns xlsx buffer with proper headers when valid', async () => {
+    pushQuotation();
+    pushChildren();
+    queryQueue.push({ rows: [] }); // audit log
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+    expect(res.headers['content-disposition']).toMatch(/\.xlsx/);
+    expect(res.raw.toString()).toBe('FAKE_XLSX_BYTES');
+  });
+
+  it('returns pdf buffer with proper headers when valid', async () => {
+    pushQuotation();
+    pushChildren();
+    queryQueue.push({ rows: [] }); // audit log
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=pdf');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+    expect(res.headers['content-disposition']).toMatch(/\.pdf/);
+    expect(res.raw.toString()).toBe('FAKE_PDF_BYTES');
   });
 });
