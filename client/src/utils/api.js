@@ -36,4 +36,30 @@ export const createQuotation = (data) => api('/quotations', { method: 'POST', bo
 export const updateQuotation = (id, data) => api(`/quotations/${id}`, { method: 'PUT', body: data });
 export const duplicateQuotation = (id) => api(`/quotations/${id}/duplicate`, { method: 'POST' });
 export const deleteQuotation = (id) => api(`/quotations/${id}`, { method: 'DELETE' });
+
+/**
+ * Export a quotation as .xlsx or .pdf. Returns { blob, filename }.
+ * Uses fetch directly so we can stream binary (ArrayBuffer) rather than
+ * trying to parse as JSON like the default `api()` helper does.
+ */
+export const exportQuotation = async (id, format) => {
+  const token = getToken();
+  const res = await fetch(`${BASE}/quotations/${id}/export?format=${encodeURIComponent(format)}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (res.status === 401) { localStorage.removeItem('dvpnyx_token'); window.location.href = '/login'; return null; }
+  if (!res.ok) {
+    let msg = 'Error al exportar';
+    try { const j = await res.json(); msg = j.error || msg; } catch (_) { /* binary body */ }
+    throw new Error(msg);
+  }
+  const blob = await res.blob();
+  // Try to read filename from Content-Disposition; otherwise synthesize one.
+  const cd = res.headers.get('Content-Disposition') || '';
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  const ext = format === 'pdf' ? 'pdf' : 'xlsx';
+  const filename = match ? decodeURIComponent(match[1]) : `quotation-${id}.${ext}`;
+  return { blob, filename };
+};
 export const getDashboardOverview = () => api('/dashboard/overview');
