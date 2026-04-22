@@ -31,6 +31,9 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { notify, notifyMany } = require('../utils/notifications');
+const { runAllChecks } = require('../utils/assignment_validation');
+const { stringifyCsv } = require('../utils/csv');
 
 router.use(auth);
 
@@ -70,6 +73,152 @@ async function sumOverlappingHours(conn, employeeId, start, end, ignoreAssignmen
   );
   return Number(rows[0].total || 0);
 }
+
+/* -------- VALIDATE (read-only pre-check) — US-BK-2 --------
+ *
+ * Dry-runs the validation engine for a proposed assignment of
+ * `employee_id` to `request_id`. Does not create anything; purely
+ * informational so the UI modal (US-VAL-4) can render the checklist
+ * BEFORE the user commits.
+ *
+ * Query params:
+ *   employee_id   UUID (required)
+ *   request_id    UUID (required)        — resource_request
+ *   weekly_hours  number (optional, defaults to request.weekly_hours)
+ *   start_date    YYYY-MM-DD (optional, defaults to request.start_date)
+ *   end_date      YYYY-MM-DD (optional, defaults to request.end_date)
+ *   ignore_assignment_id  UUID (optional) — exclude this assignment
+ *                         from the committed-hours sum (useful when
+ *                         editing an existing assignment).
+ *
+ * Response:
+ *   { valid, can_override, requires_justification,
+ *     checks: [{ check, status, message, detail?, overridable? }],
+ *     summary: { pass, warn, info, fail, ... },
+ *     context: { employee, request, proposed }  // what we evaluated
+ *   }
+ */
+router.get('/validate', async (req, res) => {
+  const {
+    employee_id, request_id, weekly_hours,
+    start_date, end_date, ignore_assignment_id,
+  } = req.query;
+
+  if (!employee_id) return res.status(400).json({ error: 'employee_id es requerido' });
+  if (!request_id)  return res.status(400).json({ error: 'request_id es requerido' });
+
+  try {
+    // Load employee (with area) and request (with area) in parallel
+    const [eRes, rRes] = await Promise.all([
+      pool.query(
+        `SELECT e.id, e.first_name, e.last_name, e.level,
+                e.weekly_capacity_hours, e.status,
+                e.area_id, a.name AS area_name
+           FROM employees e
+           LEFT JOIN areas a ON a.id = e.area_id
+          WHERE e.id = $1 AND e.deleted_at IS NULL`,
+        [employee_id],
+      ),
+      pool.query(
+        `SELECT rr.id, rr.contract_id, rr.role_title, rr.level,
+                rr.weekly_hours, rr.start_date, rr.end_date, rr.status,
+                rr.area_id, a.name AS area_name
+           FROM resource_requests rr
+           LEFT JOIN areas a ON a.id = rr.area_id
+          WHERE rr.id = $1 AND rr.deleted_at IS NULL`,
+        [request_id],
+      ),
+    ]);
+
+    if (!eRes.rows.length) return res.status(404).json({ error: 'employee no encontrado' });
+    if (!rRes.rows.length) return res.status(404).json({ error: 'resource_request no encontrado' });
+
+    const employee = eRes.rows[0];
+    const requestRow = rRes.rows[0];
+
+    // Resolve proposed window (query overrides, falling back to request)
+    const propStart = start_date || requestRow.start_date;
+    const propEnd   = end_date   || requestRow.end_date;
+    const propHours = weekly_hours != null ? Number(weekly_hours) : Number(requestRow.weekly_hours);
+
+    // Committed hours = sum of overlapping non-terminal assignments.
+    // Mirrors the logic in sumOverlappingHours() but is run only once.
+    const committed = await sumOverlappingHours(
+      pool, employee_id, propStart, propEnd || null,
+      ignore_assignment_id || null,
+    );
+
+    const result = runAllChecks({
+      employee: {
+        area_id: employee.area_id,
+        area_name: employee.area_name,
+        level: employee.level,
+        weekly_capacity_hours: employee.weekly_capacity_hours,
+        committed_hours: committed,
+      },
+      request: {
+        area_id: requestRow.area_id,
+        area_name: requestRow.area_name,
+        level: requestRow.level,
+        start_date: requestRow.start_date,
+        end_date: requestRow.end_date,
+      },
+      proposed: {
+        weekly_hours: propHours,
+        start_date: propStart,
+        end_date: propEnd,
+      },
+    });
+
+    // Surface employee status as an additional advisory warning so the
+    // UI can render it alongside the structured checks (not part of the
+    // engine because it's operational metadata, not a compatibility rule).
+    const advisories = [];
+    if (employee.status === 'on_leave')   advisories.push({ code: 'employee_on_leave',   message: 'El empleado está en "on_leave".' });
+    if (employee.status === 'bench')      advisories.push({ code: 'employee_bench',      message: 'El empleado está en "bench" — priorízalo si buscas ocupación.' });
+    if (employee.status === 'terminated') advisories.push({ code: 'employee_terminated', message: 'El empleado está terminado y no puede recibir asignaciones nuevas.' });
+    if (requestRow.status === 'cancelled') advisories.push({ code: 'request_cancelled', message: 'La solicitud está cancelada.' });
+    if (requestRow.status === 'filled')    advisories.push({ code: 'request_filled',    message: 'La solicitud ya está cubierta por otras asignaciones activas.' });
+
+    res.json({
+      ...result,
+      advisories,
+      context: {
+        employee: {
+          id: employee.id,
+          name: `${employee.first_name} ${employee.last_name}`.trim(),
+          level: employee.level,
+          area_id: employee.area_id,
+          area_name: employee.area_name,
+          weekly_capacity_hours: Number(employee.weekly_capacity_hours),
+          committed_hours: Number(committed),
+          status: employee.status,
+        },
+        request: {
+          id: requestRow.id,
+          role_title: requestRow.role_title,
+          level: requestRow.level,
+          area_id: requestRow.area_id,
+          area_name: requestRow.area_name,
+          weekly_hours: Number(requestRow.weekly_hours),
+          start_date: requestRow.start_date,
+          end_date: requestRow.end_date,
+          status: requestRow.status,
+          contract_id: requestRow.contract_id,
+        },
+        proposed: {
+          weekly_hours: propHours,
+          start_date: propStart,
+          end_date: propEnd || null,
+        },
+      },
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /assignments/validate failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
 
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
@@ -116,6 +265,64 @@ router.get('/', async (req, res) => {
   }
 });
 
+/* -------- EXPORT CSV --------
+ *
+ * Honors the SAME filter params as GET '/', but ignores pagination and
+ * caps at EXPORT_LIMIT so a bad filter doesn't stream megabytes. The
+ * ordering matches the list so what the user sees in the UI is what
+ * they get in the file. Any authenticated user can export.
+ */
+const EXPORT_LIMIT = 10000;
+router.get('/export.csv', async (req, res) => {
+  try {
+    const wheres = ['a.deleted_at IS NULL'];
+    const params = [];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+
+    if (req.query.employee_id)         wheres.push(`a.employee_id = ${add(req.query.employee_id)}`);
+    if (req.query.contract_id)         wheres.push(`a.contract_id = ${add(req.query.contract_id)}`);
+    if (req.query.resource_request_id) wheres.push(`a.resource_request_id = ${add(req.query.resource_request_id)}`);
+    if (req.query.status)              wheres.push(`a.status = ${add(req.query.status)}`);
+
+    const where = `WHERE ${wheres.join(' AND ')}`;
+    const { rows } = await pool.query(
+      `SELECT a.id, a.status, a.weekly_hours, a.start_date, a.end_date, a.role_title, a.notes,
+              a.created_at,
+              (e.first_name || ' ' || e.last_name) AS employee_name,
+              c.name AS contract_name,
+              rr.role_title AS request_role_title
+         FROM assignments a
+         LEFT JOIN employees         e  ON e.id = a.employee_id
+         LEFT JOIN contracts         c  ON c.id = a.contract_id
+         LEFT JOIN resource_requests rr ON rr.id = a.resource_request_id
+         ${where}
+         ORDER BY a.start_date DESC
+         LIMIT ${EXPORT_LIMIT}`,
+      params
+    );
+    const csv = stringifyCsv(rows, [
+      { key: 'id',                  header: 'ID' },
+      { key: 'employee_name',       header: 'Empleado' },
+      { key: 'contract_name',       header: 'Contrato' },
+      { key: 'request_role_title',  header: 'Rol (solicitud)' },
+      { key: 'role_title',          header: 'Rol (asignación)' },
+      { key: 'status',              header: 'Estado' },
+      { key: 'weekly_hours',        header: 'Horas/semana' },
+      { key: 'start_date',          header: 'Inicio' },
+      { key: 'end_date',            header: 'Fin' },
+      { key: 'notes',               header: 'Notas' },
+      { key: 'created_at',          header: 'Creada' },
+    ]);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="asignaciones.csv"');
+    res.send(csv);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /assignments/export.csv failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 /* -------- GET ONE -------- */
 router.get('/:id', async (req, res) => {
   try {
@@ -138,12 +345,26 @@ router.get('/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Error interno' }); }
 });
 
-/* -------- CREATE (admin+) — EN-1 + EN-2 -------- */
+/* -------- CREATE (admin+) — EN-1 + EN-2 + US-VAL-4 --------
+ *
+ * Strict validation flow:
+ *   1. Referential checks (request exists + belongs to contract, contract
+ *      is not closed, employee exists + not terminated).
+ *   2. Engine checks via runAllChecks (area/level/capacity/dates).
+ *   3. If any non-overridable FAIL → 409 VALIDATION_FAILED (no bypass).
+ *   4. If any overridable FAIL and no `override_reason` → 409 OVERRIDE_REQUIRED.
+ *   5. Otherwise INSERT; persist override audit metadata when reason was provided.
+ *
+ * Backward compat:
+ *   - Legacy body.force is accepted but ignored; override_reason is the
+ *     only way to bypass an overridable fail. This is an intentional
+ *     tightening coordinated with the UI modal (US-VAL-4).
+ */
 router.post('/', adminOnly, async (req, res) => {
   const body = req.body || {};
   const {
     resource_request_id, employee_id, contract_id, weekly_hours,
-    start_date, end_date, role_title, notes, force,
+    start_date, end_date, role_title, notes, override_reason,
   } = body;
 
   if (!resource_request_id) return res.status(400).json({ error: 'resource_request_id es requerido' });
@@ -156,17 +377,26 @@ router.post('/', adminOnly, async (req, res) => {
   if (body.status && !VALID_STATUSES.includes(body.status)) {
     return res.status(400).json({ error: 'status inválido' });
   }
+  const reasonTrimmed = typeof override_reason === 'string' ? override_reason.trim() : '';
+  if (override_reason != null && reasonTrimmed.length < 10) {
+    return res.status(400).json({ error: 'override_reason debe tener al menos 10 caracteres' });
+  }
 
   const conn = await pool.connect();
   try {
-    // Referential + state checks
+    // --- Referential + state checks --------------------------------------
     const { rows: rrRows } = await conn.query(
-      `SELECT id, contract_id, status FROM resource_requests WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT rr.id, rr.contract_id, rr.status, rr.level, rr.weekly_hours,
+              rr.start_date, rr.end_date, rr.area_id, a.name AS area_name
+         FROM resource_requests rr
+         LEFT JOIN areas a ON a.id = rr.area_id
+        WHERE rr.id=$1 AND rr.deleted_at IS NULL`,
       [resource_request_id]
     );
     if (!rrRows.length) { conn.release(); return res.status(400).json({ error: 'resource_request no existe' }); }
-    if (rrRows[0].status === 'cancelled') { conn.release(); return res.status(400).json({ error: 'La solicitud está cancelada' }); }
-    if (rrRows[0].contract_id !== contract_id) {
+    const rr = rrRows[0];
+    if (rr.status === 'cancelled') { conn.release(); return res.status(400).json({ error: 'La solicitud está cancelada' }); }
+    if (rr.contract_id !== contract_id) {
       conn.release();
       return res.status(409).json({ error: 'La solicitud no pertenece al contrato indicado' });
     }
@@ -181,12 +411,15 @@ router.post('/', adminOnly, async (req, res) => {
     }
 
     const { rows: eRows } = await conn.query(
-      `SELECT id, weekly_capacity_hours, status, first_name, last_name FROM employees WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT e.id, e.weekly_capacity_hours, e.status, e.first_name, e.last_name,
+              e.level, e.area_id, a.name AS area_name
+         FROM employees e
+         LEFT JOIN areas a ON a.id = e.area_id
+        WHERE e.id=$1 AND e.deleted_at IS NULL`,
       [employee_id]
     );
     if (!eRows.length) { conn.release(); return res.status(400).json({ error: 'employee no existe' }); }
     const emp = eRows[0];
-    // Warnings (non-blocking per spec) surfaced via response.warnings.
     const warnings = [];
     if (emp.status === 'on_leave')   warnings.push(`El empleado está en "on_leave".`);
     if (emp.status === 'terminated') {
@@ -195,31 +428,59 @@ router.post('/', adminOnly, async (req, res) => {
     }
     if (emp.status === 'bench') warnings.push(`El empleado está en "bench" — priorízalo si buscas ocupación.`);
 
-    // EN-2 overbooking
-    const existing = await sumOverlappingHours(conn, employee_id, start_date, end_date || null);
-    const proposed = existing + wh;
-    const capacity = Number(emp.weekly_capacity_hours || 40);
-    const threshold = capacity * OVERBOOK_FACTOR;
-    const overbooked = proposed > threshold;
+    // --- Engine validation (US-BK-2 / US-VAL-4) --------------------------
+    const committed = await sumOverlappingHours(conn, employee_id, start_date, end_date || null);
+    const validation = runAllChecks({
+      employee: {
+        area_id: emp.area_id, area_name: emp.area_name,
+        level: emp.level,
+        weekly_capacity_hours: emp.weekly_capacity_hours,
+        committed_hours: committed,
+      },
+      request: {
+        area_id: rr.area_id, area_name: rr.area_name,
+        level: rr.level,
+        start_date: rr.start_date, end_date: rr.end_date,
+      },
+      proposed: {
+        weekly_hours: wh,
+        start_date, end_date: end_date || null,
+      },
+    });
 
-    if (overbooked && !force) {
+    // Hard fails (inverted dates, no-overlap, etc.) — no bypass.
+    if (!validation.valid && !validation.can_override) {
       conn.release();
       return res.status(409).json({
-        error: `Overbooking: ${emp.first_name} ${emp.last_name} quedaría en ${proposed.toFixed(2)}h/semana (capacidad ${capacity}h × 1.10 = ${threshold.toFixed(2)}h). Usa force=true para sobrescribir.`,
-        employee_capacity: capacity,
-        threshold,
-        existing_weekly_hours: existing,
-        proposed_weekly_hours: proposed,
+        error: 'No se puede crear la asignación: hay incompatibilidades no soslayables.',
+        code: 'VALIDATION_FAILED',
+        checks: validation.checks,
+        summary: validation.summary,
       });
     }
+    // Overridable fails require an explicit justification.
+    if (validation.requires_justification && !reasonTrimmed) {
+      conn.release();
+      return res.status(409).json({
+        error: 'Esta asignación tiene incompatibilidades. Proporciona override_reason para continuar.',
+        code: 'OVERRIDE_REQUIRED',
+        requires_justification: true,
+        checks: validation.checks,
+        summary: validation.summary,
+      });
+    }
+
+    const isOverride = !validation.valid && reasonTrimmed.length > 0;
 
     await conn.query('BEGIN');
     const { rows } = await conn.query(
       `INSERT INTO assignments
          (resource_request_id, employee_id, contract_id, weekly_hours,
           start_date, end_date, status, role_title, notes,
-          approval_required, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'planned'),$8,$9,COALESCE($10,false),$11)
+          approval_required, created_by,
+          override_reason, override_checks, override_author_id, override_at)
+        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'planned'),$8,$9,COALESCE($10,false),$11,
+                $12,$13,$14,$15)
         RETURNING *`,
       [
         resource_request_id, employee_id, contract_id, wh,
@@ -227,6 +488,10 @@ router.post('/', adminOnly, async (req, res) => {
         role_title || null, notes || null,
         body.approval_required != null ? !!body.approval_required : null,
         req.user.id,
+        isOverride ? reasonTrimmed : null,
+        isOverride ? JSON.stringify({ checks: validation.checks, summary: validation.summary }) : null,
+        isOverride ? req.user.id : null,
+        isOverride ? new Date() : null,
       ]
     );
     const asg = rows[0];
@@ -238,20 +503,76 @@ router.post('/', adminOnly, async (req, res) => {
         employee_id, contract_id, resource_request_id,
         weekly_hours: wh, start_date, end_date: end_date || null,
         status: asg.status, warnings,
+        validation_summary: validation.summary,
       },
       req,
     });
-    if (overbooked && force) {
+    if (isOverride) {
       await emitEvent(conn, {
-        event_type: 'assignment.overbooked', entity_type: 'assignment', entity_id: asg.id,
+        event_type: 'assignment.overridden', entity_type: 'assignment', entity_id: asg.id,
         actor_user_id: req.user.id,
-        payload: { employee_capacity: capacity, threshold, proposed_weekly_hours: proposed },
+        payload: {
+          reason: reasonTrimmed,
+          checks: validation.checks,
+          summary: validation.summary,
+        },
         req,
       });
     }
 
+    // ---- Notifications (best-effort, never blocks the mutation) ----
+    // Notify the assigned employee (if they have a linked user account)
+    // that they have a new assignment. Looks up employee.user_id +
+    // contract.name in a single join.
+    try {
+      const { rows: ctx } = await conn.query(
+        `SELECT e.user_id AS employee_user_id,
+                (e.first_name || ' ' || e.last_name) AS employee_name,
+                k.name AS contract_name,
+                k.delivery_manager_id,
+                k.capacity_manager_id
+           FROM employees e, contracts k
+          WHERE e.id = $1 AND k.id = $2`,
+        [employee_id, contract_id]
+      );
+      const c = ctx[0];
+      if (c) {
+        // The assignee — only notify if different from the actor.
+        if (c.employee_user_id && c.employee_user_id !== req.user.id) {
+          await notify(conn, {
+            user_id: c.employee_user_id,
+            type: 'assignment.created',
+            title: 'Te asignaron a un proyecto',
+            body: `${c.contract_name} — ${wh}h/sem desde ${start_date}`,
+            link: '/assignments',
+            entity_type: 'assignment',
+            entity_id: asg.id,
+          });
+        }
+        // On override, notify the contract's managers so they know an
+        // override was exercised against a request under their remit.
+        if (isOverride) {
+          await notifyMany(
+            conn,
+            [c.delivery_manager_id, c.capacity_manager_id].filter((id) => id && id !== req.user.id),
+            {
+              type: 'assignment.overridden',
+              title: 'Asignación creada con justificación',
+              body: `${c.employee_name} → ${c.contract_name} (override registrado)`,
+              link: '/assignments',
+              entity_type: 'assignment',
+              entity_id: asg.id,
+            }
+          );
+        }
+      }
+    } catch (notifyErr) {
+      // eslint-disable-next-line no-console
+      console.error('notify producers failed (non-fatal):', notifyErr.message);
+    }
+
     await conn.query('COMMIT');
-    res.status(201).json({ ...asg, warnings, overbooked });
+    res.status(201).json({ ...asg, warnings, validation });
   } catch (err) {
     await conn.query('ROLLBACK').catch(() => {});
     // eslint-disable-next-line no-console

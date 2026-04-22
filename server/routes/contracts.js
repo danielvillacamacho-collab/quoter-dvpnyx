@@ -20,6 +20,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { stringifyCsv } = require('../utils/csv');
 
 router.use(auth);
 
@@ -94,6 +95,55 @@ router.get('/', async (req, res) => {
   }
 });
 
+/* -------- EXPORT CSV -------- */
+const EXPORT_LIMIT = 10000;
+router.get('/export.csv', async (req, res) => {
+  try {
+    const wheres = ['c.deleted_at IS NULL'];
+    const params = [];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+
+    if (req.query.search) {
+      const like = '%' + req.query.search + '%';
+      wheres.push(`(LOWER(c.name) LIKE LOWER(${add(like)}))`);
+    }
+    if (req.query.client_id) wheres.push(`c.client_id = ${add(req.query.client_id)}`);
+    if (req.query.status)    wheres.push(`c.status = ${add(normalizeStatus(req.query.status))}`);
+    if (req.query.type)      wheres.push(`c.type = ${add(req.query.type)}`);
+
+    const where = `WHERE ${wheres.join(' AND ')}`;
+    const { rows } = await pool.query(
+      `SELECT c.id, c.name, c.type, c.status, c.start_date, c.end_date,
+              c.notes, c.created_at,
+              cl.name AS client_name
+         FROM contracts c
+         LEFT JOIN clients cl ON cl.id = c.client_id
+         ${where}
+         ORDER BY c.updated_at DESC
+         LIMIT ${EXPORT_LIMIT}`,
+      params
+    );
+    const csv = stringifyCsv(rows, [
+      { key: 'id',           header: 'ID' },
+      { key: 'name',         header: 'Nombre' },
+      { key: 'client_name',  header: 'Cliente' },
+      { key: 'type',         header: 'Tipo' },
+      { key: 'status',       header: 'Estado' },
+      { key: 'start_date',   header: 'Inicio' },
+      { key: 'end_date',     header: 'Fin' },
+      { key: 'notes',        header: 'Notas' },
+      { key: 'created_at',   header: 'Creado' },
+    ]);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="contratos.csv"');
+    res.send(csv);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /contracts/export.csv failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 /* -------- GET ONE -------- */
 router.get('/:id', async (req, res) => {
   try {
@@ -132,9 +182,43 @@ router.post('/', adminOnly, async (req, res) => {
   if (!type) return res.status(400).json({ error: 'type es requerido' });
   if (!VALID_TYPES.includes(type)) return res.status(400).json({ error: 'type inválido (capacity|project|resell)' });
   if (!start_date) return res.status(400).json({ error: 'start_date es requerido' });
-  if (!squad_id) return res.status(400).json({ error: 'squad_id es requerido' });
 
   try {
+    // Resolve squad_id automatically: explicit body → creator's squad → global default.
+    // The DB column is NOT NULL, but the UI no longer exposes this field — users
+    // should never have to think about squads when creating a contract.
+    let resolvedSquadId = squad_id || null;
+    if (!resolvedSquadId) {
+      const { rows: uRows } = await pool.query(
+        `SELECT squad_id FROM users WHERE id = $1`, [req.user.id]
+      );
+      resolvedSquadId = uRows[0]?.squad_id || null;
+    }
+    if (!resolvedSquadId) {
+      // Fallback to the default squad ("DVPNYX Global"). Squads are an internal
+      // concept no longer exposed in the UI — we auto-provision the default so
+      // contract creation never fails on a fresh/empty DB.
+      const { rows: sRows } = await pool.query(
+        `SELECT id FROM squads
+           WHERE deleted_at IS NULL AND active = true
+           ORDER BY (LOWER(name) = LOWER('DVPNYX Global')) DESC, created_at ASC
+           LIMIT 1`
+      );
+      resolvedSquadId = sRows[0]?.id || null;
+    }
+    if (!resolvedSquadId) {
+      // Last resort: create the default squad on the fly so the system is
+      // self-healing in environments where the V2 data migration never ran.
+      const { rows: createdRows } = await pool.query(
+        `INSERT INTO squads (name, description, active)
+           VALUES ('DVPNYX Global', 'Squad por defecto (auto-creado)', true)
+           RETURNING id`
+      );
+      resolvedSquadId = createdRows[0]?.id || null;
+    }
+    if (!resolvedSquadId) {
+      return res.status(500).json({ error: 'No se pudo resolver el squad por defecto. Contacta al administrador.' });
+    }
     // Referential checks
     const { rows: cRows } = await pool.query(
       `SELECT id, name FROM clients WHERE id=$1 AND deleted_at IS NULL`, [client_id]
@@ -173,7 +257,7 @@ router.post('/', adminOnly, async (req, res) => {
       [
         String(name).trim(), client_id, opportunity_id || null, winning_quotation_id || null, type,
         start_date, end_date || null, ownerId, delivery_manager_id || null,
-        capacity_manager_id || null, squad_id, notes || null, tags || null,
+        capacity_manager_id || null, resolvedSquadId, notes || null, tags || null,
         metadata ? JSON.stringify(metadata) : null, req.user.id,
       ]
     );

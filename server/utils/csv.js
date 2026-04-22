@@ -68,4 +68,35 @@ function parseCsv(text, options = {}) {
   return { headers, rows };
 }
 
-module.exports = { parseCsv };
+/**
+ * Minimal RFC 4180 CSV writer. Used by the /export.csv endpoints.
+ *
+ *   rows    — array of plain objects
+ *   columns — ordered list of { key, header } shaping the output
+ *
+ * Each cell is stringified (null/undefined → ''), and fields that
+ * contain a separator, quote, CR or LF are wrapped in double quotes
+ * with embedded quotes doubled. We prepend a UTF-8 BOM so Excel opens
+ * the file with the right encoding on Windows without the user having
+ * to change anything.
+ */
+function escapeField(v, sep) {
+  if (v === null || v === undefined) return '';
+  const s = typeof v === 'string' ? v : String(v);
+  const needsQuote = s.includes(sep) || s.includes('"') || s.includes('\n') || s.includes('\r');
+  if (!needsQuote) return s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function stringifyCsv(rows, columns, options = {}) {
+  const sep = options.separator || ',';
+  const bom = options.bom === false ? '' : '\uFEFF';
+  const header = columns.map((c) => escapeField(c.header, sep)).join(sep);
+  const body = (rows || []).map((r) => columns.map((c) => {
+    const raw = typeof c.value === 'function' ? c.value(r) : r[c.key];
+    return escapeField(raw, sep);
+  }).join(sep)).join('\r\n');
+  return bom + header + (body ? '\r\n' + body : '') + '\r\n';
+}
+
+module.exports = { parseCsv, stringifyCsv };

@@ -237,3 +237,105 @@ describe('DELETE /api/resource-requests/:id', () => {
     expect(res.status).toBe(200);
   });
 });
+
+describe('GET /api/resource-requests/:id/candidates (US-RR-2)', () => {
+  // Query sequence expected by the route:
+  //   1. the request row
+  //   2. employees + skill_ids
+  //   3. overlapping assignments
+  //   4. skills lookup (only if any skill_ids referenced)
+
+  const happyRequestRow = {
+    id: 'rr1', contract_id: 'ct1', role_title: 'Backend Sr',
+    area_id: 1, area_name: 'Desarrollo', level: 'L5',
+    required_skills: [10, 20, 30], nice_to_have_skills: [40],
+    weekly_hours: 20, start_date: '2026-05-01', end_date: '2026-07-01',
+    status: 'open',
+  };
+  const empAna = {
+    id: 'e1', first_name: 'Ana', last_name: 'García', level: 'L5', area_id: 1,
+    status: 'active', weekly_capacity_hours: 40, area_name: 'Desarrollo',
+    skill_ids: [10, 20, 30, 40],
+  };
+  const empPedro = {
+    id: 'e2', first_name: 'Pedro', last_name: 'Zúñiga', level: 'L3', area_id: 2,
+    status: 'active', weekly_capacity_hours: 40, area_name: 'Testing',
+    skill_ids: [10],
+  };
+
+  it('returns ranked candidates with skills_lookup', async () => {
+    queryQueue.push({ rows: [happyRequestRow] });
+    queryQueue.push({ rows: [empAna, empPedro] });
+    queryQueue.push({ rows: [] }); // no overlapping assignments
+    queryQueue.push({ rows: [
+      { id: 10, name: 'React' }, { id: 20, name: 'Node' },
+      { id: 30, name: 'Postgres' }, { id: 40, name: 'Docker' },
+    ] });
+
+    const res = await client.call('GET', '/api/resource-requests/rr1/candidates');
+    expect(res.status).toBe(200);
+    expect(res.body.request.id).toBe('rr1');
+    expect(res.body.candidates).toHaveLength(2);
+    // Ana has perfect area+level+skills → beats Pedro
+    expect(res.body.candidates[0].employee_id).toBe('e1');
+    expect(res.body.candidates[0].score).toBeGreaterThan(res.body.candidates[1].score);
+    expect(res.body.skills_lookup[10]).toBe('React');
+    expect(res.body.meta).toMatchObject({ employee_pool_size: 2, returned: 2 });
+  });
+
+  it('returns 404 when the request does not exist', async () => {
+    queryQueue.push({ rows: [] });
+    const res = await client.call('GET', '/api/resource-requests/does-not-exist/candidates');
+    expect(res.status).toBe(404);
+  });
+
+  it('applies area_only=true filter in SQL', async () => {
+    queryQueue.push({ rows: [happyRequestRow] });
+    queryQueue.push({ rows: [empAna] });
+    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [{ id: 10, name: 'React' }, { id: 20, name: 'Node' }, { id: 30, name: 'Postgres' }, { id: 40, name: 'Docker' }] });
+
+    const res = await client.call('GET', '/api/resource-requests/rr1/candidates?area_only=true');
+    expect(res.status).toBe(200);
+    // Second query is the employees one → must include area_id filter and the request's area_id.
+    expect(issuedQueries[1].sql).toMatch(/e\.area_id =/);
+    expect(issuedQueries[1].params).toContain(1);
+  });
+
+  it('excludes terminated via SQL guard', async () => {
+    queryQueue.push({ rows: [happyRequestRow] });
+    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [] });
+    // Even with no candidates, the request's required/nice skills seed the lookup query.
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/resource-requests/rr1/candidates');
+    expect(issuedQueries[1].sql).toMatch(/e\.status <> 'terminated'/);
+  });
+
+  it('clamps limit to 1..100', async () => {
+    queryQueue.push({ rows: [happyRequestRow] });
+    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [] }); // skills lookup (request has required_skills)
+    const res = await client.call('GET', '/api/resource-requests/rr1/candidates?limit=9999');
+    expect(res.status).toBe(200);
+    expect(res.body.meta.returned).toBe(0);
+  });
+
+  it('honors include_ineligible=false by filtering low-score candidates', async () => {
+    // Junior in a different area with zero required skills → score < 30.
+    const badEmp = { id: 'e-bad', first_name: 'Junior', last_name: 'Z', level: 'L1',
+      area_id: 99, status: 'active', weekly_capacity_hours: 40, area_name: 'Otra',
+      skill_ids: [] };
+    queryQueue.push({ rows: [happyRequestRow] });
+    queryQueue.push({ rows: [badEmp] });
+    queryQueue.push({ rows: [] });
+    // Skills lookup (request's required/nice — always queried when request has any).
+    queryQueue.push({ rows: [{ id: 10, name: 'React' }, { id: 20, name: 'Node' },
+                              { id: 30, name: 'Postgres' }, { id: 40, name: 'Docker' }] });
+
+    const res = await client.call('GET', '/api/resource-requests/rr1/candidates?include_ineligible=false');
+    expect(res.status).toBe(200);
+    expect(res.body.candidates).toHaveLength(0);
+  });
+});

@@ -1,5 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import StatusBadge from '../shell/StatusBadge';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -10,8 +12,10 @@ const s = {
   btnOutline: { background: 'transparent', color: 'var(--purple-dark)', border: '1px solid var(--purple-dark)', borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   input:  { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, outline: 'none' },
   label:  { fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 4, display: 'block' },
-  th:     { padding: '10px 12px', fontSize: 11, fontWeight: 700, color: '#fff', background: 'var(--purple-dark)', textAlign: 'left', whiteSpace: 'nowrap' },
-  td:     { padding: '10px 12px', fontSize: 13, borderBottom: '1px solid var(--border)' },
+  // UI refresh Phase 2 — table styles come from the shared design-tokens
+  // helper so every list page adopts the same density + palette at once.
+  th:     dsTh,
+  td:     dsTd,
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 },
   filters:{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'end' },
   modalBg:{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 },
@@ -268,7 +272,7 @@ export default function ResourceRequests() {
         </div>
 
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+          <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
                 {['Role', 'Contrato', 'Área', 'Level', 'Cantidad', 'Asignaciones', 'Prioridad', 'Estado', 'Inicio', ''].map((h) => (
@@ -300,10 +304,7 @@ export default function ResourceRequests() {
                     }}>{PRIORITY_LABEL[r.priority] || r.priority}</span>
                   </td>
                   <td style={s.td}>
-                    <span style={{
-                      display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700,
-                      background: STATUS_COLOR[r.status] || 'var(--text-light)', color: '#fff',
-                    }}>{STATUS_LABEL[r.status] || r.status}</span>
+                    <StatusBadge domain="resource_request" value={r.status} label={STATUS_LABEL[r.status]} />
                   </td>
                   <td style={{ ...s.td, fontSize: 12 }}>{r.start_date ? String(r.start_date).slice(0, 10) : '—'}</td>
                   <td style={{ ...s.td, whiteSpace: 'nowrap' }}>

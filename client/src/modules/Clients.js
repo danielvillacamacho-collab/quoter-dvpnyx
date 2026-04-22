@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 
 /* ========== styles ========== */
 const s = {
@@ -12,8 +13,10 @@ const s = {
   btnOutline: { background: 'transparent', color: 'var(--purple-dark)', border: '1px solid var(--purple-dark)', borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   input:  { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, outline: 'none' },
   label:  { fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 4, display: 'block' },
-  th:     { padding: '10px 12px', fontSize: 11, fontWeight: 700, color: '#fff', background: 'var(--purple-dark)', textAlign: 'left', whiteSpace: 'nowrap' },
-  td:     { padding: '10px 12px', fontSize: 13, borderBottom: '1px solid var(--border)' },
+  // UI refresh Phase 2 — table styles come from the shared design-tokens
+  // helper so every list page adopts the same density + palette at once.
+  th:     dsTh,
+  td:     dsTd,
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 },
   filters:{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'end' },
   modalBg:{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 },
@@ -25,6 +28,14 @@ const TIERS = [
   { value: 'enterprise', label: 'Enterprise' },
   { value: 'mid_market', label: 'Mid Market' },
   { value: 'smb',        label: 'SMB' },
+];
+
+// Países de Latinoamérica en orden alfabético (incluye Caribe hispano + Brasil).
+const LATAM_COUNTRIES = [
+  'Argentina', 'Belice', 'Bolivia', 'Brasil', 'Chile', 'Colombia', 'Costa Rica',
+  'Cuba', 'Ecuador', 'El Salvador', 'Guatemala', 'Guyana', 'Haití', 'Honduras',
+  'México', 'Nicaragua', 'Panamá', 'Paraguay', 'Perú', 'Puerto Rico',
+  'República Dominicana', 'Surinam', 'Uruguay', 'Venezuela',
 ];
 
 const EMPTY = {
@@ -64,7 +75,14 @@ function ClientForm({ initial, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>País</label>
-          <input style={s.input} value={form.country || ''} onChange={(e) => set('country', e.target.value)} placeholder="Colombia" />
+          <select
+            style={{ ...s.input, padding: '8px 10px' }}
+            value={form.country || ''}
+            onChange={(e) => set('country', e.target.value)}
+          >
+            <option value="">—</option>
+            {LATAM_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
         </div>
         <div>
           <label style={s.label}>Industria</label>
@@ -193,7 +211,15 @@ export default function Clients() {
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>País</label>
-            <input style={s.input} value={country} onChange={(e) => setCountry(e.target.value)} placeholder="Cualquiera" />
+            <select
+              style={s.input}
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+              aria-label="Filtro por país"
+            >
+              <option value="">Todos</option>
+              {LATAM_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Tier</label>
@@ -208,7 +234,7 @@ export default function Clients() {
         </div>
 
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+          <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
             <thead>
               <tr>
                 {['Nombre', 'País', 'Industria', 'Tier', 'Oportunidades', 'Contratos activos', 'Estado', ''].map((h) => (

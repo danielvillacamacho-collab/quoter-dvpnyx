@@ -76,34 +76,111 @@ describe('Assignments module', () => {
     expect(empSel.querySelector('option[value="e9"]')).toBeNull();
   });
 
-  it('creates assignment via POST with force when the override checkbox is ticked', async () => {
-    apiV2.apiPost.mockResolvedValue({ id: 'a-new' });
+  it('creates assignment via POST (happy path, no overrides)', async () => {
+    apiV2.apiPost.mockResolvedValue({ id: 'a-new', validation: { valid: true } });
     mount();
     await screen.findByText('Ana García');
     await waitFor(() => {
-      // Wait for requests + employees to be populated in the form dropdowns
       expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/resource-requests'))).toBe(true);
     });
     fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => {
       expect(within(dialog).getByLabelText('Solicitud').querySelector('option[value="r1"]')).not.toBeNull();
-      expect(within(dialog).getByLabelText('Empleado').querySelector('option[value="e1"]')).not.toBeNull();
     });
     fireEvent.change(within(dialog).getByLabelText('Solicitud'), { target: { value: 'r1' } });
     fireEvent.change(within(dialog).getByLabelText('Empleado'),  { target: { value: 'e1' } });
     fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-05-01' } });
-    fireEvent.click(within(dialog).getByLabelText('Forzar overbooking'));
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/assignments',
         expect.objectContaining({
-          resource_request_id: 'r1', employee_id: 'e1',
-          contract_id: 'ct1', force: true,
-        })
+          resource_request_id: 'r1', employee_id: 'e1', contract_id: 'ct1',
+        }),
       );
     });
+    // No override flag should be sent on the happy path.
+    const [, sentBody] = apiV2.apiPost.mock.calls[0];
+    expect(sentBody).not.toHaveProperty('override_reason');
+    expect(sentBody).not.toHaveProperty('force');
+  });
+
+  it('US-VAL-4: on 409 OVERRIDE_REQUIRED shows the validation modal and retries with override_reason', async () => {
+    // First POST returns 409 with a capacity fail → triggers modal.
+    const checks = [
+      { check: 'area_match',    status: 'pass', message: 'ok' },
+      { check: 'level_match',   status: 'pass', message: 'ok' },
+      { check: 'capacity',      status: 'fail', overridable: true, message: 'Sin capacidad', detail: { utilization_after_pct: 125 } },
+      { check: 'date_conflict', status: 'pass', message: 'ok' },
+    ];
+    const conflictErr = Object.assign(new Error('needs override'), {
+      status: 409,
+      body: {
+        code: 'OVERRIDE_REQUIRED', requires_justification: true,
+        checks, summary: { pass: 3, warn: 0, info: 0, fail: 1, overridable_fails: 1, non_overridable_fails: 0 },
+      },
+    });
+    apiV2.apiPost
+      .mockRejectedValueOnce(conflictErr)
+      .mockResolvedValueOnce({ id: 'a-new', validation: { valid: false, can_override: true } });
+
+    mount();
+    await screen.findByText('Ana García');
+    fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => {
+      expect(within(dialog).getByLabelText('Solicitud').querySelector('option[value="r1"]')).not.toBeNull();
+    });
+    fireEvent.change(within(dialog).getByLabelText('Solicitud'), { target: { value: 'r1' } });
+    fireEvent.change(within(dialog).getByLabelText('Empleado'),  { target: { value: 'e1' } });
+    fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-05-01' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
+
+    // Modal should appear with the checklist
+    await screen.findByText(/Revisión de compatibilidad/i);
+    const reason = 'Aprobado por COO para cubrir hito crítico del cliente.';
+    fireEvent.change(screen.getByLabelText(/Justificación de override/i), { target: { value: reason } });
+    fireEvent.click(screen.getByRole('button', { name: /Crear con justificación/i }));
+
+    await waitFor(() => {
+      expect(apiV2.apiPost).toHaveBeenCalledTimes(2);
+    });
+    const [, retryBody] = apiV2.apiPost.mock.calls[1];
+    expect(retryBody.override_reason).toBe(reason);
+  });
+
+  it('US-VAL-4: on 409 VALIDATION_FAILED (non-overridable) shows modal without justification field', async () => {
+    const conflictErr = Object.assign(new Error('blocked'), {
+      status: 409,
+      body: {
+        code: 'VALIDATION_FAILED',
+        checks: [
+          { check: 'area_match',    status: 'pass', message: 'ok' },
+          { check: 'level_match',   status: 'pass', message: 'ok' },
+          { check: 'capacity',      status: 'pass', message: 'ok' },
+          { check: 'date_conflict', status: 'fail', overridable: false, message: 'No overlap' },
+        ],
+        summary: { pass: 3, warn: 0, info: 0, fail: 1, overridable_fails: 0, non_overridable_fails: 1 },
+      },
+    });
+    apiV2.apiPost.mockRejectedValueOnce(conflictErr);
+
+    mount();
+    await screen.findByText('Ana García');
+    fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => {
+      expect(within(dialog).getByLabelText('Solicitud').querySelector('option[value="r1"]')).not.toBeNull();
+    });
+    fireEvent.change(within(dialog).getByLabelText('Solicitud'), { target: { value: 'r1' } });
+    fireEvent.change(within(dialog).getByLabelText('Empleado'),  { target: { value: 'e1' } });
+    fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-05-01' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
+
+    await screen.findByText(/Revisión de compatibilidad/i);
+    expect(screen.queryByLabelText(/Justificación de override/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Crear con justificación/i })).not.toBeInTheDocument();
   });
 
   it('deletes with confirmation; surfaces soft-delete message when time entries preserved', async () => {
@@ -128,5 +205,18 @@ describe('Assignments module', () => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes('status=active'))).toBe(true);
     });
+  });
+
+  it('Descargar CSV button calls apiDownload with active filters', async () => {
+    apiV2.apiDownload.mockResolvedValue();
+    mount();
+    await screen.findByText('Ana García');
+    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'active' } });
+    fireEvent.click(screen.getByTestId('assignments-export-csv'));
+    await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));
+    const [url, filename] = apiV2.apiDownload.mock.calls[0];
+    expect(url).toMatch(/^\/api\/assignments\/export\.csv\?/);
+    expect(url).toContain('status=active');
+    expect(filename).toBe('asignaciones.csv');
   });
 });

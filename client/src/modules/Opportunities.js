@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
+import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import StatusBadge from '../shell/StatusBadge';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -12,8 +14,10 @@ const s = {
   btnOutline: { background: 'transparent', color: 'var(--purple-dark)', border: '1px solid var(--purple-dark)', borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   input:  { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, outline: 'none' },
   label:  { fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 4, display: 'block' },
-  th:     { padding: '10px 12px', fontSize: 11, fontWeight: 700, color: '#fff', background: 'var(--purple-dark)', textAlign: 'left', whiteSpace: 'nowrap' },
-  td:     { padding: '10px 12px', fontSize: 13, borderBottom: '1px solid var(--border)' },
+  // UI refresh Phase 2 — table styles come from the shared design-tokens
+  // helper so every list page adopts the same density + palette at once.
+  th:     dsTh,
+  td:     dsTd,
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 },
   filters:{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'end' },
   modalBg:{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 },
@@ -310,9 +314,36 @@ export default function Opportunities() {
           <h1 style={s.h1}>💼 Oportunidades</h1>
           <div style={s.sub}>Pipeline comercial. Una oportunidad agrupa cotizaciones de un mismo deal.</div>
         </div>
-        <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
-          + Nueva Oportunidad
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            style={{
+              background: 'transparent',
+              color: 'var(--ds-text, #222)',
+              border: '1px solid var(--ds-border, #ccc)',
+              borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'Montserrat',
+            }}
+            onClick={async () => {
+              try {
+                const qs = new URLSearchParams();
+                if (search)        qs.set('search', search);
+                if (clientFilter)  qs.set('client_id', clientFilter);
+                if (statusFilter)  qs.set('status', statusFilter);
+                await apiDownload(`/api/opportunities/export.csv${qs.toString() ? `?${qs}` : ''}`, 'oportunidades.csv');
+              } catch (e) {
+                // eslint-disable-next-line no-alert
+                alert(`No se pudo descargar: ${e.message}`);
+              }
+            }}
+            data-testid="opportunities-export-csv"
+          >
+            ⤓ Descargar CSV
+          </button>
+          <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
+            + Nueva Oportunidad
+          </button>
+        </div>
       </div>
 
       <div style={s.card}>
@@ -343,7 +374,7 @@ export default function Opportunities() {
         </div>
 
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
+          <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
             <thead>
               <tr>
                 {['Nombre', 'Cliente', 'Estado', 'Cotizaciones', 'Cierre esperado', 'Creada', ''].map((h) => (
@@ -369,10 +400,7 @@ export default function Opportunities() {
                     </td>
                     <td style={s.td}>{o.client_name || '—'}</td>
                     <td style={s.td}>
-                      <span style={{
-                        display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700,
-                        background: STATUS_COLORS[o.status] || 'var(--text-light)', color: '#fff',
-                      }}>{STATUS_LABEL[o.status] || o.status}</span>
+                      <StatusBadge domain="opportunity" value={o.status} label={STATUS_LABEL[o.status]} />
                     </td>
                     <td style={{ ...s.td, textAlign: 'center' }}>{o.quotations_count ?? 0}</td>
                     <td style={s.td}>{o.expected_close_date ? String(o.expected_close_date).slice(0, 10) : '—'}</td>

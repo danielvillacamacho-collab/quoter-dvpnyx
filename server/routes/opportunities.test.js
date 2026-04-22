@@ -193,14 +193,20 @@ describe('POST /api/opportunities', () => {
     expect(insertParams[5]).toBe('s-from-user');   // squad pulled from users table
   });
 
-  it('returns 400 when the user has no squad assigned and none is provided', async () => {
-    queryQueue.push({ rows: [{ id: 'c1', active: true }] });
-    queryQueue.push({ rows: [{ squad_id: null }] });
+  it('self-heals by auto-creating the default squad when the user has none', async () => {
+    // Squads are internal (hidden from UI). When the user has no squad AND
+    // no default squad exists yet, the route auto-creates "DVPNYX Global".
+    queryQueue.push({ rows: [{ id: 'c1', active: true }] });    // client
+    queryQueue.push({ rows: [{ squad_id: null }] });            // user squad
+    queryQueue.push({ rows: [] });                              // no default squad
+    queryQueue.push({ rows: [{ id: 's-auto' }] });              // INSERT default squad
+    queryQueue.push({ rows: [{ id: 'o-new', name: 'Deal A', client_id: 'c1', status: 'open' }] });
     const res = await client.call('POST', '/api/opportunities', {
       client_id: 'c1', name: 'Deal A',
     });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/squad/i);
+    expect(res.status).toBe(201);
+    const insertParams = issuedQueries[issuedQueries.length - 1].params;
+    expect(insertParams[5]).toBe('s-auto'); // opportunity inserted with auto-created squad
   });
 
   it('creates an opportunity and emits opportunity.created', async () => {
@@ -348,5 +354,30 @@ describe('DELETE /api/opportunities/:id (admin+)', () => {
     const res = await client.call('DELETE', '/api/opportunities/o1');
     expect(res.status).toBe(200);
     expect(res.body.message).toMatch(/eliminada/i);
+  });
+});
+
+describe('GET /api/opportunities/export.csv', () => {
+  it('streams a CSV with BOM + header + rows and honors status filter', async () => {
+    queryQueue.push({ rows: [
+      { id: 'o1', name: 'Deal A', status: 'open', outcome: null, outcome_reason: null,
+        expected_close_date: '2026-06-30', closed_at: null, description: 'big "one"',
+        created_at: '2026-01-01T00:00:00Z', client_name: 'Acme' },
+    ] });
+    const res = await client.call('GET', '/api/opportunities/export.csv?status=open');
+    expect(res.status).toBe(200);
+    expect(res.body.charCodeAt(0)).toBe(0xFEFF);
+    expect(res.body).toMatch(/Nombre,Cliente,Estado/);
+    expect(res.body).toMatch(/Deal A,Acme,open/);
+    // Embedded quote in description must be CSV-escaped
+    expect(res.body).toMatch(/"big ""one"""/);
+    const exec = issuedQueries.find((q) => /FROM opportunities o/.test(q.sql));
+    expect(exec.params).toContain('open');
+  });
+
+  it('returns 500 when the DB throws', async () => {
+    queryQueue.push(new Error('boom'));
+    const res = await client.call('GET', '/api/opportunities/export.csv');
+    expect(res.status).toBe(500);
   });
 });

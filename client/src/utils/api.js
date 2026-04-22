@@ -22,6 +22,7 @@ export const api = async (path, opts = {}) => {
 export const login = (email, password) => api('/auth/login', { method: 'POST', body: { email, password } });
 export const getMe = () => api('/auth/me');
 export const changePassword = (current_password, new_password) => api('/auth/change-password', { method: 'POST', body: { current_password, new_password } });
+export const updatePreferences = (patch) => api('/auth/me/preferences', { method: 'PUT', body: patch });
 export const getUsers = () => api('/users');
 export const createUser = (data) => api('/users', { method: 'POST', body: data });
 export const updateUser = (id, data) => api(`/users/${id}`, { method: 'PUT', body: data });
@@ -35,3 +36,4 @@ export const createQuotation = (data) => api('/quotations', { method: 'POST', bo
 export const updateQuotation = (id, data) => api(`/quotations/${id}`, { method: 'PUT', body: data });
 export const duplicateQuotation = (id) => api(`/quotations/${id}/duplicate`, { method: 'POST' });
 export const deleteQuotation = (id) => api(`/quotations/${id}`, { method: 'DELETE' });
+export const getDashboardOverview = () => api('/dashboard/overview');

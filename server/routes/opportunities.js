@@ -31,6 +31,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { stringifyCsv } = require('../utils/csv');
 
 router.use(auth);
 
@@ -101,6 +102,58 @@ router.get('/', async (req, res) => {
   }
 });
 
+/* -------- EXPORT CSV -------- */
+const EXPORT_LIMIT = 10000;
+router.get('/export.csv', async (req, res) => {
+  try {
+    const wheres = ['o.deleted_at IS NULL'];
+    const params = [];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+
+    if (req.query.search) {
+      const like = '%' + req.query.search + '%';
+      wheres.push(`(LOWER(o.name) LIKE LOWER(${add(like)}) OR LOWER(o.description) LIKE LOWER(${add(like)}))`);
+    }
+    if (req.query.client_id) wheres.push(`o.client_id = ${add(req.query.client_id)}`);
+    if (req.query.status)    wheres.push(`o.status = ${add(req.query.status)}`);
+    if (req.query.owner_id)  wheres.push(`o.account_owner_id = ${add(req.query.owner_id)}`);
+    if (req.query.from_expected_close) wheres.push(`o.expected_close_date >= ${add(req.query.from_expected_close)}`);
+    if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
+
+    const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
+    const { rows } = await pool.query(
+      `SELECT o.id, o.name, o.status, o.outcome, o.outcome_reason,
+              o.expected_close_date, o.closed_at, o.description, o.created_at,
+              c.name AS client_name
+         FROM opportunities o
+         LEFT JOIN clients c ON c.id = o.client_id
+         ${where}
+         ORDER BY o.created_at DESC
+         LIMIT ${EXPORT_LIMIT}`,
+      params
+    );
+    const csv = stringifyCsv(rows, [
+      { key: 'id',                   header: 'ID' },
+      { key: 'name',                 header: 'Nombre' },
+      { key: 'client_name',          header: 'Cliente' },
+      { key: 'status',               header: 'Estado' },
+      { key: 'outcome',              header: 'Resultado' },
+      { key: 'outcome_reason',       header: 'Motivo' },
+      { key: 'expected_close_date',  header: 'Cierre esperado' },
+      { key: 'closed_at',            header: 'Cerrada' },
+      { key: 'description',          header: 'Descripción' },
+      { key: 'created_at',           header: 'Creada' },
+    ]);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="oportunidades.csv"');
+    res.send(csv);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /opportunities/export.csv failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 /* -------- GET ONE -------- */
 router.get('/:id', async (req, res) => {
   try {
@@ -167,16 +220,34 @@ router.post('/', async (req, res) => {
 
     const ownerId = account_owner_id || req.user.id;
 
-    // Resolve squad_id: explicit from body, else look up from users table
+    // Resolve squad_id automatically. Squads are an internal concept no longer
+    // exposed in the UI — we resolve (or auto-create) a default so opportunity
+    // creation never fails. Order: body → user's squad → default "DVPNYX Global"
+    // → auto-create the default if the table is empty.
     let finalSquadId = squad_id || null;
     if (!finalSquadId) {
       const { rows: userRows } = await pool.query(`SELECT squad_id FROM users WHERE id=$1`, [ownerId]);
       finalSquadId = userRows[0]?.squad_id || null;
     }
     if (!finalSquadId) {
-      return res.status(400).json({
-        error: 'El usuario no tiene squad asignado; un administrador debe asignar un squad antes de crear oportunidades',
-      });
+      const { rows: sRows } = await pool.query(
+        `SELECT id FROM squads
+           WHERE deleted_at IS NULL AND active = true
+           ORDER BY (LOWER(name) = LOWER('DVPNYX Global')) DESC, created_at ASC
+           LIMIT 1`
+      );
+      finalSquadId = sRows[0]?.id || null;
+    }
+    if (!finalSquadId) {
+      const { rows: createdRows } = await pool.query(
+        `INSERT INTO squads (name, description, active)
+           VALUES ('DVPNYX Global', 'Squad por defecto (auto-creado)', true)
+           RETURNING id`
+      );
+      finalSquadId = createdRows[0]?.id || null;
+    }
+    if (!finalSquadId) {
+      return res.status(500).json({ error: 'No se pudo resolver el squad por defecto. Contacta al administrador.' });
     }
 
     const { rows } = await pool.query(

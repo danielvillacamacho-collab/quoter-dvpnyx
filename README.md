@@ -1,273 +1,194 @@
-# DVPNYX Cotizador — Web Application
+# DVPNYX Quoter + Capacity Planner
 
-Aplicación web para cotización de servicios de Staff Augmentation y Proyectos de Alcance Fijo.
+SaaS interno de Double V Partners que integra **quote → contract → staff → bill**: cotizaciones de staff augmentation y proyectos de alcance fijo, gestión de contratos, solicitudes de recursos, asignación de empleados, time tracking y reportes ejecutivos.
 
-## Quick start
+**Producción:** https://quoter.doublevpartners.com · **Dev:** https://dev.quoter.doublevpartners.com
 
-### Desarrollo local (un comando, sin AWS)
+---
+
+## 📦 Entrega a nuevo equipo
+
+Si estás arrancando con este proyecto, **empezá aquí**:
+
+1. [`HANDOFF.md`](HANDOFF.md) — punto de entrada, 10 min de lectura.
+2. [`docs/PROJECT_STATE_HANDOFF.md`](docs/PROJECT_STATE_HANDOFF.md) — estado real del sistema, tech debt, preguntas abiertas.
+3. [`ARCHITECTURE.md`](ARCHITECTURE.md) — diagramas, flujos, puntos de extensión.
+4. [`CONTRIBUTING.md`](CONTRIBUTING.md) — ramas, commits, PRs, tests.
+5. [`CHANGELOG.md`](CHANGELOG.md) — historial por fases.
+6. [`SECURITY.md`](SECURITY.md) — modelo de amenazas y reporte de vulnerabilidades.
+
+---
+
+## 🚀 Quick start (5 minutos)
+
+### Desarrollo local — un comando
+
 ```bash
 docker compose -f docker-compose.dev.yml up --build
 # → cliente: http://localhost:3000
 # → API:     http://localhost:4000
-# → DB:      127.0.0.1:55432
+# → DB:      127.0.0.1:55432 (postgres/postgres, db: dvpnyx)
 ```
 
-### Documentación funcional
-- [`docs/DVPNYX_Cotizador_Documentacion_Funcional.docx`](docs/DVPNYX_Cotizador_Documentacion_Funcional.docx) — sistema actual + historias de usuario
-- [`docs/DVPNYX_Arquitectura_AWS_Modernizada.docx`](docs/DVPNYX_Arquitectura_AWS_Modernizada.docx) — propuesta de modernización AWS
-- [`docs/ONBOARDING_DEV.md`](docs/ONBOARDING_DEV.md) — setup de ambiente de desarrollo
-- [`docs/runbooks/`](docs/runbooks/) — playbooks de rollback y DR
+Credenciales seed:
+- `admin@dvpnyx.com` / `admin123` — superadmin
+- `user@dvpnyx.com` / `user123` — member
 
-### Branching
-| Rama      | Destino                                     | CI/CD             |
-|-----------|---------------------------------------------|-------------------|
-| `main`    | Producción EC2 (`quoter.doublevpartners.com`) | `deploy.yml` auto |
-| `develop` | AWS Dev Stack (cuando se active)            | `develop-ci.yml`  |
-| `feat/*`  | Ninguno (sólo tests en PR)                  | `develop-ci.yml`  |
+### Tests
 
+```bash
+# Backend — 456 tests en 25 suites
+cd server && npx jest
 
-## Arquitectura
+# Frontend — 318 tests en 32 suites
+cd client && npm run test:ci
+
+# Con cobertura
+cd server && npm run test:coverage
+cd client && npm run test:coverage
+```
+
+Setup detallado, troubleshooting y variables de entorno: [`docs/ONBOARDING_DEV.md`](docs/ONBOARDING_DEV.md).
+
+---
+
+## 🧱 Stack
+
+| Capa | Tecnología |
+|------|-----------|
+| Frontend | React 18 + react-router-dom 6, Create React App 5, fonts self-hosted (`@fontsource/*`), DS con tokens CSS (`--ds-*`) |
+| Backend | Node 20 + Express 4, `pg` driver nativo, JWT (`jsonwebtoken`), `helmet`, `express-rate-limit`, `express-validator` |
+| DB | PostgreSQL 16 |
+| Packaging | Dockerfile multi-stage; `client/build` servido por el mismo Express en prod |
+| Reverse proxy | Traefik (TLS + host rule) |
+| CI/CD | 6 GitHub Actions → GHCR → EC2 (ver [`.github/workflows/`](.github/workflows/)) |
+| Testing | Jest + supertest (backend) · Jest + React Testing Library (frontend) |
+| Infra alterna | AWS CDK (TypeScript) en [`infra/`](infra/) — stack listo para activar |
+
+---
+
+## 📂 Layout del repo
 
 ```
 dvpnyx-quoter/
-├── client/          # React SPA (CRA)
-│   ├── public/
+├── HANDOFF.md              ← primer archivo a leer
+├── ARCHITECTURE.md         ← diagramas + flujos técnicos
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── SECURITY.md
+├── LICENSE
+├── client/                 # React 18 SPA (CRA)
 │   └── src/
-│       ├── App.js           # Rutas, contexto, todas las páginas
-│       └── utils/
-│           ├── api.js        # Cliente HTTP
-│           └── calc.js       # Motor de cálculo (replica lógica Excel)
-├── server/          # Express API
-│   ├── index.js             # Entry point
+│       ├── App.js
+│       ├── AuthContext.js
+│       ├── theme.css       # tokens DS — fuente única de estilos
+│       ├── modules/*.js    # una pantalla por módulo
+│       ├── shell/*.js      # Sidebar, Topbar, StatusBadge, Avatar, …
+│       └── utils/{api,apiV2,calc}.js
+├── server/                 # Express + pg
+│   ├── index.js
 │   ├── database/
-│   │   ├── pool.js          # Conexión PostgreSQL
-│   │   ├── migrate.js       # Esquema de base de datos
-│   │   └── seed.js          # Datos iniciales + admin
-│   ├── middleware/
-│   │   └── auth.js          # JWT + roles
-│   └── routes/
-│       ├── auth.js          # Login, cambio de clave
-│       ├── users.js         # CRUD usuarios (admin)
-│       ├── parameters.js    # CRUD parámetros (admin)
-│       └── quotations.js    # CRUD cotizaciones
-├── docker-compose.yml
+│   │   ├── migrate.js      # DDL idempotente (corre en cada deploy)
+│   │   ├── migrate_v2_data.js
+│   │   ├── seed.js
+│   │   └── pool.js
+│   ├── middleware/auth.js
+│   ├── routes/*.js         # una ruta por entidad
+│   └── utils/{calc,events,candidate_matcher,capacity_planner,assignment_validation,bulk_import,…}.js
+├── docs/
+│   ├── PROJECT_STATE_HANDOFF.md
+│   ├── MANUAL_DE_USUARIO.md
+│   ├── ONBOARDING_DEV.md
+│   ├── runbooks/           # DEPLOY / ROLLBACK / DR / BULK / V2_MIGRATION
+│   └── specs/v2/           # specs originales (pueden estar desfasadas; código manda)
+├── infra/                  # AWS CDK (TS)
+├── .github/workflows/
 ├── Dockerfile
-└── README.md
-```
-
-## Roles y Permisos
-
-| Rol | Cotizar | Ver historial | Editar parámetros | Gestionar usuarios |
-|-----|---------|--------------|-------------------|-------------------|
-| **superadmin** | ✅ | Todas | ✅ | ✅ (puede crear admins) |
-| **admin** | ✅ | Todas | ✅ | ✅ (solo preventa) |
-| **preventa** | ✅ | Solo propias | ❌ | ❌ |
-
-## Credenciales iniciales
-
-```
-Email:    daniel@doublevpartners.com
-Clave:    000000 (se debe cambiar en primer login)
+├── docker-compose.yml      # prod-like
+└── docker-compose.dev.yml
 ```
 
 ---
 
-## Despliegue en AWS
+## 🔐 Roles y permisos (V2)
 
-### Opción A: Docker Compose en EC2 (más simple)
+| Rol | Descripción | Permisos típicos |
+|-----|-------------|------------------|
+| `superadmin` | Dios | Todo + impersonation |
+| `admin` | Operativo | CRUD de todas las entidades |
+| `lead` | Lidera un squad | Aprueba asignaciones (aspiracional — chequeo formal pendiente) |
+| `member` | Usuario estándar | Cotiza, registra horas, ve sus propios datos |
+| `viewer` | Solo lectura | Acceso lectura a reportes |
 
-#### 1. Lanzar EC2
-
-- AMI: Amazon Linux 2023
-- Tipo: t3.medium (mínimo)
-- Security Group: abrir puertos 80, 443, 22
-- Almacenamiento: 30 GB gp3
-
-#### 2. Instalar Docker
-
-```bash
-sudo yum update -y
-sudo yum install -y docker git
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo usermod -aG docker ec2-user
-
-# Docker Compose
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-```
-
-#### 3. Clonar y configurar
-
-```bash
-git clone <tu-repo> dvpnyx-quoter
-cd dvpnyx-quoter
-
-# Crear archivo de variables de entorno
-cat > .env << EOF
-DB_PASSWORD=$(openssl rand -hex 16)
-JWT_SECRET=$(openssl rand -hex 32)
-CLIENT_URL=https://cotizador.dvpnyx.com
-EOF
-```
-
-#### 4. Levantar
-
-```bash
-docker-compose up -d --build
-
-# Ejecutar migraciones y seed (primera vez)
-docker-compose exec server node database/migrate.js
-docker-compose exec server node database/seed.js
-```
-
-#### 5. Configurar NGINX como reverse proxy (con SSL)
-
-```bash
-sudo yum install -y nginx certbot python3-certbot-nginx
-
-sudo tee /etc/nginx/conf.d/dvpnyx.conf << 'EOF'
-server {
-    listen 80;
-    server_name cotizador.dvpnyx.com;
-
-    location / {
-        proxy_pass http://localhost:4000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-EOF
-
-sudo systemctl start nginx
-sudo certbot --nginx -d cotizador.dvpnyx.com
-```
+Campo adicional `users.function` (comercial / preventa / delivery / capacity / finanzas) para visibilidades futuras por función.
 
 ---
 
-### Opción B: ECS + RDS (producción enterprise)
+## 🌿 Branching
 
-#### 1. RDS PostgreSQL
+| Rama | Destino | CI/CD |
+|------|---------|-------|
+| `main` | Producción (`quoter.doublevpartners.com`) | `deploy.yml` (manual release PR desde `develop`) |
+| `develop` | Dev (`dev.quoter.doublevpartners.com`) | `develop-ci.yml` + `deploy-dev.yml` |
+| `feat/*`, `fix/*`, `chore/*` | — | Tests en PR |
 
-```bash
-aws rds create-db-instance \
-  --db-instance-identifier dvpnyx-quoter-db \
-  --db-instance-class db.t3.micro \
-  --engine postgres \
-  --engine-version 16 \
-  --master-username dvpnyx \
-  --master-user-password $(openssl rand -hex 16) \
-  --allocated-storage 20 \
-  --vpc-security-group-ids sg-xxx \
-  --db-name dvpnyx_quoter \
-  --backup-retention-period 7 \
-  --storage-encrypted
-```
-
-#### 2. ECR (Container Registry)
-
-```bash
-aws ecr create-repository --repository-name dvpnyx-quoter
-
-# Build y push
-aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
-docker build -t dvpnyx-quoter .
-docker tag dvpnyx-quoter:latest <account>.dkr.ecr.<region>.amazonaws.com/dvpnyx-quoter:latest
-docker push <account>.dkr.ecr.<region>.amazonaws.com/dvpnyx-quoter:latest
-```
-
-#### 3. ECS Fargate
-
-Crear Task Definition con las variables de entorno apuntando a RDS:
-
-```json
-{
-  "family": "dvpnyx-quoter",
-  "containerDefinitions": [{
-    "name": "app",
-    "image": "<account>.dkr.ecr.<region>.amazonaws.com/dvpnyx-quoter:latest",
-    "portMappings": [{ "containerPort": 4000 }],
-    "environment": [
-      { "name": "DB_HOST", "value": "<rds-endpoint>" },
-      { "name": "DB_PORT", "value": "5432" },
-      { "name": "DB_NAME", "value": "dvpnyx_quoter" },
-      { "name": "DB_USER", "value": "dvpnyx" },
-      { "name": "NODE_ENV", "value": "production" }
-    ],
-    "secrets": [
-      { "name": "DB_PASSWORD", "valueFrom": "arn:aws:ssm:...:parameter/dvpnyx/db-password" },
-      { "name": "JWT_SECRET", "valueFrom": "arn:aws:ssm:...:parameter/dvpnyx/jwt-secret" }
-    ],
-    "memory": 512,
-    "cpu": 256
-  }]
-}
-```
-
-#### 4. ALB + Route53
-
-- Crear Application Load Balancer
-- Target group apuntando al servicio ECS
-- Certificate Manager para SSL
-- Route53: cotizador.dvpnyx.com → ALB
+Detalle en [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
-## Desarrollo Local
+## 🧪 Salud del código al momento de la entrega (2026-04-21)
 
-```bash
-# 1. Instalar dependencias
-npm install
-cd server && npm install && cd ..
-cd client && npm install && cd ..
+| Métrica | Valor |
+|---------|-------|
+| Tests backend | 456 / 456 ✅ |
+| Tests frontend | 318 / 318 ✅ |
+| Build warnings | 0 |
+| TODOs / FIXMEs huérfanos | 0 |
+| Secretos commiteados | 0 |
+| CI pipelines activos | 6 |
 
-# 2. PostgreSQL local (o usar Docker)
-docker run -d --name pg-dvpnyx -p 5432:5432 \
-  -e POSTGRES_DB=dvpnyx_quoter \
-  -e POSTGRES_USER=dvpnyx \
-  -e POSTGRES_PASSWORD=devpassword \
-  postgres:16-alpine
+---
 
-# 3. Configurar .env
-cp server/.env.example server/.env
-# Editar con las credenciales locales
+## 🛠️ Deploy
 
-# 4. Migrar y seedear
-npm run db:migrate
-npm run db:seed
+### Local (desarrollo)
+`docker compose -f docker-compose.dev.yml up --build` — todo en contenedores.
 
-# 5. Correr en desarrollo
-npm run dev
-# → Server en http://localhost:4000
-# → Client en http://localhost:3000
-```
+### Producción actual (Traefik + EC2 + GHCR)
+Flujo automatizado vía GitHub Actions. Runbook: [`docs/runbooks/DEPLOY.md`](docs/runbooks/DEPLOY.md).
+Rollback: [`docs/runbooks/ROLLBACK.md`](docs/runbooks/ROLLBACK.md).
+DR: [`docs/runbooks/DR.md`](docs/runbooks/DR.md).
 
-## Seguridad Implementada
+### Alternativa AWS (CDK)
+Stack TypeScript en [`infra/`](infra/). Inactivo hoy; activable cuando se decida migrar de EC2 a ECS/Fargate + RDS.
 
-- **Autenticación JWT** con expiración configurable (default 8h)
-- **Bcrypt** para hash de contraseñas (12 rounds)
-- **Rate limiting**: 200 req/15min general, 10 req/15min en login
-- **Helmet** para headers de seguridad
-- **CORS** configurado por variable de entorno
-- **Cambio de contraseña obligatorio** en primer login
-- **Audit log** de todas las acciones (login, CRUD, cambios de parámetros)
-- **Roles jerárquicos**: superadmin > admin > preventa
-- **Prepared statements** en todas las queries SQL (previene SQL injection)
-- **Validación de entrada** en todas las rutas
+---
 
-## Variables de Entorno
+## 🔧 Variables de entorno
 
-| Variable | Descripción | Default |
-|----------|-------------|---------|
-| `DB_HOST` | Host de PostgreSQL | `localhost` |
-| `DB_PORT` | Puerto de PostgreSQL | `5432` |
-| `DB_NAME` | Nombre de la base de datos | `dvpnyx_quoter` |
-| `DB_USER` | Usuario de PostgreSQL | `dvpnyx` |
-| `DB_PASSWORD` | Contraseña de PostgreSQL | — |
-| `JWT_SECRET` | Secreto para firmar tokens | — |
-| `JWT_EXPIRES_IN` | Tiempo de vida del token | `8h` |
-| `PORT` | Puerto del servidor | `4000` |
+| Variable | Descripción | Default (dev) |
+|----------|-------------|---------------|
+| `DB_HOST` | Host Postgres | `localhost` |
+| `DB_PORT` | Puerto Postgres | `5432` |
+| `DB_NAME` | Database | `dvpnyx` |
+| `DB_USER` | Usuario | `postgres` |
+| `DB_PASSWORD` | Password | (requerido en prod) |
+| `JWT_SECRET` | Secreto JWT | (requerido) |
+| `JWT_EXPIRES_IN` | TTL del token | `8h` |
+| `PORT` | Puerto API | `4000` |
 | `NODE_ENV` | Ambiente | `development` |
-| `CLIENT_URL` | URL del cliente (CORS) | `http://localhost:3000` |
+| `CLIENT_URL` | Origin CORS | `http://localhost:3000` |
+| `APP_VERSION` | Versión (para `/api/health`) | `2.0.0-dev` |
+| `GIT_SHA` / `REACT_APP_GIT_SHA` | SHA commit (para `/api/health`) | `unknown` |
+
+Ver [`server/.env.example`](server/.env.example) y [`.env.example`](.env.example).
+
+---
+
+## 📜 Licencia
+
+Propiedad de Double V Partners. Ver [`LICENSE`](LICENSE). Third-party bajo sus licencias respectivas (ver `node_modules/`).
+
+---
+
+*README actualizado 2026-04-21 como parte de la entrega formal a nuevo equipo. Si algo acá queda desactualizado, la fuente de verdad es `HANDOFF.md` + el código.*

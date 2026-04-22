@@ -41,10 +41,62 @@ router.post('/change-password', auth, async (req, res) => {
 
 router.get('/me', auth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT id, email, name, role, must_change_password FROM users WHERE id=$1', [req.user.id]);
+    const { rows } = await pool.query(
+      'SELECT id, email, name, role, must_change_password, preferences FROM users WHERE id=$1',
+      [req.user.id],
+    );
     if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
-    res.json(rows[0]);
+    // Ensure preferences is always an object on the wire — psql returns {} but
+    // if the column were ever NULL (shouldn't, DEFAULT guards it) the client
+    // would crash reading user.preferences.scheme.
+    const row = rows[0];
+    row.preferences = row.preferences || {};
+    res.json(row);
   } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+});
+
+/**
+ * PUT /api/auth/me/preferences
+ *
+ * Phase 10 UI refresh — self-service UI preferences. Any authenticated user
+ * can update their own preferences; no admin check. Body is merged with the
+ * existing JSONB (so the client can PATCH just `{ scheme: 'dark' }` without
+ * wiping accentHue / density). Unknown keys are dropped to keep the schema
+ * explicit.
+ */
+const ALLOWED_PREF_KEYS = ['scheme', 'accentHue', 'density'];
+function sanitizePrefs(body) {
+  const out = {};
+  if (!body || typeof body !== 'object') return out;
+  for (const k of ALLOWED_PREF_KEYS) {
+    if (!(k in body)) continue;
+    const v = body[k];
+    if (k === 'scheme' && ['light', 'dark'].includes(v)) out.scheme = v;
+    else if (k === 'accentHue' && Number.isFinite(v) && v >= 0 && v <= 360) out.accentHue = Math.round(v);
+    else if (k === 'density' && Number.isFinite(v) && v >= 0.85 && v <= 1.2) out.density = Number(v);
+  }
+  return out;
+}
+
+router.put('/me/preferences', auth, async (req, res) => {
+  try {
+    const patch = sanitizePrefs(req.body);
+    // `||` short-circuits the empty-object case: jsonb_strip_nulls keeps
+    // `{ scheme: null }` from accidentally blanking existing keys.
+    const { rows } = await pool.query(
+      `UPDATE users
+         SET preferences = COALESCE(preferences, '{}'::jsonb) || $1::jsonb,
+             updated_at = NOW()
+       WHERE id = $2
+       RETURNING preferences`,
+      [JSON.stringify(patch), req.user.id],
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
+    res.json({ preferences: rows[0].preferences || {} });
+  } catch (err) {
+    console.error('PUT /me/preferences failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
 });
 
 module.exports = router;

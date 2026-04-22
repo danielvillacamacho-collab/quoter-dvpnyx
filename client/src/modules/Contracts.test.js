@@ -103,14 +103,16 @@ describe('Contracts module', () => {
     fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
     fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'project' } });
     fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-06-01' } });
-    fireEvent.change(within(dialog).getByLabelText('Squad ID'), { target: { value: 's-uuid' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/contracts',
-        expect.objectContaining({ name: 'New Contract', client_id: 'c1', type: 'project', squad_id: 's-uuid' })
+        expect.objectContaining({ name: 'New Contract', client_id: 'c1', type: 'project' })
       );
     });
+    // squad_id ya no se envía desde el cliente — lo resuelve el backend
+    const payload = apiV2.apiPost.mock.calls[0][1];
+    expect(payload).not.toHaveProperty('squad_id');
   });
 
   it('deletes with confirmation', async () => {
@@ -130,5 +132,18 @@ describe('Contracts module', () => {
     });
     mount();
     await waitFor(() => expect(screen.getByText(/No hay contratos que coincidan/i)).toBeInTheDocument());
+  });
+
+  it('Descargar CSV button calls apiDownload with active filters', async () => {
+    apiV2.apiDownload.mockResolvedValue();
+    mount();
+    await screen.findByText('Contrato Alpha');
+    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'active' } });
+    fireEvent.click(screen.getByTestId('contracts-export-csv'));
+    await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));
+    const [url, filename] = apiV2.apiDownload.mock.calls[0];
+    expect(url).toMatch(/^\/api\/contracts\/export\.csv\?/);
+    expect(url).toContain('status=active');
+    expect(filename).toBe('contratos.csv');
   });
 });

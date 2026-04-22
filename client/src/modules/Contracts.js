@@ -1,6 +1,8 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
+import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import StatusBadge from '../shell/StatusBadge';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -11,8 +13,10 @@ const s = {
   btnOutline: { background: 'transparent', color: 'var(--purple-dark)', border: '1px solid var(--purple-dark)', borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
   input:  { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, outline: 'none' },
   label:  { fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 4, display: 'block' },
-  th:     { padding: '10px 12px', fontSize: 11, fontWeight: 700, color: '#fff', background: 'var(--purple-dark)', textAlign: 'left', whiteSpace: 'nowrap' },
-  td:     { padding: '10px 12px', fontSize: 13, borderBottom: '1px solid var(--border)' },
+  // UI refresh Phase 2 — table styles come from the shared design-tokens
+  // helper so every list page adopts the same density + palette at once.
+  th:     dsTh,
+  td:     dsTd,
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 },
   filters:{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'end' },
   modalBg:{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 },
@@ -49,7 +53,7 @@ const TRANSITIONS = {
 const EMPTY = {
   name: '', client_id: '', opportunity_id: '', winning_quotation_id: '',
   type: 'project', start_date: '', end_date: '',
-  squad_id: '', delivery_manager_id: '', notes: '',
+  delivery_manager_id: '', notes: '',
 };
 
 function ContractForm({ initial, clients, onSave, onCancel, saving }) {
@@ -64,7 +68,6 @@ function ContractForm({ initial, clients, onSave, onCancel, saving }) {
     if (!form.client_id) return setErr('Cliente es requerido');
     if (!form.type) return setErr('Tipo es requerido');
     if (!form.start_date) return setErr('Fecha de inicio es requerida');
-    if (!form.squad_id) return setErr('squad_id es requerido');
     try { await onSave(form); }
     catch (ex) { setErr(ex.message || 'Error guardando'); }
   };
@@ -101,13 +104,6 @@ function ContractForm({ initial, clients, onSave, onCancel, saving }) {
         <div>
           <label style={s.label}>Fecha fin</label>
           <input type="date" style={s.input} value={form.end_date ? String(form.end_date).slice(0, 10) : ''} onChange={(e) => set('end_date', e.target.value || null)} aria-label="Fecha fin" />
-        </div>
-      </div>
-      <div>
-        <label style={s.label}>Squad ID *</label>
-        <input style={s.input} value={form.squad_id || ''} onChange={(e) => set('squad_id', e.target.value)} placeholder="UUID del squad" aria-label="Squad ID" required />
-        <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 2 }}>
-          Entra el UUID manualmente; el selector de squads llega en un sprint posterior.
         </div>
       </div>
       <div>
@@ -169,7 +165,7 @@ export default function Contracts() {
       const payload = {
         name: form.name, client_id: form.client_id, type: form.type,
         start_date: form.start_date, end_date: form.end_date || null,
-        squad_id: form.squad_id, notes: form.notes,
+        notes: form.notes,
         opportunity_id: form.opportunity_id || null,
         winning_quotation_id: form.winning_quotation_id || null,
       };
@@ -211,9 +207,37 @@ export default function Contracts() {
           <h1 style={s.h1}>📑 Contratos</h1>
           <div style={s.sub}>Compromisos de entrega con clientes. Generan solicitudes y asignaciones.</div>
         </div>
-        <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
-          + Nuevo Contrato
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            type="button"
+            style={{
+              background: 'transparent',
+              color: 'var(--ds-text, #222)',
+              border: '1px solid var(--ds-border, #ccc)',
+              borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', fontFamily: 'Montserrat',
+            }}
+            onClick={async () => {
+              try {
+                const qs = new URLSearchParams();
+                if (search)        qs.set('search', search);
+                if (clientFilter)  qs.set('client_id', clientFilter);
+                if (statusFilter)  qs.set('status', statusFilter);
+                if (typeFilter)    qs.set('type', typeFilter);
+                await apiDownload(`/api/contracts/export.csv${qs.toString() ? `?${qs}` : ''}`, 'contratos.csv');
+              } catch (e) {
+                // eslint-disable-next-line no-alert
+                alert(`No se pudo descargar: ${e.message}`);
+              }
+            }}
+            data-testid="contracts-export-csv"
+          >
+            ⤓ Descargar CSV
+          </button>
+          <button style={s.btn('var(--teal-mid)')} onClick={() => { setEditing(null); setShowForm(true); }}>
+            + Nuevo Contrato
+          </button>
+        </div>
       </div>
 
       <div style={s.card}>
@@ -246,7 +270,7 @@ export default function Contracts() {
         </div>
 
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+          <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
                 {['Nombre', 'Cliente', 'Tipo', 'Estado', 'Inicio', 'Solicitudes abiertas', 'Asig. activas', ''].map((h) => (
@@ -273,10 +297,7 @@ export default function Contracts() {
                     <td style={s.td}>{c.client_name || '—'}</td>
                     <td style={{ ...s.td, fontSize: 12 }}>{TYPE_LABEL[c.type] || c.type}</td>
                     <td style={s.td}>
-                      <span style={{
-                        display: 'inline-block', padding: '2px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700,
-                        background: STATUS_COLOR[c.status] || 'var(--text-light)', color: '#fff',
-                      }}>{STATUS_LABEL[c.status] || c.status}</span>
+                      <StatusBadge domain="contract" value={c.status} label={STATUS_LABEL[c.status]} />
                     </td>
                     <td style={{ ...s.td, fontSize: 12 }}>{c.start_date ? String(c.start_date).slice(0, 10) : '—'}</td>
                     <td style={{ ...s.td, textAlign: 'center' }}>{c.open_requests_count ?? 0}</td>

@@ -108,7 +108,9 @@ describe('POST /api/contracts — EK-1 validations', () => {
   });
 
   it('rejects when required fields missing', async () => {
-    for (const miss of ['name', 'client_id', 'type', 'start_date', 'squad_id']) {
+    // squad_id is no longer required — the server resolves it automatically
+    // from the creator's squad or the global default.
+    for (const miss of ['name', 'client_id', 'type', 'start_date']) {
       const body = { ...validBody, [miss]: undefined };
       // eslint-disable-next-line no-await-in-loop
       const res = await client.call('POST', '/api/contracts', body);
@@ -144,6 +146,27 @@ describe('POST /api/contracts — EK-1 validations', () => {
     expect(res.status).toBe(201);
     const evt = emitEvent.mock.calls.find((c) => c[1].event_type === 'contract.created');
     expect(evt).toBeTruthy();
+  });
+
+  it('auto-resolves squad_id from creator when not provided', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    const { squad_id: _unused, ...bodyNoSquad } = validBody;
+    queryQueue.push({ rows: [{ squad_id: 'user-squad-uuid' }] });  // SELECT user squad
+    queryQueue.push({ rows: [{ id: 'c1', name: 'Acme' }] });        // client check
+    queryQueue.push({ rows: [{ id: 'ct-new', name: 'Contract Alpha', type: 'project', client_id: 'c1', status: 'planned' }] });
+    const res = await client.call('POST', '/api/contracts', bodyNoSquad);
+    expect(res.status).toBe(201);
+  });
+
+  it('auto-resolves squad_id from global squad when creator has none', async () => {
+    const { squad_id: _unused, ...bodyNoSquad } = validBody;
+    queryQueue.push({ rows: [{ squad_id: null }] });                // user has no squad
+    queryQueue.push({ rows: [{ id: 'global-squad-uuid' }] });       // global squad fallback
+    queryQueue.push({ rows: [{ id: 'c1', name: 'Acme' }] });        // client check
+    queryQueue.push({ rows: [{ id: 'ct-new', name: 'Contract Alpha', type: 'project', client_id: 'c1', status: 'planned' }] });
+    const res = await client.call('POST', '/api/contracts', bodyNoSquad);
+    expect(res.status).toBe(201);
   });
 });
 
@@ -259,5 +282,41 @@ describe('DELETE /api/contracts/:id', () => {
     expect(res.status).toBe(200);
     const evt = emitEvent.mock.calls.find((c) => c[1].event_type === 'contract.deleted');
     expect(evt).toBeTruthy();
+  });
+});
+
+describe('GET /api/contracts/export.csv', () => {
+  it('streams a CSV with header row + data rows using the same filters as list', async () => {
+    queryQueue.push({ rows: [
+      { id: 'ct1', name: 'Alpha', type: 'project', status: 'active',
+        start_date: '2026-01-01', end_date: null, notes: 'keep, going',
+        created_at: '2026-01-01T00:00:00Z', client_name: 'Acme' },
+    ] });
+    const res = await client.call('GET', '/api/contracts/export.csv?status=active');
+    expect(res.status).toBe(200);
+    expect(typeof res.body).toBe('string');
+    const csv = res.body;
+    // UTF-8 BOM so Excel opens it correctly on Windows
+    expect(csv.charCodeAt(0)).toBe(0xFEFF);
+    expect(csv).toMatch(/Nombre,Cliente,Tipo,Estado/);
+    expect(csv).toMatch(/Alpha,Acme,project,active/);
+    // Comma-bearing notes must be quoted
+    expect(csv).toMatch(/"keep, going"/);
+    // Filter was pushed into the WHERE
+    const exec = issuedQueries.find((q) => /FROM contracts c/.test(q.sql));
+    expect(exec.params).toContain('active');
+  });
+
+  it('returns a header-only CSV when there are no rows', async () => {
+    queryQueue.push({ rows: [] });
+    const res = await client.call('GET', '/api/contracts/export.csv');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatch(/Nombre,Cliente,Tipo,Estado/);
+  });
+
+  it('returns 500 when the DB throws', async () => {
+    queryQueue.push(new Error('boom'));
+    const res = await client.call('GET', '/api/contracts/export.csv');
+    expect(res.status).toBe(500);
   });
 });

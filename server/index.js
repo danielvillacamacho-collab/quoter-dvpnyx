@@ -31,12 +31,15 @@ app.use('/api/areas',             require('./routes/areas'));        // ✅ Spri
 app.use('/api/contracts',         require('./routes/contracts'));    // ✅ Sprint 4 EK-1/EK-2
 app.use('/api/resource-requests', require('./routes/resource_requests')); // ✅ Sprint 4 ER-1/ER-2
 app.use('/api/assignments',       require('./routes/assignments'));  // ✅ Sprint 4 EN-1/EN-2/EN-5
+app.use('/api/capacity',          require('./routes/capacity'));     // ✅ Sprint 6 US-BK-1 (planner)
 app.use('/api/time-entries',      require('./routes/time_entries')); // ✅ Sprint 5 ET-*
 app.use('/api/reports',           require('./routes/reports'));      // ✅ Sprint 6 EI-* / ED-1
+app.use('/api/dashboard',         require('./routes/dashboard'));    // ✅ Executive Dashboard v2
+app.use('/api/search',            require('./routes/search'));       // ✅ Command Palette
 app.use('/api/bulk-import',       require('./routes/bulk_import'));  // ✅ Sprint 9 (admin+)
 app.use('/api/squads',            _stubs.squads);
 app.use('/api/events',            _stubs.events);
-app.use('/api/notifications',     _stubs.notifications);
+app.use('/api/notifications',     require('./routes/notifications')); // ✅ In-app notifications
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.

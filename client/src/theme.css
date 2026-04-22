@@ -1,0 +1,495 @@
+/**
+ * DVPNYX — Design tokens (Phase 1 UI refresh)
+ *
+ * Ported from `UI de claude design/design_handoff_dvpnyx_ui/src/styles.css`.
+ * Scoped additively: these tokens SIT ALONGSIDE the legacy brand tokens
+ * (--purple-dark, --teal, etc.) defined in App.css so existing inline
+ * styles keep working while new components can consume the fresh palette.
+ *
+ * Do NOT remove legacy tokens: every module still references them.
+ */
+
+:root {
+  /* ---- Tweakables ---- */
+  --accent-hue: 270;
+  --density: 1;
+
+  /* ---- Typography ---- */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+  /* ---- Neutral palette (light) ---- */
+  --ds-bg: oklch(0.992 0.003 95);
+  --ds-bg-soft: oklch(0.975 0.004 260);
+  --ds-bg-elev: #ffffff;
+  --ds-surface: #ffffff;
+  --ds-hover: oklch(0.965 0.005 260);
+  --ds-border: oklch(0.915 0.006 260);
+  --ds-border-strong: oklch(0.86 0.008 260);
+  --ds-text: oklch(0.22 0.012 260);
+  --ds-text-muted: oklch(0.5 0.012 260);
+  --ds-text-dim: oklch(0.62 0.01 260);
+
+  /* ---- Accent ---- */
+  --ds-accent: oklch(0.54 0.18 var(--accent-hue));
+  --ds-accent-soft: oklch(0.96 0.035 var(--accent-hue));
+  --ds-accent-border: oklch(0.88 0.08 var(--accent-hue));
+  --ds-accent-text: oklch(0.42 0.16 var(--accent-hue));
+
+  /* ---- Semantic ---- */
+  --ds-ok: oklch(0.68 0.14 155);
+  --ds-ok-soft: oklch(0.95 0.04 155);
+  --ds-warn: oklch(0.78 0.14 80);
+  --ds-warn-soft: oklch(0.96 0.06 80);
+  --ds-bad: oklch(0.62 0.2 25);
+  --ds-bad-soft: oklch(0.96 0.04 25);
+
+  /* ---- Shadows & shape ---- */
+  --ds-shadow-sm: 0 1px 0 rgba(16, 24, 40, 0.03), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --ds-shadow-md: 0 6px 20px -6px rgba(16, 24, 40, 0.12), 0 2px 6px -1px rgba(16, 24, 40, 0.06);
+  --ds-radius: 6px;
+  --ds-radius-lg: 10px;
+  --ds-row-h: calc(36px * var(--density));
+}
+
+[data-scheme="dark"] {
+  --ds-bg: oklch(0.17 0.01 260);
+  --ds-bg-soft: oklch(0.2 0.012 260);
+  --ds-bg-elev: oklch(0.22 0.012 260);
+  --ds-surface: oklch(0.22 0.012 260);
+  --ds-hover: oklch(0.26 0.014 260);
+  --ds-border: oklch(0.3 0.012 260);
+  --ds-border-strong: oklch(0.38 0.014 260);
+  --ds-text: oklch(0.96 0.004 260);
+  --ds-text-muted: oklch(0.72 0.01 260);
+  --ds-text-dim: oklch(0.58 0.01 260);
+
+  --ds-accent: oklch(0.7 0.17 var(--accent-hue));
+  --ds-accent-soft: oklch(0.32 0.08 var(--accent-hue));
+  --ds-accent-border: oklch(0.42 0.1 var(--accent-hue));
+  --ds-accent-text: oklch(0.82 0.14 var(--accent-hue));
+
+  --ds-ok-soft: oklch(0.32 0.08 155);
+  --ds-warn-soft: oklch(0.34 0.1 80);
+  --ds-bad-soft: oklch(0.32 0.09 25);
+}
+
+/* ---------- Topbar ---------- */
+.ds-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--ds-border);
+  background: var(--ds-surface);
+  font-family: var(--font-ui);
+  flex-shrink: 0;
+}
+.ds-topbar-spacer { flex: 1; }
+
+.ds-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ds-text-dim);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ds-crumbs a, .ds-crumbs .ds-crumb-link {
+  color: var(--ds-text-dim);
+  text-decoration: none;
+  cursor: pointer;
+}
+.ds-crumbs a:hover, .ds-crumbs .ds-crumb-link:hover { color: var(--ds-text); }
+.ds-crumbs .ds-crumb-sep { opacity: 0.5; display: inline-flex; }
+.ds-crumbs .ds-crumb-cur { color: var(--ds-text); font-weight: 500; }
+
+.ds-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--ds-bg-soft);
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius);
+  padding: 4px 10px;
+  width: 220px;
+  color: var(--ds-text-dim);
+  font-size: 12.5px;
+  font-family: var(--font-ui);
+}
+.ds-search {
+  cursor: pointer;
+  text-align: left;
+}
+.ds-search:disabled { cursor: default; opacity: 0.7; }
+.ds-search:hover:not(:disabled) { border-color: var(--ds-border-strong); color: var(--ds-text); }
+.ds-search input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--ds-text);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.ds-search-placeholder {
+  flex: 1;
+  color: var(--ds-text-dim);
+  font-size: 12.5px;
+}
+.ds-search kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--ds-bg-elev);
+  border: 1px solid var(--ds-border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  color: var(--ds-text-dim);
+  margin-left: auto;
+}
+
+.ds-icon-btn {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--ds-radius);
+  color: var(--ds-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.ds-icon-btn:hover { background: var(--ds-hover); color: var(--ds-text); }
+.ds-icon-btn .ds-dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ds-bad);
+  top: 6px;
+  right: 6px;
+  border: 1.5px solid var(--ds-surface);
+}
+
+/* Hide desktop topbar on narrow screens — the legacy hamburger takes over. */
+@media (max-width: 900px) {
+  .ds-topbar { padding: 0 16px; gap: 8px; }
+  .ds-search { width: 140px; }
+}
+
+/* ---------- Chips (reusable) ---------- */
+.ds-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--ds-border);
+  color: var(--ds-text-muted);
+  background: var(--ds-surface);
+  line-height: 17px;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+}
+.ds-chip.ok   { background: var(--ds-ok-soft);   color: oklch(0.4 0.12 155); border-color: transparent; }
+.ds-chip.warn { background: var(--ds-warn-soft); color: oklch(0.45 0.12 80); border-color: transparent; }
+.ds-chip.bad  { background: var(--ds-bad-soft);  color: oklch(0.45 0.18 25); border-color: transparent; }
+.ds-chip.accent { background: var(--ds-accent-soft); color: var(--ds-accent-text); border-color: transparent; }
+.ds-chip .ds-dot-inline {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; opacity: 0.8; display: inline-block;
+}
+
+/* =====================================================================
+   App Shell — Sidebar (DVPNYX design handoff)
+   =====================================================================
+   Applied on top of the legacy `.sidebar` wrapper in App.js. The legacy
+   class is preserved (mobile hamburger + tests depend on it). All inner
+   layout comes from these `.ds-sb-*` rules so the visual language
+   matches the handoff prototype pixel-for-pixel.
+   ===================================================================== */
+
+.sidebar.ds-sidebar {
+  /* Override legacy dark-purple gradient with the soft neutral surface
+     prescribed by the handoff. The gradient lives in App.css under the
+     plain `.sidebar` selector; this one wins via specificity (two class
+     names) plus `background-image: none` to drop the gradient. */
+  background: var(--ds-bg-soft);
+  background-image: none;
+  color: var(--ds-text);
+  border-right: 1px solid var(--ds-border);
+  width: calc(232px * var(--density));
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-ui);
+  min-height: 0;
+}
+
+/* Brand header — 52px, flush with the Topbar height. */
+.ds-sb-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--ds-border);
+  flex-shrink: 0;
+}
+.ds-sb-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: linear-gradient(135deg,
+    var(--ds-accent) 0%,
+    oklch(0.42 0.18 calc(var(--accent-hue) + 30)) 100%);
+  display: grid;
+  place-items: center;
+  color: white;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: -0.02em;
+}
+.ds-sb-brand-name {
+  font-weight: 600;
+  font-size: 13.5px;
+  letter-spacing: -0.01em;
+  color: var(--ds-text);
+}
+.ds-sb-brand-sub {
+  color: var(--ds-text-dim);
+  font-size: 11px;
+  margin-left: auto;
+  font-family: var(--font-mono);
+}
+
+/* Scrollable nav body. */
+.ds-sb-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px 8px 16px;
+  min-height: 0;
+}
+.ds-sb-section { margin-top: 14px; }
+.ds-sb-section:first-child { margin-top: 4px; }
+.ds-sb-section-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ds-text-dim);
+  padding: 4px 10px 6px;
+  font-weight: 500;
+}
+
+/* Nav item. Uses <Link> under the hood; we force text-decoration: none
+   because the legacy App.css still targets `.sidebar nav a` with teal
+   underlines on hover. */
+.ds-sb-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 10px;
+  border-radius: var(--ds-radius);
+  color: var(--ds-text-muted);
+  font-size: 13px;
+  font-weight: 450;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  cursor: pointer;
+  transition: background 0.08s, color 0.08s;
+}
+.ds-sb-item:hover {
+  background: var(--ds-hover);
+  color: var(--ds-text);
+  text-decoration: none;
+}
+.ds-sb-item.active {
+  background: var(--ds-accent-soft);
+  color: var(--ds-accent-text);
+  font-weight: 500;
+}
+.ds-sb-item .ds-sb-ico {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.ds-sb-item.active .ds-sb-ico { opacity: 1; }
+
+/* Count pill — right-aligned metadata inside a nav item. */
+.ds-sb-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ds-text-dim);
+  background: var(--ds-bg-elev);
+  border: 1px solid var(--ds-border);
+  padding: 0 5px;
+  border-radius: 4px;
+  line-height: 16px;
+}
+.ds-sb-item.active .ds-sb-count {
+  background: transparent;
+  border-color: var(--ds-accent-border);
+  color: var(--ds-accent-text);
+}
+
+/* User footer — avatar + name + role + logout action. */
+.ds-sb-foot {
+  border-top: 1px solid var(--ds-border);
+  padding: 8px;
+  flex-shrink: 0;
+}
+.ds-sb-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border-radius: var(--ds-radius);
+}
+.ds-sb-avatar {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: oklch(0.8 0.08 calc(var(--accent-hue) + 60));
+  color: oklch(0.3 0.1 calc(var(--accent-hue) + 60));
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+.ds-sb-user-info { flex: 1; min-width: 0; }
+.ds-sb-user-name {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--ds-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-sb-user-role {
+  font-size: 11px;
+  color: var(--ds-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ds-sb-logout {
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  color: var(--ds-text-muted);
+  border-radius: var(--ds-radius);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.ds-sb-logout:hover { background: var(--ds-hover); color: var(--ds-text); }
+
+/* ---------- Breadcrumb (DS) ----------
+   We map the existing Breadcrumb component's legacy `.breadcrumb*`
+   classes onto the design-handoff typography without forcing a rewrite
+   on every consumer. The Breadcrumb component retains the same API. */
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-ui);
+  color: var(--ds-text-dim);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.breadcrumb .breadcrumb-item {
+  color: var(--ds-text-dim);
+  text-decoration: none;
+}
+.breadcrumb a.breadcrumb-item:hover { color: var(--ds-text); }
+.breadcrumb .breadcrumb-sep { opacity: 0.5; }
+.breadcrumb .breadcrumb-current {
+  color: var(--ds-text);
+  font-weight: 500;
+}
+
+/* =====================================================================
+   Dense Tables (DVPNYX design handoff — Phase 2)
+   =====================================================================
+   Applied via `<table className="ds-table">`. The modules still ship
+   their own `s.th` / `s.td` inline style objects (pointing at DS
+   tokens), so the CSS here is intentionally minimal: it owns only what
+   inline styles CAN'T express — :hover, zebra, scroll container shape.
+   Inline styles still win for per-cell overrides like text-align.
+   ===================================================================== */
+.ds-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  color: var(--ds-text);
+  font-feature-settings: 'tnum';
+}
+.ds-table thead th {
+  /* Inline style still sets background/padding; these only add polish
+     that inline styles don't reach (position sticky for long tables
+     in scrollable cards, for example). */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.ds-table tbody tr {
+  transition: background 0.08s;
+}
+.ds-table tbody tr:hover { background: var(--ds-hover); }
+.ds-table tbody tr:last-child td { border-bottom: 0; }
+
+/* Numeric cells — tabular numerals so columns align vertically. */
+.ds-table .num,
+.ds-table td.num { font-family: var(--font-mono); font-feature-settings: 'tnum'; }
+
+/* Small badges shown inline inside table cells (status pills, etc.). */
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--ds-border);
+  color: var(--ds-text-muted);
+  background: var(--ds-surface);
+  line-height: 17px;
+  white-space: nowrap;
+}
+.ds-badge.ok   { background: var(--ds-ok-soft);   color: oklch(0.4 0.12 155); border-color: transparent; }
+.ds-badge.warn { background: var(--ds-warn-soft); color: oklch(0.45 0.12 80); border-color: transparent; }
+.ds-badge.bad  { background: var(--ds-bad-soft);  color: oklch(0.45 0.18 25); border-color: transparent; }
+.ds-badge.accent { background: var(--ds-accent-soft); color: var(--ds-accent-text); border-color: transparent; }
+
+/* ---------- Scrollbars ---------- */
+.sidebar::-webkit-scrollbar,
+.ds-sb-scroll::-webkit-scrollbar,
+.main-content::-webkit-scrollbar { width: 10px; height: 10px; }
+.sidebar::-webkit-scrollbar-thumb,
+.ds-sb-scroll::-webkit-scrollbar-thumb,
+.main-content::-webkit-scrollbar-thumb {
+  background: var(--ds-border-strong);
+  border-radius: 10px;
+  border: 2px solid var(--ds-bg);
+}
+.ds-sb-scroll::-webkit-scrollbar-thumb { border-color: var(--ds-bg-soft); }

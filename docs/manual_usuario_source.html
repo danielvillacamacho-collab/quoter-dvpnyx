@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Montserrat:wght@600;700;800&display=swap" rel="stylesheet"/>
+<style>
+/* ── VARIABLES ── */
+:root {
+  --purple-dark:  #56234d;
+  --purple-mid:   #682c66;
+  --purple-light: #7a3578;
+  --teal:         #00d8d4;
+  --teal-mid:     #52b2b3;
+  --orange:       #f29c33;
+  --bg:           #faf9fb;
+  --bg-card:      #ffffff;
+  --text:         #1e0f1c;
+  --text-light:   #6b7280;
+  --border:       #e5e7eb;
+  --success:      #10b981;
+  --danger:       #ef4444;
+  --warning:      #f59e0b;
+}
+
+/* ── RESET ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── BASE ── */
+body {
+  font-family: 'Inter', sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.65;
+  color: var(--text);
+  background: var(--bg);
+}
+
+h1, h2, h3, h4, h5 {
+  font-family: 'Montserrat', sans-serif;
+  line-height: 1.2;
+  color: var(--purple-dark);
+}
+
+/* ── PAGE SETUP ── */
+@page {
+  size: A4;
+  margin: 18mm 18mm 22mm 18mm;
+  @bottom-center {
+    content: "DVPNYX Cotizador v2.0  ·  quoter.doublevpartners.com  ·  Página " counter(page) " de " counter(pages);
+    font-family: 'Inter', sans-serif;
+    font-size: 7.5pt;
+    color: #9ca3af;
+  }
+}
+
+@page cover { margin: 0; }
+
+/* ── COVER PAGE ── */
+.cover {
+  page: cover;
+  width: 210mm;
+  height: 297mm;
+  background: linear-gradient(145deg, var(--purple-dark) 0%, var(--purple-mid) 60%, #3d1a3b 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #fff;
+  position: relative;
+  padding: 30mm 20mm;
+  page-break-after: always;
+}
+
+.cover-deco-top {
+  position: absolute;
+  top: 0; right: 0;
+  width: 120mm; height: 90mm;
+  background: radial-gradient(circle at top right, rgba(0,216,212,.18) 0%, transparent 70%);
+}
+.cover-deco-bottom {
+  position: absolute;
+  bottom: 0; left: 0;
+  width: 100mm; height: 80mm;
+  background: radial-gradient(circle at bottom left, rgba(242,156,51,.15) 0%, transparent 70%);
+}
+
+.cover-logo-wrap {
+  margin-bottom: 14mm;
+  position: relative;
+}
+.cover-logo-circle {
+  width: 36mm;
+  height: 36mm;
+  border-radius: 50%;
+  background: rgba(255,255,255,.12);
+  border: 2px solid rgba(255,255,255,.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 6mm;
+}
+.cover-logo-text {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 18pt;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: #fff;
+}
+.cover-logo-sub {
+  font-size: 8pt;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--teal);
+  font-weight: 600;
+}
+
+.cover-divider {
+  width: 18mm;
+  height: 3px;
+  background: var(--teal);
+  border-radius: 2px;
+  margin: 8mm auto;
+}
+
+.cover-title {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 26pt;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.5px;
+  margin-bottom: 4mm;
+  line-height: 1.1;
+}
+
+.cover-subtitle {
+  font-size: 11pt;
+  color: rgba(255,255,255,.75);
+  margin-bottom: 12mm;
+}
+
+.cover-badge {
+  display: inline-block;
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.25);
+  color: #fff;
+  font-size: 8.5pt;
+  font-weight: 600;
+  padding: 2mm 6mm;
+  border-radius: 20px;
+  letter-spacing: 0.3px;
+}
+
+.cover-meta {
+  position: absolute;
+  bottom: 14mm;
+  left: 0; right: 0;
+  text-align: center;
+  font-size: 8pt;
+  color: rgba(255,255,255,.45);
+  letter-spacing: 0.5px;
+}
+
+/* ── TOC ── */
+.toc-page {
+  page-break-before: always;
+  page-break-after: always;
+  padding-top: 4mm;
+}
+
+.toc-title {
+  font-size: 18pt;
+  font-weight: 800;
+  color: var(--purple-dark);
+  margin-bottom: 8mm;
+  padding-bottom: 3mm;
+  border-bottom: 3px solid var(--teal);
+}
+
+.toc-section-header {
+  font-size: 7pt;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-light);
+  margin: 5mm 0 2mm;
+}
+
+.toc-item {
+  display: flex;
+  align-items: baseline;
+  gap: 2mm;
+  padding: 1.5mm 0;
+  border-bottom: 1px dotted var(--border);
+}
+.toc-item:last-child { border-bottom: none; }
+.toc-num {
+  font-size: 8.5pt;
+  font-weight: 700;
+  color: var(--purple-dark);
+  min-width: 9mm;
+}
+.toc-label {
+  font-size: 9.5pt;
+  color: var(--text);
+  flex: 1;
+}
+.toc-dots { flex: 1; border-bottom: 1px dotted #d1d5db; margin: 0 2mm 1.5mm; }
+.toc-page-num {
+  font-size: 8.5pt;
+  color: var(--text-light);
+  font-weight: 500;
+}
+
+/* ── SECTION HEADINGS ── */
+.section-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 4mm;
+  margin: 8mm 0 4mm;
+  page-break-after: avoid;
+}
+
+.section-num {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 9pt;
+  font-weight: 700;
+  color: #fff;
+  background: var(--purple-dark);
+  border-radius: 6px;
+  padding: 1mm 3mm;
+  line-height: 1.5;
+  white-space: nowrap;
+  margin-top: 1mm;
+}
+
+h2 {
+  font-size: 15pt;
+  color: var(--purple-dark);
+  font-weight: 800;
+}
+
+h3 {
+  font-size: 11pt;
+  color: var(--purple-mid);
+  font-weight: 700;
+  margin: 5mm 0 2mm;
+  page-break-after: avoid;
+}
+
+h4 {
+  font-size: 9.5pt;
+  color: var(--text);
+  font-weight: 700;
+  margin: 4mm 0 1.5mm;
+  page-break-after: avoid;
+}
+
+/* ── BODY TEXT ── */
+p {
+  margin-bottom: 2.5mm;
+}
+
+ul, ol {
+  margin: 2mm 0 3mm 5mm;
+  padding-left: 4mm;
+}
+
+li {
+  margin-bottom: 1mm;
+}
+
+li + li { margin-top: 0.5mm; }
+
+/* ── TABLES ── */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 3mm 0 5mm;
+  font-size: 9.5pt;
+  page-break-inside: avoid;
+}
+
+thead tr {
+  background: var(--purple-dark);
+  color: #fff;
+}
+
+thead th {
+  padding: 2.5mm 3.5mm;
+  text-align: left;
+  font-weight: 700;
+  font-size: 8.5pt;
+  letter-spacing: 0.3px;
+}
+
+tbody tr:nth-child(even) { background: #f3eef4; }
+tbody tr:nth-child(odd)  { background: #fff; }
+
+tbody td {
+  padding: 2mm 3.5mm;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+  font-size: 9pt;
+}
+
+/* ── CODE / FLOW BLOCKS ── */
+.flow-block {
+  background: #1e0f1c;
+  color: #e2d9e1;
+  border-radius: 8px;
+  padding: 4mm 5mm;
+  font-family: 'Courier New', monospace;
+  font-size: 9pt;
+  line-height: 1.8;
+  margin: 3mm 0 5mm;
+  page-break-inside: avoid;
+}
+
+.flow-arrow { color: var(--teal); font-weight: bold; }
+.flow-won   { color: #6ee7b7; }
+.flow-lost  { color: #fca5a5; }
+.flow-num   { color: var(--orange); font-weight: bold; }
+
+code {
+  background: #f3eef4;
+  color: var(--purple-dark);
+  padding: 0.3mm 1.5mm;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 9pt;
+}
+
+/* ── CALLOUT BOXES ── */
+.callout {
+  border-radius: 8px;
+  padding: 3mm 4mm;
+  margin: 3mm 0 5mm;
+  display: flex;
+  gap: 3mm;
+  align-items: flex-start;
+  page-break-inside: avoid;
+}
+.callout-icon { font-size: 12pt; line-height: 1.4; flex-shrink: 0; }
+.callout-body { font-size: 9.5pt; }
+.callout-body strong { display: block; font-weight: 700; margin-bottom: 0.5mm; }
+
+.callout-info    { background: #eff6ff; border-left: 3px solid #3b82f6; }
+.callout-tip     { background: #f0fdf4; border-left: 3px solid var(--success); }
+.callout-warning { background: #fffbeb; border-left: 3px solid var(--warning); }
+.callout-key     { background: #fdf4ff; border-left: 3px solid var(--purple-dark); }
+
+/* ── PILL BADGES ── */
+.badge {
+  display: inline-block;
+  border-radius: 20px;
+  font-size: 7.5pt;
+  font-weight: 700;
+  padding: 0.5mm 2.5mm;
+  letter-spacing: 0.3px;
+  vertical-align: middle;
+}
+.badge-green  { background: #d1fae5; color: #065f46; }
+.badge-yellow { background: #fef3c7; color: #92400e; }
+.badge-red    { background: #fee2e2; color: #991b1b; }
+.badge-blue   { background: #dbeafe; color: #1e40af; }
+.badge-purple { background: #f3e8ff; color: #581c87; }
+.badge-gray   { background: #f3f4f6; color: #374151; }
+
+/* ── KEYBOARD SHORTCUT TAGS ── */
+kbd {
+  display: inline-block;
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  border-bottom: 2px solid #9ca3af;
+  border-radius: 4px;
+  padding: 0.5mm 2mm;
+  font-family: 'Courier New', monospace;
+  font-size: 8.5pt;
+  color: #374151;
+  font-weight: 600;
+}
+
+/* ── ROLE CARDS ── */
+.role-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3mm;
+  margin: 3mm 0 5mm;
+}
+
+.role-card {
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  padding: 3mm 4mm;
+  background: #fff;
+  page-break-inside: avoid;
+}
+.role-card-title {
+  font-family: 'Montserrat', sans-serif;
+  font-size: 9pt;
+  font-weight: 700;
+  color: var(--purple-dark);
+  margin-bottom: 1mm;
+  display: flex;
+  align-items: center;
+  gap: 2mm;
+}
+.role-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.role-card p { font-size: 8.5pt; color: var(--text-light); margin: 0; }
+
+/* ── COMPARISON TABLE ── */
+.compare-yes { color: var(--success); font-weight: 700; }
+.compare-no  { color: var(--danger);  font-weight: 700; }
+.compare-partial { color: var(--warning); font-weight: 700; }
+
+/* ── STATUS FLOW ── */
+.status-flow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.5mm;
+  margin: 2mm 0 4mm;
+}
+.status-pill {
+  background: var(--purple-dark);
+  color: #fff;
+  border-radius: 20px;
+  padding: 1mm 3.5mm;
+  font-size: 8.5pt;
+  font-weight: 600;
+}
+.status-pill.green { background: var(--success); }
+.status-pill.red   { background: var(--danger); }
+.status-pill.gray  { background: #6b7280; }
+.status-arrow { color: var(--text-light); font-size: 10pt; font-weight: 700; }
+
+/* ── STEP LIST ── */
+.step-list { list-style: none; margin: 2mm 0 4mm; padding: 0; }
+.step-list li {
+  display: flex;
+  gap: 3mm;
+  margin-bottom: 2mm;
+  align-items: flex-start;
+  page-break-inside: avoid;
+}
+.step-num {
+  min-width: 6mm;
+  height: 6mm;
+  border-radius: 50%;
+  background: var(--purple-dark);
+  color: #fff;
+  font-size: 7.5pt;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 0.5mm;
+}
+.step-text { font-size: 9.5pt; line-height: 1.5; }
+
+/* ── DIVIDER ── */
+.divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 5mm 0;
+}
+
+.divider-accent {
+  border: none;
+  border-top: 3px solid var(--teal);
+  margin: 6mm 0 5mm;
+  width: 20mm;
+}
+
+/* ── PAGE BREAK ── */
+.page-break { page-break-before: always; }
+
+/* ── SECTION ACCENT BAR ── */
+.section-accent {
+  background: linear-gradient(90deg, var(--purple-dark), var(--purple-light));
+  height: 4px;
+  border-radius: 2px;
+  margin-bottom: 5mm;
+}
+
+/* ── FOOTER DECORATION (printed via @page) ── */
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════
+     COVER PAGE
+═══════════════════════════════════════ -->
+<div class="cover">
+  <div class="cover-deco-top"></div>
+  <div class="cover-deco-bottom"></div>
+
+  <div class="cover-logo-wrap">
+    <div class="cover-logo-circle">
+      <span class="cover-logo-text">DV</span>
+    </div>
+    <div class="cover-logo-sub">DVPNYX · Cotizador</div>
+  </div>
+
+  <div class="cover-divider"></div>
+
+  <div class="cover-title">Manual de Usuario</div>
+  <div class="cover-subtitle">Guía completa para la prueba piloto<br/>comparativa vs. runn.io y Clockify</div>
+
+  <div style="display:flex; gap:3mm; justify-content:center; flex-wrap:wrap; margin-top: 6mm;">
+    <span class="cover-badge">Versión 2.0</span>
+    <span class="cover-badge">Abril 2026</span>
+    <span class="cover-badge">quoter.doublevpartners.com</span>
+  </div>
+
+  <div class="cover-meta">Double V Partners + NYX Technologies · Uso interno</div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     TABLE OF CONTENTS
+═══════════════════════════════════════ -->
+<div class="toc-page">
+  <div class="toc-title">Contenido</div>
+
+  <div class="toc-section-header">Introducción</div>
+  <div class="toc-item"><span class="toc-num">—</span><span class="toc-label">¿Qué es el Cotizador?</span><span class="toc-dots"></span><span class="toc-page-num">3</span></div>
+  <div class="toc-item"><span class="toc-num">1</span><span class="toc-label">Acceso y roles</span><span class="toc-dots"></span><span class="toc-page-num">3</span></div>
+  <div class="toc-item"><span class="toc-num">2</span><span class="toc-label">Navegación general</span><span class="toc-dots"></span><span class="toc-page-num">3</span></div>
+  <div class="toc-item"><span class="toc-num">3</span><span class="toc-label">Dashboard</span><span class="toc-dots"></span><span class="toc-page-num">4</span></div>
+
+  <div class="toc-section-header">Módulo Comercial</div>
+  <div class="toc-item"><span class="toc-num">4</span><span class="toc-label">Clientes</span><span class="toc-dots"></span><span class="toc-page-num">4</span></div>
+  <div class="toc-item"><span class="toc-num">5</span><span class="toc-label">Oportunidades</span><span class="toc-dots"></span><span class="toc-page-num">4</span></div>
+  <div class="toc-item"><span class="toc-num">6</span><span class="toc-label">Cotizaciones (Staff Aug y Proyectos)</span><span class="toc-dots"></span><span class="toc-page-num">5</span></div>
+
+  <div class="toc-section-header">Módulo Gente</div>
+  <div class="toc-item"><span class="toc-num">7</span><span class="toc-label">Empleados</span><span class="toc-dots"></span><span class="toc-page-num">6</span></div>
+
+  <div class="toc-section-header">Módulo Delivery</div>
+  <div class="toc-item"><span class="toc-num">8</span><span class="toc-label">Contratos</span><span class="toc-dots"></span><span class="toc-page-num">7</span></div>
+  <div class="toc-item"><span class="toc-num">9</span><span class="toc-label">Solicitudes de Recurso</span><span class="toc-dots"></span><span class="toc-page-num">7</span></div>
+  <div class="toc-item"><span class="toc-num">10</span><span class="toc-label">Asignaciones</span><span class="toc-dots"></span><span class="toc-page-num">8</span></div>
+
+  <div class="toc-section-header">Time Tracking</div>
+  <div class="toc-item"><span class="toc-num">11</span><span class="toc-label">Mis horas — Registro de horas</span><span class="toc-dots"></span><span class="toc-page-num">8</span></div>
+  <div class="toc-item"><span class="toc-num">12</span><span class="toc-label">Horas del equipo (para líderes)</span><span class="toc-dots"></span><span class="toc-page-num">9</span></div>
+
+  <div class="toc-section-header">Otras secciones</div>
+  <div class="toc-item"><span class="toc-num">13</span><span class="toc-label">Reportes</span><span class="toc-dots"></span><span class="toc-page-num">9</span></div>
+  <div class="toc-item"><span class="toc-num">14</span><span class="toc-label">Wiki</span><span class="toc-dots"></span><span class="toc-page-num">10</span></div>
+  <div class="toc-item"><span class="toc-num">15</span><span class="toc-label">Carga Masiva (Bulk Import)</span><span class="toc-dots"></span><span class="toc-page-num">10</span></div>
+  <div class="toc-item"><span class="toc-num">16–17</span><span class="toc-label">Usuarios y Parámetros (admin)</span><span class="toc-dots"></span><span class="toc-page-num">11</span></div>
+
+  <div class="toc-section-header">Referencia rápida</div>
+  <div class="toc-item"><span class="toc-num">18</span><span class="toc-label">Flujo completo de punta a punta</span><span class="toc-dots"></span><span class="toc-page-num">11</span></div>
+  <div class="toc-item"><span class="toc-num">19</span><span class="toc-label">Preguntas frecuentes</span><span class="toc-dots"></span><span class="toc-page-num">12</span></div>
+  <div class="toc-item"><span class="toc-num">20</span><span class="toc-label">Comparación vs. runn.io y Clockify</span><span class="toc-dots"></span><span class="toc-page-num">13</span></div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     INTRO
+═══════════════════════════════════════ -->
+<div class="section-accent"></div>
+
+<div class="callout callout-key">
+  <span class="callout-icon">🚀</span>
+  <div class="callout-body">
+    <strong>¿Qué es el DVPNYX Cotizador?</strong>
+    La plataforma interna de DVPNYX (fusión de Double V Partners + NYX Technologies) que gestiona el ciclo completo: desde la identificación de una oportunidad comercial hasta que los empleados registran sus horas en un proyecto activo. Reemplaza Excel (cotizaciones), runn.io (planeación de recursos), Clockify (registro de horas) y el Excel de empleados — todo en un solo lugar.
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 1 — ACCESO
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">01</span>
+  <h2>Acceso al sistema</h2>
+</div>
+
+<h3>Cómo ingresar</h3>
+<ol class="step-list">
+  <li><span class="step-num">1</span><span class="step-text">Abre Chrome, Firefox, Edge o Safari (versión reciente)</span></li>
+  <li><span class="step-num">2</span><span class="step-text">Ve a <strong>quoter.doublevpartners.com</strong></span></li>
+  <li><span class="step-num">3</span><span class="step-text">Ingresa tu email y contraseña</span></li>
+  <li><span class="step-num">4</span><span class="step-text">Haz clic en <strong>Ingresar</strong></span></li>
+</ol>
+
+<div class="callout callout-info">
+  <span class="callout-icon">🔑</span>
+  <div class="callout-body">
+    <strong>Primer ingreso</strong>
+    La contraseña inicial es <code>000000</code>. Al primer login el sistema te pedirá cambiarla por una con mínimo 8 caracteres.
+  </div>
+</div>
+
+<h3>Roles del sistema</h3>
+<div class="role-grid">
+  <div class="role-card">
+    <div class="role-card-title"><span class="role-dot" style="background:#56234d"></span> Superadmin</div>
+    <p>Todo, incluyendo cambiar roles, eliminar usuarios y parámetros del sistema</p>
+  </div>
+  <div class="role-card">
+    <div class="role-card-title"><span class="role-dot" style="background:#682c66"></span> Admin</div>
+    <p>Gestiona usuarios, parámetros, áreas, skills; tiene acceso de lectura total</p>
+  </div>
+  <div class="role-card">
+    <div class="role-card-title"><span class="role-dot" style="background:#00d8d4"></span> Member</div>
+    <p>Crea cotizaciones, clientes, oportunidades; registra sus propias horas</p>
+  </div>
+  <div class="role-card">
+    <div class="role-card-title"><span class="role-dot" style="background:#9ca3af"></span> Viewer</div>
+    <p>Solo lectura — no puede crear ni modificar ningún registro</p>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 2 — NAVEGACIÓN
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">02</span>
+  <h2>Navegación general</h2>
+</div>
+
+<table>
+  <thead><tr><th>Sección del sidebar</th><th>Qué contiene</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Inicio</strong></td><td>Dashboard personal</td></tr>
+    <tr><td><strong>Comercial</strong></td><td>Nueva Staff Aug, Nuevo Proyecto, Clientes, Oportunidades</td></tr>
+    <tr><td><strong>Delivery</strong></td><td>Contratos, Solicitudes de Recurso, Asignaciones</td></tr>
+    <tr><td><strong>Gente</strong></td><td>Empleados, Áreas (admin), Skills (admin)</td></tr>
+    <tr><td><strong>Time Tracking</strong></td><td>Mis horas, Horas del equipo</td></tr>
+    <tr><td><strong>Reportes / Wiki</strong></td><td>Dashboards de métricas y Wiki de referencia</td></tr>
+    <tr><td><strong>Configuración</strong> <span class="badge badge-purple">admin</span></td><td>Parámetros, Usuarios, Carga masiva</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout-tip">
+  <span class="callout-icon">📱</span>
+  <div class="callout-body">
+    <strong>En móvil</strong>
+    El menú se oculta y aparece el botón ☰ en la esquina superior izquierda. En la esquina inferior derecha siempre verás la versión del sistema, útil para reportar problemas.
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 3 — DASHBOARD
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">03</span>
+  <h2>Dashboard</h2>
+</div>
+
+<p>Al ingresar ves tu dashboard personal con tres bloques principales:</p>
+<ul>
+  <li><strong>Mis asignaciones activas</strong> — en qué contratos estás trabajando, con fechas y horas/semana</li>
+  <li><strong>Mis horas esta semana</strong> — cuántas horas has registrado vs. las esperadas</li>
+  <li><strong>Notificaciones recientes</strong> — campana 🔔 en el header</li>
+</ul>
+<p>Si tienes rol admin o comercial también verás métricas de portafolio (oportunidades activas, contratos vivos, utilización global).</p>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 4 — CLIENTES
+═══════════════════════════════════════ -->
+<div class="section-header" style="margin-top:6mm;">
+  <span class="section-num">04</span>
+  <h2>Clientes</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Comercial → Clientes</p>
+
+<h3>Ver la lista</h3>
+<p>Muestra nombre, país, industria, tier (Enterprise / Mid Market / SMB) y conteos de oportunidades y contratos activos. Puedes buscar por nombre, filtrar por país, tier o estado, con paginación de 25 por página.</p>
+
+<h3>Crear un cliente nuevo</h3>
+<ol class="step-list">
+  <li><span class="step-num">1</span><span class="step-text">Clic en <strong>+ Nuevo Cliente</strong></span></li>
+  <li><span class="step-num">2</span><span class="step-text">Rellena <strong>Nombre</strong> (obligatorio, único), nombre legal, país, industria, tier y notas</span></li>
+  <li><span class="step-num">3</span><span class="step-text">Clic en <strong>Guardar</strong></span></li>
+</ol>
+
+<p><strong>Desactivar un cliente</strong> (admin) — el cliente deja de aparecer en selectores pero su historial se preserva.</p>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 5 — OPORTUNIDADES
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">05</span>
+  <h2>Oportunidades</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Comercial → Oportunidades</p>
+
+<h3>Estados</h3>
+<div class="status-flow">
+  <span class="status-pill">open</span><span class="status-arrow">›</span>
+  <span class="status-pill">qualified</span><span class="status-arrow">›</span>
+  <span class="status-pill">proposal</span><span class="status-arrow">›</span>
+  <span class="status-pill">negotiation</span><span class="status-arrow">›</span>
+  <span class="status-pill green">won</span>
+  <span class="status-arrow">/</span>
+  <span class="status-pill red">lost</span>
+  <span class="status-arrow">/</span>
+  <span class="status-pill gray">cancelled</span>
+</div>
+
+<p>La vista <strong>Kanban</strong> muestra columnas por estado y permite arrastrar las tarjetas. La vista <strong>Lista</strong> tiene filtros por estado, cliente, owner y squad.</p>
+
+<h3>Marcar como ganada</h3>
+<ol class="step-list">
+  <li><span class="step-num">1</span><span class="step-text">Abre la oportunidad → clic en <strong>Marcar como ganada</strong></span></li>
+  <li><span class="step-num">2</span><span class="step-text">Selecciona cuál cotización fue la ganadora</span></li>
+  <li><span class="step-num">3</span><span class="step-text">El sistema ofrece <strong>crear un Contrato</strong> desde ella automáticamente</span></li>
+</ol>
+
+<h3>Marcar como perdida</h3>
+<p>Selecciona la razón (Precio / Timing / Competencia / Fit técnico / Interna del cliente / Otro). Las cotizaciones en estado "enviada" pasan automáticamente a "rechazada".</p>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 6 — COTIZACIONES
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">06</span>
+  <h2>Cotizaciones</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Comercial → Nueva Staff Aug / Nuevo Proyecto</p>
+
+<h3>6.1 Staff Augmentation (Capacity)</h3>
+<p>Modelo por recursos: el cliente contrata personas por <em>cantidad × nivel × meses</em>.</p>
+<ol class="step-list">
+  <li><span class="step-num">1</span><span class="step-text">Clic en <strong>Nueva Staff Aug</strong> — selecciona Cliente y Oportunidad</span></li>
+  <li><span class="step-num">2</span><span class="step-text">En el editor: clic en <strong>+ Agregar recurso</strong> para cada perfil</span></li>
+  <li><span class="step-num">3</span><span class="step-text">Define especialidad, nivel (L1–L11), país, bilingüe, herramientas, stack, modalidad, cantidad y meses</span></li>
+  <li><span class="step-num">4</span><span class="step-text">El sistema calcula la tarifa y el total en tiempo real</span></li>
+  <li><span class="step-num">5</span><span class="step-text"><strong>Guardar borrador</strong> o <strong>Guardar como Enviada</strong> (congela los parámetros)</span></li>
+</ol>
+
+<h3>6.2 Proyectos de Alcance Fijo</h3>
+<p>Modelo por entregable: precio fijo, driver de costo = <em>fase × perfil × horas/semana</em>.</p>
+
+<table>
+  <thead><tr><th>Paso</th><th>Qué se hace</th></tr></thead>
+  <tbody>
+    <tr><td><strong>1 — Proyecto</strong></td><td>Nombre, cliente, responsables, notas</td></tr>
+    <tr><td><strong>2 — Equipo</strong></td><td>Hasta 15 perfiles con nivel, país, stack</td></tr>
+    <tr><td><strong>3 — Fases</strong></td><td>5 fases preloadeadas editables (Planeación, Desarrollo, QA, Transferencia, Garantía)</td></tr>
+    <tr><td><strong>4 — Asignación</strong></td><td>Matriz perfil × fase con horas/semana (máx 40 h). Celdas amarillas son editables</td></tr>
+    <tr><td><strong>5 — Épicas</strong></td><td>Desglose opcional por épica (no afecta el cálculo)</td></tr>
+    <tr><td><strong>6 — Resumen</strong></td><td>Cascada financiera + semáforo de margen + plan de pagos</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout-info">
+  <span class="callout-icon">💡</span>
+  <div class="callout-body">
+    <strong>Paso 6 — Cascada financiera</strong>
+    Costo base → Buffer (10%) → Garantía (5%) → <strong>Costo Total Protegido</strong> → Margen → <strong>Precio de Venta</strong> → Descuento → <strong>Precio Final</strong>. El semáforo del margen: verde ≥ 50%, ámbar 40–50%, rojo &lt; 40%.
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 7 — EMPLEADOS
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">07</span>
+  <h2>Empleados</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Gente → Empleados</p>
+<p>Inventario de personas de DVPNYX. <strong>Distinto al usuario del sistema</strong> — un empleado puede o no tener cuenta de acceso al Cotizador.</p>
+
+<h3>Crear un empleado (admin)</h3>
+<ol class="step-list">
+  <li><span class="step-num">1</span><span class="step-text">Clic en <strong>+ Nuevo Empleado</strong></span></li>
+  <li><span class="step-num">2</span><span class="step-text">Obligatorios: nombre, apellido, país, <strong>Área</strong>, <strong>Nivel (L1–L11)</strong>, fecha de inicio</span></li>
+  <li><span class="step-num">3</span><span class="step-text">Opcionales: email corporativo, ciudad, capacidad semanal (default 40h), squad, manager</span></li>
+</ol>
+
+<h3>Ficha del empleado</h3>
+
+<table>
+  <thead><tr><th>Pestaña</th><th>Contenido</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Resumen</strong></td><td>Datos generales + utilización actual (% con barra de color)</td></tr>
+    <tr><td><strong>Skills</strong></td><td>Tecnologías con nivel de proficiencia (Beginner → Expert)</td></tr>
+    <tr><td><strong>Asignaciones</strong></td><td>Contratos activos e histórico</td></tr>
+    <tr><td><strong>Horas</strong></td><td>Calendario de time entries de los últimos 90 días</td></tr>
+    <tr><td><strong>Actividad</strong></td><td>Log de cambios (audit trail)</td></tr>
+  </tbody>
+</table>
+
+<h3>Status del empleado</h3>
+<table>
+  <thead><tr><th>Status</th><th>Significado</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-green">Activo</span></td><td>Trabajando normalmente</td></tr>
+    <tr><td><span class="badge badge-yellow">On Leave</span></td><td>En vacaciones o licencia</td></tr>
+    <tr><td><span class="badge badge-blue">Bench</span></td><td>Sin asignación activa</td></tr>
+    <tr><td><span class="badge badge-red">Terminado</span></td><td>Salió de DVPNYX — cancela asignaciones futuras</td></tr>
+  </tbody>
+</table>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 8 — CONTRATOS
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">08</span>
+  <h2>Contratos</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Delivery → Contratos</p>
+<p>Un contrato es una unidad de entrega activa. Nace de una oportunidad ganada. Al crearlo desde la cotización, el sistema pre-rellena los campos y puede generar automáticamente las Solicitudes de Recurso.</p>
+
+<h3>Estados</h3>
+<div class="status-flow">
+  <span class="status-pill">draft</span><span class="status-arrow">›</span>
+  <span class="status-pill green">active</span><span class="status-arrow">›</span>
+  <span class="status-pill gray">on_hold</span>
+  <span class="status-arrow">/</span>
+  <span class="status-pill green">completed</span>
+  <span class="status-arrow">/</span>
+  <span class="status-pill red">cancelled</span>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 9 — SOLICITUDES
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">09</span>
+  <h2>Solicitudes de Recurso</h2>
+</div>
+<p><em>Ruta:</em> Dentro de la ficha del contrato → pestaña Solicitudes</p>
+<p>Describe la necesidad de un perfil específico. Campos clave: título, área, nivel, país, idioma, skills, horas/semana, fechas, prioridad (Baja / Media / Alta / Crítica).</p>
+
+<table>
+  <thead><tr><th>Estado</th><th>Significado</th></tr></thead>
+  <tbody>
+    <tr><td><span class="badge badge-red">Open</span></td><td>Sin cobertura</td></tr>
+    <tr><td><span class="badge badge-yellow">Partially filled</span></td><td>Hay asignaciones pero no cubren todo</td></tr>
+    <tr><td><span class="badge badge-green">Filled</span></td><td>Cobertura completa</td></tr>
+    <tr><td><span class="badge badge-gray">Cancelled</span></td><td>Cancelada manualmente</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout-tip">
+  <span class="callout-icon">🔍</span>
+  <div class="callout-body">
+    <strong>Ver candidatos</strong>
+    El botón <em>Ver candidatos</em> en la ficha de la solicitud muestra empleados con el nivel y área requeridos, ordenados de menor a mayor utilización (más disponibles primero), filtrando también por skills si se especificaron.
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 10 — ASIGNACIONES
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">10</span>
+  <h2>Asignaciones</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Delivery → Asignaciones (o desde la solicitud)</p>
+<p>Vincula a un empleado con una solicitud. El selector muestra utilización actual y skills que coinciden.</p>
+
+<div class="callout callout-warning">
+  <span class="callout-icon">⚠️</span>
+  <div class="callout-body">
+    <strong>Validación de overbooking</strong>
+    Si la suma de horas supera el 110% de la capacidad del empleado, el sistema bloquea la asignación. Un admin puede hacer override con confirmación explícita.
+  </div>
+</div>
+
+<p>Acciones disponibles sobre una asignación activa: <strong>Extender</strong> (nueva fecha de fin), <strong>Terminar anticipadamente</strong> (fin = hoy), <strong>Reemplazar empleado</strong> (termina la actual y crea una nueva).</p>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 11 — TIME TRACKING
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">11</span>
+  <h2>Registro de horas — Mis horas</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Time Tracking → Mis horas</p>
+
+<div class="callout callout-key">
+  <span class="callout-icon">⭐</span>
+  <div class="callout-body">
+    <strong>Sección clave para la comparativa con Clockify</strong>
+    Esta es la pantalla principal de registro de horas. Todo se registra contra asignaciones reales, no libremente, lo que conecta las horas directamente al contrato y cliente.
+  </div>
+</div>
+
+<h3>Vista del calendario semanal</h3>
+<table>
+  <thead><tr><th>Elemento</th><th>Descripción</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Filas</strong></td><td>Tus asignaciones activas esta semana</td></tr>
+    <tr><td><strong>Columnas</strong></td><td>Días L M X J V S D</td></tr>
+    <tr><td><strong>Fondo rojizo</strong></td><td>Días pasados sin horas registradas</td></tr>
+    <tr><td><strong>Días futuros</strong></td><td>Bloqueados — no se puede registrar adelantado</td></tr>
+    <tr><td><strong>Total fila</strong></td><td>Horas de esa asignación en la semana</td></tr>
+    <tr><td><strong>Total columna</strong></td><td>Horas totales del día</td></tr>
+    <tr><td><strong>Total esquina</strong></td><td>Semana completa vs. tu capacidad (ej: "38 / 40 h")</td></tr>
+  </tbody>
+</table>
+
+<h3>Para registrar horas</h3>
+<ol class="step-list">
+  <li><span class="step-num">1</span><span class="step-text">Haz clic en la celda (asignación × día)</span></li>
+  <li><span class="step-num">2</span><span class="step-text">Escribe el número de horas (ej: <code>8</code>)</span></li>
+  <li><span class="step-num">3</span><span class="step-text">Presiona <kbd>Tab</kbd> o <kbd>Enter</kbd> — se <strong>guarda automáticamente</strong></span></li>
+  <li><span class="step-num">4</span><span class="step-text">El panel derecho permite agregar una descripción al entry</span></li>
+</ol>
+
+<h3>Atajos de teclado</h3>
+<table>
+  <thead><tr><th>Tecla</th><th>Acción</th></tr></thead>
+  <tbody>
+    <tr><td><kbd>Tab</kbd></td><td>Siguiente celda del día</td></tr>
+    <tr><td><kbd>↑ ↓ ← →</kbd></td><td>Navegar entre celdas</td></tr>
+    <tr><td><kbd>Enter</kbd></td><td>Guardar y bajar una fila</td></tr>
+  </tbody>
+</table>
+
+<h3>Funciones de productividad</h3>
+<ul>
+  <li><strong>Copiar semana anterior</strong> — copia todas las entradas de la semana pasada (preview antes de confirmar). Solo copia asignaciones que sigan activas.</li>
+  <li><strong>Rellenar 8h/día</strong> — llena automáticamente los días L–V con 8h en una asignación específica.</li>
+  <li><strong>Retroactividad</strong> — puedes registrar horas de hasta 30 días atrás (configurable por admin). Fechas futuras están bloqueadas.</li>
+</ul>
+
+<h3>Indicador de cumplimiento</h3>
+<p>Arriba de la matriz ves dos indicadores clave:</p>
+<ul>
+  <li><strong>Cumplimiento últimos 30 días: XX%</strong> — días hábiles con al menos 1 entry vs. días hábiles totales</li>
+  <li><strong>Semanas pendientes</strong> — últimas 4 semanas con menos de 40h registradas</li>
+</ul>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 12 — HORAS DEL EQUIPO
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">12</span>
+  <h2>Horas del equipo</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Time Tracking → Horas del equipo</p>
+<p>Vista para supervisores y managers. Muestra una tabla de cumplimiento por empleado del equipo, ordenada por menor cumplimiento primero para priorizar seguimiento. Se puede filtrar por squad, área y manager. Clic en un empleado abre su calendario en modo lectura.</p>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 13 — REPORTES
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">13</span>
+  <h2>Reportes</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Reportes</p>
+
+<table>
+  <thead><tr><th>Categoría</th><th>Reporte</th><th>Qué muestra</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="2"><strong>Capacidad</strong></td><td>Utilización por empleado</td><td>Tabla y heatmap semanal. Verde 70–100%, ámbar fuera de rango, rojo &lt;50% o &gt;110%</td></tr>
+    <tr><td>Bench</td><td>Empleados con &lt;60% de utilización. Botón "Sugerir matches" con solicitudes abiertas</td></tr>
+    <tr><td rowspan="3"><strong>Demanda</strong></td><td>Solicitudes pendientes</td><td>Con alertas de inicio próximo</td></tr>
+    <tr><td>Necesidades de contratación</td><td>Agrupado por área+nivel+país, "personas equivalentes" faltantes</td></tr>
+    <tr><td>Cobertura por contrato</td><td>% de horas solicitadas con asignación</td></tr>
+    <tr><td><strong>Tiempo</strong></td><td>Cumplimiento time tracking</td><td>Rankings quién llena y quién no (top 10)</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout-tip">
+  <span class="callout-icon">🔗</span>
+  <div class="callout-body">
+    La URL refleja los filtros aplicados — puedes copiar y compartir un reporte con filtros preseleccionados. Todos tienen botón <strong>Exportar</strong> (CSV o Excel).
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 14 — WIKI
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">14</span>
+  <h2>Wiki</h2>
+</div>
+<p><em>Ruta:</em> Sidebar → Wiki</p>
+<p>Material de referencia de solo lectura — no afecta los cálculos del sistema.</p>
+
+<table>
+  <thead><tr><th>Sección</th><th>Contenido</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Stack tecnológico</strong></td><td>Tres tiers: Estándar ×0.90, Especializada ×1.00, Alta Demanda ×1.20. Grilla de tecnologías por categoría</td></tr>
+    <tr><td><strong>Niveles por especialidad</strong></td><td>Para cada L1–L11: Hard Skills, Soft Skills, Perfil típico. Tabs por especialidad (Desarrollo, Infra, Testing, Product, Project, Data+AI, UX/UI, Análisis Funcional)</td></tr>
+  </tbody>
+</table>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 15 — BULK IMPORT
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">15</span>
+  <h2>Carga Masiva</h2>
+</div>
+<p><em>Ruta:</em> Configuración → Carga masiva <span class="badge badge-purple">solo admin</span></p>
+<p>Permite cargar muchos registros de un CSV de una sola vez.</p>
+
+<table>
+  <thead><tr><th>Entidad</th><th>Para qué</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Áreas</strong></td><td>Alta de nuevas especialidades al catálogo</td></tr>
+    <tr><td><strong>Skills</strong></td><td>Alta de nuevas competencias al catálogo</td></tr>
+    <tr><td><strong>Clientes</strong></td><td>Onboarding masivo de cuentas</td></tr>
+    <tr><td><strong>Empleados</strong></td><td>Onboarding masivo del equipo desde el Excel de Gente</td></tr>
+    <tr><td><strong>Empleado ↔ Skill</strong></td><td>Asignar skills a empleados en bloque</td></tr>
+  </tbody>
+</table>
+
+<h3>Cómo usarlo</h3>
+<ol class="step-list">
+  <li><span class="step-num">1</span><span class="step-text">Elige la entidad (ej: Empleados)</span></li>
+  <li><span class="step-num">2</span><span class="step-text">Clic en <strong>Descargar plantilla</strong> — el sistema da un CSV de ejemplo con las columnas correctas</span></li>
+  <li><span class="step-num">3</span><span class="step-text">Abre la plantilla en Excel o Google Sheets, rellena tus datos, guarda como CSV</span></li>
+  <li><span class="step-num">4</span><span class="step-text">Arrastra el CSV al área indicada o usa el botón para subir</span></li>
+  <li><span class="step-num">5</span><span class="step-text">Revisa la <strong>tabla de revisión previa</strong>: filas en verde (válidas) o rojo (error con descripción)</span></li>
+  <li><span class="step-num">6</span><span class="step-text">Corrige los errores en el CSV si los hay y vuelve a subir</span></li>
+  <li><span class="step-num">7</span><span class="step-text">Clic en <strong>Confirmar carga</strong> → reporte final: Creadas / Actualizadas / Omitidas / Errores</span></li>
+</ol>
+
+<div class="callout callout-tip">
+  <span class="callout-icon">♻️</span>
+  <div class="callout-body">
+    <strong>Idempotente</strong>
+    Si subes el mismo CSV dos veces, los registros que ya existen se omiten o actualizan — nunca se duplican.<br/>
+    <strong>Orden recomendado:</strong> Áreas → Skills → Clientes → Empleados → Empleado↔Skill
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 16–17 — USUARIOS Y PARÁMETROS
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">16–17</span>
+  <h2>Usuarios y Parámetros (admin)</h2>
+</div>
+
+<h3>Gestión de Usuarios</h3>
+<p><em>Ruta:</em> Configuración → Usuarios</p>
+<p>Para crear un usuario: clic en <strong>+ Nuevo usuario</strong>, define nombre, email, rol y función. La contraseña inicial es <code>000000</code>. Solo el superadmin puede cambiar roles o eliminar usuarios.</p>
+
+<h3>Parámetros del sistema</h3>
+<p><em>Ruta:</em> Configuración → Parámetros</p>
+<p>Valores que alimentan los cálculos de cotización:</p>
+
+<table>
+  <thead><tr><th>Parámetro</th><th>Ejemplo</th></tr></thead>
+  <tbody>
+    <tr><td>Costo empresa por nivel (L1–L11)</td><td>En USD/mes</td></tr>
+    <tr><td>Multiplicador geográfico</td><td>Colombia ×1.00, Ecuador ×1.10, USA ×3.00</td></tr>
+    <tr><td>Prima de bilingüismo</td><td>Con inglés ×1.10–×1.20</td></tr>
+    <tr><td>Herramientas</td><td>Básico $185/mes, Premium $350/mes</td></tr>
+    <tr><td>Stack tecnológico</td><td>Estándar ×0.90, Especializada ×1.00, Alta Demanda ×1.20</td></tr>
+    <tr><td>Modalidad</td><td>Remoto ×0.95, Híbrido ×1.10, Presencial ×1.20</td></tr>
+    <tr><td>Buffer proyecto</td><td>10%</td></tr>
+    <tr><td>Garantía proyecto</td><td>5%</td></tr>
+    <tr><td>Margen mínimo proyecto</td><td>50%</td></tr>
+    <tr><td>Ventana retroactiva time tracking</td><td>30 días</td></tr>
+  </tbody>
+</table>
+<p>Para editar: clic en <strong>Editar</strong> → ingresa el nuevo valor → Enter. Todos los cambios quedan en el audit log.</p>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 18 — FLUJO COMPLETO
+═══════════════════════════════════════ -->
+<div class="section-header page-break">
+  <span class="section-num">18</span>
+  <h2>Flujo completo de punta a punta</h2>
+</div>
+
+<div class="flow-block">
+<span class="flow-num">1.</span> Crear <strong>Cliente</strong><br/>
+<span class="flow-arrow">   ↓</span><br/>
+<span class="flow-num">2.</span> Crear <strong>Oportunidad</strong> para ese cliente<br/>
+<span class="flow-arrow">   ↓</span><br/>
+<span class="flow-num">3.</span> Crear <strong>Cotización</strong> (Staff Aug o Proyecto) dentro de la oportunidad<br/>
+<span class="flow-arrow">   ↓</span><br/>
+<span class="flow-num">4.</span> Marcar oportunidad como <span class="flow-won">ganada</span> → Crear <strong>Contrato</strong><br/>
+<span class="flow-arrow">   ↓</span><br/>
+<span class="flow-num">5.</span> Dentro del contrato → Crear <strong>Solicitudes de Recurso</strong><br/>
+<span class="flow-arrow">   ↓</span><br/>
+<span class="flow-num">6.</span> <strong>Asignar Empleados</strong> a las Solicitudes<br/>
+<span class="flow-arrow">   ↓</span><br/>
+<span class="flow-num">7.</span> Los empleados registran <strong>horas</strong> en Time Tracking → Mis horas<br/>
+<span class="flow-arrow">   ↓</span><br/>
+<span class="flow-num">8.</span> Revisar utilización y cumplimiento en <strong>Reportes</strong>
+</div>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 19 — FAQ
+═══════════════════════════════════════ -->
+<div class="section-header">
+  <span class="section-num">19</span>
+  <h2>Preguntas frecuentes</h2>
+</div>
+
+<h4>¿Qué diferencia hay entre empleado y usuario?</h4>
+<p>Un <strong>usuario</strong> puede hacer login. Un <strong>empleado</strong> es una persona real en DVPNYX. Puede existir un empleado sin usuario (aún sin acceso al sistema) o un usuario sin empleado (alguien administrativo).</p>
+
+<h4>¿Puedo registrar horas de hace más de 30 días?</h4>
+<p>No en condiciones normales. Un admin puede hacerlo y el sistema deja constancia en el audit log.</p>
+
+<h4>¿Qué pasa si ingreso más de 40h en la matriz de asignación?</h4>
+<p>El sistema tiene un tope de 40h/semana por celda — no acepta más.</p>
+
+<h4>¿Puedo registrar horas a futuro?</h4>
+<p>No. El sistema bloquea cualquier fecha posterior a hoy.</p>
+
+<h4>¿Qué pasa si asigno a alguien con demasiadas horas?</h4>
+<p>Si la suma supera el 110% de la capacidad del empleado, el sistema bloquea la asignación. Un admin puede hacer override con confirmación explícita.</p>
+
+<h4>¿Cómo sé si mis horas están bien registradas?</h4>
+<p>El indicador de cumplimiento arriba del calendario muestra el % de días hábiles donde registraste al menos 1 hora.</p>
+
+<h4>¿Qué pasa si hay un error al crear la cotización?</h4>
+<p>El sistema muestra el mensaje de error inline. Los borradores se guardan automáticamente cada vez que haces clic en "Guardar borrador" — no se pierde el trabajo.</p>
+
+
+<!-- ══════════════════════════════════════
+     SECCIÓN 20 — COMPARATIVA
+═══════════════════════════════════════ -->
+<div class="section-header page-break">
+  <span class="section-num">20</span>
+  <h2>Comparación para la prueba piloto</h2>
+</div>
+
+<h3>DVPNYX Cotizador vs. runn.io</h3>
+<table>
+  <thead><tr><th>Funcionalidad</th><th>runn.io</th><th>DVPNYX Cotizador</th></tr></thead>
+  <tbody>
+    <tr><td>Planeación de recursos</td><td class="compare-yes">✓ Principal</td><td class="compare-yes">✓ Solicitudes + Asignaciones</td></tr>
+    <tr><td>Capacidad / utilización</td><td class="compare-yes">✓</td><td class="compare-yes">✓ Reporte Utilización</td></tr>
+    <tr><td>Bench / disponibilidad</td><td class="compare-yes">✓</td><td class="compare-yes">✓ Reporte Bench</td></tr>
+    <tr><td>Sugerencia de candidatos</td><td class="compare-yes">✓</td><td class="compare-yes">✓ por nivel + área + skills</td></tr>
+    <tr><td>Timeline / Gantt visual</td><td class="compare-yes">✓</td><td class="compare-partial">⚬ Parcial (tab Asignaciones)</td></tr>
+    <tr><td>Asignación multi-cliente</td><td class="compare-yes">✓</td><td class="compare-yes">✓</td></tr>
+    <tr><td>Integración con cotizaciones</td><td class="compare-no">✗</td><td class="compare-yes">✓ Trazabilidad completa</td></tr>
+  </tbody>
+</table>
+
+<h3>DVPNYX Cotizador vs. Clockify</h3>
+<table>
+  <thead><tr><th>Funcionalidad</th><th>Clockify</th><th>DVPNYX Cotizador</th></tr></thead>
+  <tbody>
+    <tr><td>Registro retroactivo de horas</td><td class="compare-yes">✓</td><td class="compare-yes">✓ ventana 30 días</td></tr>
+    <tr><td>Vista semanal por proyecto</td><td class="compare-yes">✓</td><td class="compare-yes">✓ por asignación</td></tr>
+    <tr><td>Reporte de cumplimiento</td><td class="compare-yes">✓</td><td class="compare-yes">✓</td></tr>
+    <tr><td>Burn rate (planeado vs real)</td><td class="compare-partial">⚬ Parcial</td><td class="compare-yes">✓ Reporte Horas por Contrato</td></tr>
+    <tr><td>Aprobación de horas</td><td class="compare-yes">✓</td><td class="compare-partial">⚬ Reservado para V3</td></tr>
+    <tr><td>Integración con facturación</td><td class="compare-yes">✓</td><td class="compare-no">✗ no disponible en V2</td></tr>
+    <tr><td>Registro libre sin asignación</td><td class="compare-yes">✓ Libre</td><td class="compare-no">✗ Solo contra asignaciones activas</td></tr>
+  </tbody>
+</table>
+
+<div class="callout callout-key" style="margin-top: 6mm;">
+  <span class="callout-icon">🏆</span>
+  <div class="callout-body">
+    <strong>La ventaja diferencial del Cotizador</strong>
+    La trazabilidad completa desde la oportunidad comercial → cotización → contrato → asignación → horas registradas es única. Esto permite saber exactamente cuánto costó cada proyecto en tiempo real, algo que runn.io y Clockify por separado no pueden ofrecer sin integraciones adicionales.
+  </div>
+</div>
+
+<hr class="divider"/>
+<p style="text-align:center; color: var(--text-light); font-size: 8.5pt; margin-top: 6mm;">
+  DVPNYX Cotizador v2.0 &nbsp;·&nbsp; quoter.doublevpartners.com &nbsp;·&nbsp; Uso interno &nbsp;·&nbsp; Abril 2026
+</p>
+
+</body>
+</html>

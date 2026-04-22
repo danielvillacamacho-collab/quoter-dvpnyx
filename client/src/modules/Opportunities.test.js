@@ -212,4 +212,20 @@ describe('Opportunities module', () => {
     mount();
     await waitFor(() => expect(screen.getByText(/No hay oportunidades que coincidan/i)).toBeInTheDocument());
   });
+
+  it('Descargar CSV button calls apiDownload with the active filters', async () => {
+    apiV2.apiDownload.mockResolvedValue();
+    mount();
+    await screen.findByText('Proyecto Atlas');
+
+    // Apply a status filter so the CSV request should carry it.
+    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'proposal' } });
+
+    fireEvent.click(screen.getByTestId('opportunities-export-csv'));
+    await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));
+    const [url, filename] = apiV2.apiDownload.mock.calls[0];
+    expect(url).toMatch(/^\/api\/opportunities\/export\.csv\?/);
+    expect(url).toContain('status=proposal');
+    expect(filename).toBe('oportunidades.csv');
+  });
 });
