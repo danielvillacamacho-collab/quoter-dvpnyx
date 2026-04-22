@@ -256,6 +256,10 @@ describe('ProjectEditor — fixed_scope stepper', () => {
   beforeEach(() => {
     localStorage.clear();
     localStorage.setItem('dvpnyx_token', 'valid-token');
+    // These tests target the classic stepper. Force the classic view via
+    // the per-user preference flag since the default is now the unified
+    // single-page editor.
+    localStorage.setItem('dvpnyx_project_editor_classic', '1');
     jest.resetAllMocks();
     api.getMe.mockResolvedValue(mockUser);
     api.getParams.mockResolvedValue(mockParams);
