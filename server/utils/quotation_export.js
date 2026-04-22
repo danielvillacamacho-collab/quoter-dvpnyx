@@ -114,10 +114,70 @@ function calcSummary(quotation, params) {
 }
 
 /* ========================================================== *
+ *               STAFF-AUG (CAPACITY) CALCULATIONS             *
+ * Mirrors client/src/utils/calc.js#calcStaffAugLine.          *
+ * ========================================================== */
+
+function calcStaffAugLine(line, params, marginOverride) {
+  if (!line || !line.level || !line.country || !line.stack) {
+    return { ...line, cost_hour: 0, rate_hour: 0, rate_month: 0, total: 0 };
+  }
+  const hoursMonth = getParam(params, 'project', 'hours_month') || 160;
+  const level = getParam(params, 'level', `L${line.level}`);
+  const geo = getParam(params, 'geo', line.country);
+  const bil = getParam(params, 'bilingual', line.bilingual ? 'Sí' : 'No');
+  const stack = getParam(params, 'stack', line.stack);
+  const modality = getParam(params, 'modality', line.modality) ?? 1;
+  if (level == null || geo == null || bil == null || stack == null) {
+    return { ...line, cost_hour: 0, rate_hour: 0, rate_month: 0, total: 0 };
+  }
+  const costHour = (level / hoursMonth) * geo * bil * stack * modality;
+  const talentMargin = marginOverride != null
+    ? Number(marginOverride)
+    : (getParam(params, 'margin', 'talent') ?? 0.35);
+  const rateHour = talentMargin >= 1 ? 0 : costHour / (1 - talentMargin);
+  const toolsCost = getParam(params, 'tools', line.tools) ?? 0;
+  const toolsMargin = getParam(params, 'margin', 'tools') ?? 0;
+  const toolsRate = toolsMargin >= 1 ? toolsCost : toolsCost / (1 - toolsMargin);
+  const rateMonth = rateHour * hoursMonth + toolsRate;
+  const total = rateMonth * Number(line.quantity || 1) * Number(line.duration_months || 1);
+  return { ...line, cost_hour: costHour, rate_hour: rateHour, rate_month: rateMonth, total };
+}
+
+function calcStaffAugSummary(quotation, params) {
+  const marginOverride = quotation?.metadata?.margin_pct != null
+    ? Number(quotation.metadata.margin_pct)
+    : null;
+  const effectiveMargin = marginOverride != null
+    ? marginOverride
+    : (getParam(params, 'margin', 'talent') ?? 0.35);
+  const rows = (quotation.lines || []).map((l) => ({
+    ...l,
+    ...calcStaffAugLine(l, params, marginOverride),
+  }));
+  const totalResources = rows.reduce((s, l) => s + Number(l.quantity || 1), 0);
+  const totalMonthly = rows.reduce((s, l) => s + Number(l.rate_month || 0) * Number(l.quantity || 1), 0);
+  const totalContract = rows.reduce((s, l) => s + Number(l.total || 0), 0);
+  const weightedMonths = rows.reduce((s, l) => s + Number(l.duration_months || 0) * Number(l.quantity || 1), 0);
+  const avgDuration = totalResources > 0 ? weightedMonths / totalResources : 0;
+  const blendMonthly = totalResources > 0 ? totalMonthly / totalResources : 0;
+  const discount = Number(quotation.discount_pct || 0);
+  const finalPrice = totalContract * (1 - discount);
+  return { lines: rows, totalResources, totalMonthly, totalContract, avgDuration, blendMonthly, discount, finalPrice, marginPct: effectiveMargin };
+}
+
+/* ========================================================== *
  *                       XLSX GENERATOR                        *
  * ========================================================== */
 
 async function generateXlsx(quotation, params) {
+  if (quotation && quotation.type === 'staff_aug') {
+    return generateXlsxStaffAug(quotation, params);
+  }
+  return generateXlsxFixedScope(quotation, params);
+}
+
+async function generateXlsxFixedScope(quotation, params) {
   // exceljs is an optional dep — require lazily so environments without it
   // still boot. The route handler already rejects with 503 if missing.
   const ExcelJS = require('exceljs');
@@ -274,6 +334,13 @@ async function generateXlsx(quotation, params) {
  * ========================================================== */
 
 async function generatePdf(quotation, params) {
+  if (quotation && quotation.type === 'staff_aug') {
+    return generatePdfStaffAug(quotation, params);
+  }
+  return generatePdfFixedScope(quotation, params);
+}
+
+async function generatePdfFixedScope(quotation, params) {
   const PDFDocument = require('pdfkit');
   const doc = new PDFDocument({ size: 'LETTER', margin: 54 });
 
@@ -438,7 +505,308 @@ function sanitizeFilenamePart(name) {
 
 function buildFilename(quotation, ext) {
   const date = new Date().toISOString().slice(0, 10);
-  return `DVPNYX_Proyecto_${sanitizeFilenamePart(quotation.project_name)}_${date}.${ext}`;
+  const prefix = quotation && quotation.type === 'staff_aug' ? 'Capacity' : 'Proyecto';
+  return `DVPNYX_${prefix}_${sanitizeFilenamePart(quotation.project_name)}_${date}.${ext}`;
+}
+
+/* ========================================================== *
+ *            STAFF-AUG XLSX — Spec 4 (capacity)               *
+ * Hoja 1 "Propuesta comercial": tabla cliente-facing sin stack *
+ * y SIN cost empresa / margen. Hoja 2 "Desglose tarifa":      *
+ * justifica la tarifa mostrando factores aplicados sobre la   *
+ * tarifa base (NO costo empresa).                              *
+ * ========================================================== */
+
+async function generateXlsxStaffAug(quotation, params) {
+  const ExcelJS = require('exceljs');
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'DVPNYX Quoter';
+  wb.created = new Date();
+
+  const summary = calcStaffAugSummary(quotation, params);
+  const money = '"$"#,##0';
+  const moneyDec = '"$"#,##0.00';
+  const pct = '0%';
+
+  const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: DVP_PURPLE } };
+  const headerFont = { color: { argb: 'FFFFFFFF' }, bold: true };
+  const totalFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8F9F8' } };
+
+  /* ---------- Hoja 1: Propuesta comercial ---------- */
+  const sheet = wb.addWorksheet('Propuesta comercial');
+  sheet.columns = [
+    { width: 4 }, { width: 32 }, { width: 6 }, { width: 14 },
+    { width: 10 }, { width: 14 }, { width: 14 }, { width: 7 }, { width: 7 },
+    { width: 18 }, { width: 18 },
+  ];
+
+  sheet.mergeCells('A1:K1');
+  sheet.getCell('A1').value = 'DVPNYX — Propuesta Comercial · Staff Augmentation';
+  sheet.getCell('A1').font = { size: 16, bold: true, color: { argb: DVP_PURPLE } };
+  sheet.mergeCells('A2:K2');
+  sheet.getCell('A2').value = 'Unconventional People. Disruptive Tech.';
+  sheet.getCell('A2').font = { italic: true, size: 10, color: { argb: 'FF888888' } };
+  sheet.addRow([]);
+
+  [
+    ['Proyecto', quotation.project_name || '—'],
+    ['Cliente', quotation.client_name || '—'],
+    ['Comercial', quotation.commercial_name || '—'],
+    ['Pre-venta', quotation.preventa_name || '—'],
+    ['Fecha', new Date().toISOString().slice(0, 10)],
+  ].forEach(([k, v]) => {
+    const r = sheet.addRow([k, v]);
+    r.getCell(1).font = { bold: true };
+  });
+  sheet.addRow([]);
+
+  const header = sheet.addRow(['#', 'Rol / Título', 'Nivel', 'País', 'Bilingüe', 'Herramientas', 'Modalidad', 'Cant', 'Meses', 'Tarifa Mensual', 'Total Línea']);
+  header.eachCell((c) => { c.fill = headerFill; c.font = headerFont; c.alignment = { vertical: 'middle' }; });
+
+  summary.lines.forEach((l, i) => {
+    const row = sheet.addRow([
+      i + 1,
+      l.role_title || '—',
+      `L${l.level || '?'}`,
+      l.country || '—',
+      l.bilingual ? 'Sí' : 'No',
+      l.tools || '—',
+      l.modality || '—',
+      Number(l.quantity || 1),
+      Number(l.duration_months || 0),
+      Number(l.rate_month || 0),
+      Number(l.total || 0),
+    ]);
+    row.getCell(10).numFmt = money;
+    row.getCell(10).font = { bold: true };
+    row.getCell(11).numFmt = money;
+  });
+  sheet.addRow([]);
+
+  // Totales
+  const totResRow = sheet.addRow(['', 'TOTAL RECURSOS', '', '', '', '', '', summary.totalResources, '', '', '']);
+  totResRow.getCell(2).font = { bold: true };
+  const totMonthlyRow = sheet.addRow(['', 'TOTAL MENSUAL', '', '', '', '', '', '', '', summary.totalMonthly, '']);
+  totMonthlyRow.getCell(2).font = { bold: true };
+  totMonthlyRow.getCell(10).numFmt = money; totMonthlyRow.getCell(10).font = { bold: true };
+  const totContractRow = sheet.addRow(['', 'TOTAL CONTRATO', '', '', '', '', '', '', '', '', summary.totalContract]);
+  totContractRow.getCell(2).font = { bold: true };
+  totContractRow.getCell(11).numFmt = money; totContractRow.getCell(11).font = { bold: true };
+  if (summary.discount > 0) {
+    const descRow = sheet.addRow(['', `DESCUENTO (${(summary.discount * 100).toFixed(0)}%)`, '', '', '', '', '', '', '', '', -summary.totalContract * summary.discount]);
+    descRow.getCell(2).font = { bold: true, color: { argb: 'FFCC3333' } };
+    descRow.getCell(11).numFmt = money;
+    descRow.getCell(11).font = { bold: true, color: { argb: 'FFCC3333' } };
+  }
+  const finalRow = sheet.addRow(['', 'TOTAL FINAL', '', '', '', '', '', '', '', '', summary.finalPrice]);
+  finalRow.eachCell((c) => { c.fill = totalFill; });
+  finalRow.getCell(2).font = { bold: true, size: 13, color: { argb: DVP_PURPLE } };
+  finalRow.getCell(11).numFmt = money;
+  finalRow.getCell(11).font = { bold: true, size: 13, color: { argb: DVP_PURPLE } };
+
+  /* ---------- Hoja 2: Desglose de tarifa (justificación, SIN cost empresa) ---------- */
+  const breakdown = wb.addWorksheet('Desglose tarifa');
+  breakdown.columns = [
+    { width: 30 }, { width: 6 }, { width: 16 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 18 },
+  ];
+  breakdown.mergeCells('A1:I1');
+  breakdown.getCell('A1').value = 'Desglose de tarifa por recurso';
+  breakdown.getCell('A1').font = { size: 14, bold: true, color: { argb: DVP_PURPLE } };
+  breakdown.mergeCells('A2:I2');
+  breakdown.getCell('A2').value = 'Parte de la tarifa mensual base (incluye margen). Justifica la tarifa ante el cliente.';
+  breakdown.getCell('A2').font = { italic: true, size: 10, color: { argb: 'FF666666' } };
+  breakdown.addRow([]);
+
+  const bHead = breakdown.addRow(['Rol', 'Nivel', 'Tarifa base mensual', 'Factor geo', 'Factor bilingüe', 'Factor stack', 'Factor modalidad', 'Herramientas', 'Tarifa mensual final']);
+  bHead.eachCell((c) => { c.fill = headerFill; c.font = headerFont; });
+
+  summary.lines.forEach((l) => {
+    const talentMargin = summary.marginPct != null ? Number(summary.marginPct) : (getParam(params, 'margin', 'talent') ?? 0.35);
+    const hoursMonth = getParam(params, 'project', 'hours_month') || 160;
+    const lvl = getParam(params, 'level', `L${l.level}`) || 0;
+    // "Tarifa base mensual" = cost empresa DEL NIVEL ya dividido por (1 - margen) — NO revela cost empresa.
+    const baseRate = talentMargin >= 1 ? 0 : (lvl / (1 - talentMargin));
+    const geoF = getParam(params, 'geo', l.country) ?? 1;
+    const bilF = getParam(params, 'bilingual', l.bilingual ? 'Sí' : 'No') ?? 1;
+    const stackF = getParam(params, 'stack', l.stack) ?? 1;
+    const modF = getParam(params, 'modality', l.modality) ?? 1;
+    const toolsC = getParam(params, 'tools', l.tools) ?? 0;
+    const toolsMargin = getParam(params, 'margin', 'tools') ?? 0;
+    const toolsR = toolsMargin >= 1 ? toolsC : toolsC / (1 - toolsMargin);
+    const rateMonth = baseRate * geoF * bilF * stackF * modF + toolsR;
+    void hoursMonth; void rateMonth; // kept for potential trace if we expand later
+    const row = breakdown.addRow([
+      l.role_title || '—',
+      `L${l.level || '?'}`,
+      baseRate,
+      geoF,
+      bilF,
+      stackF,
+      modF,
+      toolsR,
+      Number(l.rate_month || 0),
+    ]);
+    row.getCell(3).numFmt = moneyDec;
+    row.getCell(4).numFmt = '0.00';
+    row.getCell(5).numFmt = '0.00';
+    row.getCell(6).numFmt = '0.00';
+    row.getCell(7).numFmt = '0.00';
+    row.getCell(8).numFmt = moneyDec;
+    row.getCell(9).numFmt = money;
+    row.getCell(9).font = { bold: true };
+  });
+
+  breakdown.addRow([]);
+  const note = breakdown.addRow(['NOTA: "Tarifa base mensual" ya incluye el margen de contribución. No revela la estructura de costos interna.']);
+  breakdown.mergeCells(`A${note.number}:I${note.number}`);
+  note.getCell(1).font = { italic: true, size: 10, color: { argb: 'FF888888' } };
+  void pct;
+
+  const buf = await wb.xlsx.writeBuffer();
+  return Buffer.from(buf);
+}
+
+/* ========================================================== *
+ *              STAFF-AUG PDF — Spec 4 (capacity)              *
+ * Propuesta cliente-facing: Rol, Nivel, Cantidad, Tarifa.     *
+ * SIN stack, SIN modalidad, SIN herramientas, SIN cost emp.   *
+ * ========================================================== */
+
+async function generatePdfStaffAug(quotation, params) {
+  const PDFDocument = require('pdfkit');
+  const doc = new PDFDocument({ size: 'LETTER', margin: 54 });
+  const chunks = [];
+  doc.on('data', (c) => chunks.push(c));
+  const finished = new Promise((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
+
+  const summary = calcStaffAugSummary(quotation, params);
+  const money = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n || 0);
+  const moneyDec = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n || 0);
+
+  const LEVEL_BRIEF = {
+    1: 'Trainee — en formación, requiere guía constante',
+    2: 'Junior 1 — autónomo en tareas simples bajo supervisión',
+    3: 'Junior 2 — resuelve tareas estándar con poca ayuda',
+    4: 'Semi Senior 1 — cierra tareas end-to-end con revisión',
+    5: 'Semi Senior 2 — resuelve problemas complejos, mentoriza juniors',
+    6: 'Semi Senior 3 — líder técnico junior',
+    7: 'Senior — autónomo, toma decisiones técnicas, lidera squads',
+    8: 'Senior Plus / Staff — referente técnico transversal',
+    9: 'Principal — arquitectura de dominio, cross-team',
+    10: 'Crack — referente de industria, impacto estratégico',
+    11: 'Distinguished — autoridad técnica máxima del equipo',
+  };
+
+  /* ---------- Page 1: Cover ---------- */
+  doc.fillColor('#56234d').fontSize(28).font('Helvetica-Bold').text('DVPNYX', { align: 'center' });
+  doc.moveDown(0.3);
+  doc.fillColor('#666').fontSize(11).font('Helvetica').text('Unconventional People. Disruptive Tech.', { align: 'center' });
+  doc.moveDown(6);
+  doc.fillColor('#111').fontSize(22).font('Helvetica-Bold').text('Propuesta de Capacity', { align: 'center' });
+  doc.moveDown(0.3);
+  doc.fontSize(14).font('Helvetica').text('Staff Augmentation', { align: 'center' });
+  doc.moveDown(1.2);
+  doc.fontSize(18).font('Helvetica-Bold').text(quotation.project_name || '—', { align: 'center' });
+  doc.moveDown(0.2);
+  doc.fillColor('#666').fontSize(14).font('Helvetica').text(quotation.client_name || '—', { align: 'center' });
+  doc.moveDown(4);
+  doc.fillColor('#111').fontSize(11);
+  doc.text(`Responsable comercial: ${quotation.commercial_name || '—'}`, { align: 'center' });
+  doc.text(`Ingeniería de pre-venta: ${quotation.preventa_name || '—'}`, { align: 'center' });
+  doc.moveDown(1);
+  doc.fillColor('#999').fontSize(10).text(`Fecha: ${new Date().toISOString().slice(0, 10)}`, { align: 'center' });
+
+  /* ---------- Page 2: Equipo propuesto ---------- */
+  doc.addPage();
+  doc.fillColor('#56234d').fontSize(16).font('Helvetica-Bold').text('Equipo propuesto');
+  doc.moveDown(0.3);
+  doc.fillColor('#666').fontSize(10).font('Helvetica').text('Composición de recursos, niveles y tarifa mensual por perfil.');
+  doc.moveDown(0.8);
+
+  const rowH = 22;
+  const startX = doc.x;
+  let y = doc.y;
+  // Columnas (SIN stack / modalidad / herramientas según spec).
+  const cols = [
+    { label: 'Rol', width: 160 },
+    { label: 'Nivel', width: 70 },
+    { label: 'Cant', width: 48 },
+    { label: 'Meses', width: 54 },
+    { label: 'Tarifa/Mes', width: 100 },
+    { label: 'Total', width: 90 },
+  ];
+  const totalW = cols.reduce((s, c) => s + c.width, 0);
+
+  // Header
+  doc.rect(startX, y, totalW, rowH).fill('#56234d');
+  doc.fillColor('#fff').font('Helvetica-Bold').fontSize(10);
+  let x = startX;
+  cols.forEach((c) => { doc.text(c.label, x + 6, y + 6, { width: c.width - 12 }); x += c.width; });
+  y += rowH;
+
+  summary.lines.forEach((l, i) => {
+    if (y > 700) { doc.addPage(); y = 54; }
+    if (i % 2 === 1) doc.fillColor('#f7f5fa').rect(startX, y, totalW, rowH).fill();
+    doc.fillColor('#111').font('Helvetica').fontSize(10);
+    const vals = [
+      l.role_title || '—',
+      `L${l.level || '?'}${LEVEL_BRIEF[l.level] ? ` — ${LEVEL_BRIEF[l.level].split(' — ')[0]}` : ''}`,
+      String(l.quantity || 1),
+      String(l.duration_months || '—'),
+      moneyDec(l.rate_month || 0),
+      money((l.rate_month || 0) * (l.quantity || 1) * (l.duration_months || 1)),
+    ];
+    let cx = startX;
+    vals.forEach((v, j) => {
+      if (j === 4 || j === 5) doc.font('Helvetica-Bold'); else doc.font('Helvetica');
+      doc.text(String(v), cx + 6, y + 6, { width: cols[j].width - 12 });
+      cx += cols[j].width;
+    });
+    y += rowH;
+  });
+  doc.y = y;
+  doc.moveDown(0.8);
+
+  // Nota explicativa de niveles, justo debajo de la tabla.
+  doc.fillColor('#666').fontSize(9).font('Helvetica-Oblique')
+    .text('Niveles según la guía DVPNYX: L1-L3 Junior, L4-L6 Semi Senior, L7-L9 Senior, L10-L11 Crack / Distinguished.');
+
+  /* ---------- Page 3: Resumen financiero ---------- */
+  doc.addPage();
+  doc.fillColor('#56234d').fontSize(16).font('Helvetica-Bold').text('Resumen financiero');
+  doc.moveDown(0.8);
+  doc.fillColor('#111').fontSize(11).font('Helvetica');
+
+  const rows = [
+    ['Total de recursos', String(summary.totalResources)],
+    ['Duración promedio', `${summary.avgDuration ? summary.avgDuration.toFixed(1) : '0'} meses`],
+    ['Tarifa mensual total', money(summary.totalMonthly)],
+    ['Total del contrato', money(summary.totalContract)],
+    ['Blend rate mensual / recurso', money(summary.blendMonthly)],
+  ];
+  rows.forEach(([k, v]) => {
+    doc.font('Helvetica').text(`${k}: `, { continued: true }).font('Helvetica-Bold').text(v);
+  });
+  if (summary.discount > 0) {
+    doc.moveDown(0.3);
+    doc.font('Helvetica-Oblique').fontSize(10).fillColor('#666')
+      .text(`Incluye descuento negociado del ${(summary.discount * 100).toFixed(0)}%`);
+    doc.fillColor('#111').fontSize(11);
+  }
+
+  doc.moveDown(1.2);
+  doc.fillColor('#00d8d4').fontSize(14).font('Helvetica-Bold').text('INVERSIÓN TOTAL');
+  doc.fillColor('#111').fontSize(28).font('Helvetica-Bold').text(money(summary.finalPrice));
+
+  if (quotation.notes) {
+    doc.moveDown(1.5);
+    doc.fillColor('#56234d').fontSize(12).font('Helvetica-Bold').text('Notas comerciales');
+    doc.moveDown(0.3);
+    doc.fillColor('#111').fontSize(10).font('Helvetica').text(String(quotation.notes), { width: 480 });
+  }
+
+  doc.end();
+  return finished;
 }
 
 module.exports = {
@@ -446,5 +814,5 @@ module.exports = {
   generatePdf,
   buildFilename,
   // exported for tests
-  _internals: { calcSummary, calcCostHour, applyFinancialOverrides, sanitizeFilenamePart },
+  _internals: { calcSummary, calcCostHour, applyFinancialOverrides, sanitizeFilenamePart, calcStaffAugLine, calcStaffAugSummary },
 };
