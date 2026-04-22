@@ -15,6 +15,16 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ## [Unreleased] — entregas en curso
 
+### feat(capacity-editor): editor unificado de capacity + margen editable + export xlsx/pdf (2026-04-22)
+
+Respuesta al pedido de preventa (`spec_capacity_editor.docx`, specs 3 y 4). Mirror exacto del flujo que se entregó para el cotizador de proyectos.
+
+- **Nuevo `StaffAugEditorUnified`**: reemplaza el editor clásico por una vista de página única — info del proyecto colapsable, tabla de recursos con dropdowns inline (especialidad, L1–L11 con tooltip descriptivo, país, bilingüe, herramientas, stack, modalidad, cant, meses) y resumen financiero sticky a la derecha (total recursos, duración promedio, tarifa mensual total, total contrato, blend rate, TOTAL CON DESCUENTO). Defaults inteligentes para nuevo recurso (L5 / Colombia / no bilingüe / Sin herramientas / Estándar / Remoto / 1×6m) y botón ⎘ para duplicar fila.
+- **Margen de contribución editable**: nuevo input en el panel financiero (además del descuento). Valor guardado en `metadata.margin_pct`; al cambiarlo se recalculan todas las líneas (`rate_hour`, `rate_month`, `total`) y la cascada completa (blend rate, total contrato, TOTAL CON DESCUENTO). Semáforo 🟢/🟡/🔴 sobre el margen aplicado con mínimo sugerido (35% talento) como referencia.
+- **Vista clásica como fallback**: toggle con preferencia en `localStorage` (`dvpnyx_staff_aug_editor_classic`). El editor inline anterior se preserva como `StaffAugEditorClassic`.
+- **Export**: `POST /api/quotations/:id/export?format=xlsx|pdf` ahora despacha por `quotation.type`. Filename `DVPNYX_Capacity_{project}_{YYYY-MM-DD}`. XLSX con Hoja 1 "Propuesta comercial" (cliente-facing, sin stack / sin cost empresa / sin margen) + Hoja 2 "Desglose tarifa" que justifica desde la tarifa base mensual ya con margen. PDF de 3 secciones (cover + equipo sin stack/modalidad/herramientas + resumen financiero). El desglose y las tarifas del export honran el `margin_pct` guardado en `metadata`.
+- **Guards**: el route valida por tipo — fixed_scope requiere ≥1 perfil + ≥1 fase; staff_aug requiere ≥1 línea con `rate_month > 0`.
+
 ### docs(specs): gap analysis — `historias_capacity_planning.docx` ENTREGADO (2026-04-22)
 
 Preventa compartió un spec marcado como urgente. Auditoría confirma que **15 de 16 historias ya estaban entregadas en Phases 7–12** (pre-handoff). Nuevo documento `docs/specs/GAP_ANALYSIS_capacity_planning_2026-04-22.md` recorre cada criterio de aceptación vs código real. 5 divergencias deliberadas identificadas que requieren decisión de preventa (ninguna es bug). Ticket marcado como entregado — a la espera de feedback de preventa sobre el estado actual en develop.

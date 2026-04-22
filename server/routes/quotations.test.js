@@ -505,11 +505,38 @@ describe('POST /api/quotations/:id/export — fixed-scope export', () => {
     expect(res.status).toBe(200);
   });
 
-  it('rejects staff_aug quotations (only fixed_scope is exportable)', async () => {
+  it('accepts staff_aug quotations with ≥1 priced line (xlsx)', async () => {
     pushQuotation({ type: 'staff_aug' });
+    pushChildren({ lines: [{ id: 'l1', rate_month: 5000 }], phases: [] });
+    queryQueue.push({ rows: [] }); // audit log
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+  });
+
+  it('accepts staff_aug quotations with ≥1 priced line (pdf)', async () => {
+    pushQuotation({ type: 'staff_aug' });
+    pushChildren({ lines: [{ id: 'l1', rate_month: 5000 }], phases: [] });
+    queryQueue.push({ rows: [] }); // audit log
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=pdf');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/pdf');
+  });
+
+  it('rejects staff_aug with no lines', async () => {
+    pushQuotation({ type: 'staff_aug' });
+    pushChildren({ lines: [], phases: [] });
     const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/alcance fijo/);
+    expect(res.body.error).toMatch(/recurso/);
+  });
+
+  it('rejects staff_aug when no line has rate_month > 0', async () => {
+    pushQuotation({ type: 'staff_aug' });
+    pushChildren({ lines: [{ id: 'l1', rate_month: 0 }], phases: [] });
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/tarifa/);
   });
 
   it('rejects when the quotation has no profile lines', async () => {
