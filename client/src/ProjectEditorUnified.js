@@ -760,16 +760,21 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
     finally { setBusy(null); }
   };
 
+  // Estilo muted cuando disabled, gemelo al de "Guardar borrador" cuando
+  // !canSave. NO usamos HTML `disabled` por motivo de negocio (sólo para
+  // `busy`) para que el tooltip nativo `title=` se dispare en hover —
+  // algunos browsers bloquean mouseenter en `<button disabled>`.
+  const disabledStyle = disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {};
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <button
         type="button"
-        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        onClick={() => !disabled && setOpen(o => !o)}
-        disabled={disabled || !!busy}
+        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6, ...disabledStyle }}
+        onClick={() => { if (disabled || busy) return; setOpen(o => !o); }}
+        disabled={!!busy}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-disabled={disabled}
+        aria-disabled={disabled || !!busy}
         title={disabled ? disabledReason : undefined}
       >
         {busy ? `Generando ${busy}…` : 'Exportar ▾'}
@@ -865,7 +870,7 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
     && (data.lines || []).length > 0
     && (data.phases || []).some(p => Number(p.weeks || 0) > 0);
   const exportDisabledReason = isNew
-    ? 'Guarda primero para poder exportar'
+    ? 'Debes guardar cambios para exportar'
     : (data.lines || []).length === 0 || !(data.phases || []).some(p => Number(p.weeks || 0) > 0)
       ? 'La cotización necesita al menos 1 perfil y 1 fase con horas > 0'
       : '';
@@ -951,7 +956,14 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
         <div className="editor-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <AutosaveIndicator enabled={autosave.enabled && !isNew} status={autosave.status} lastSavedAt={autosave.lastSavedAt} />
           <ExportDropdown onExport={doExport} disabled={!canExport} disabledReason={exportDisabledReason} />
-          <button type="button" style={canSave ? s.btnOutline : { ...s.btnOutline, opacity: 0.5, cursor: 'not-allowed' }} onClick={() => save('draft')} disabled={saving || !canSave}>
+          <button
+            type="button"
+            style={canSave ? s.btnOutline : { ...s.btnOutline, opacity: 0.5, cursor: 'not-allowed' }}
+            onClick={() => { if (!canSave || saving) return; save('draft'); }}
+            disabled={saving}
+            aria-disabled={!canSave || saving}
+            title={!canSave ? 'Campos pendientes de diligenciar para guardar' : undefined}
+          >
             {saving ? 'Guardando…' : '💾 Guardar borrador'}
           </button>
           {onSwitchToClassic && (

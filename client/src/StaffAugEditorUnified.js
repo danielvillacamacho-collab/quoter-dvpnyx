@@ -397,16 +397,20 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
     finally { setBusy(null); }
   };
 
+  // Estilo muted cuando disabled, gemelo al de "Guardar borrador" cuando
+  // !canSave. Usamos aria-disabled + click-guard en vez de HTML disabled
+  // para que el tooltip nativo `title=` se dispare en hover.
+  const disabledStyle = disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {};
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <button
         type="button"
-        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        onClick={() => !disabled && setOpen((o) => !o)}
-        disabled={disabled || !!busy}
+        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6, ...disabledStyle }}
+        onClick={() => { if (disabled || busy) return; setOpen((o) => !o); }}
+        disabled={!!busy}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-disabled={disabled}
+        aria-disabled={disabled || !!busy}
         title={disabled ? disabledReason : undefined}
       >
         {busy ? `Generando ${busy}…` : 'Exportar ▾'}
@@ -511,7 +515,7 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   // hace flush manual o manda el state como override en el body del export.
   const canExport = !isNew && hasProfitableLines;
   const exportDisabledReason = isNew
-    ? 'Guarda primero para poder exportar'
+    ? 'Debes guardar cambios para exportar'
     : !hasProfitableLines
       ? 'Agrega al menos un recurso con tarifa > 0 para exportar'
       : '';
@@ -587,7 +591,14 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
         <div className="editor-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <AutosaveIndicator enabled={autosave.enabled && !isNew} status={autosave.status} lastSavedAt={autosave.lastSavedAt} />
           <ExportDropdown onExport={doExport} disabled={!canExport} disabledReason={exportDisabledReason} />
-          <button type="button" style={canSave ? s.btnOutline : { ...s.btnOutline, opacity: 0.5, cursor: 'not-allowed' }} onClick={() => save('draft')} disabled={saving || !canSave}>
+          <button
+            type="button"
+            style={canSave ? s.btnOutline : { ...s.btnOutline, opacity: 0.5, cursor: 'not-allowed' }}
+            onClick={() => { if (!canSave || saving) return; save('draft'); }}
+            disabled={saving}
+            aria-disabled={!canSave || saving}
+            title={!canSave ? 'Campos pendientes de diligenciar para guardar' : undefined}
+          >
             {saving ? 'Guardando…' : '💾 Guardar borrador'}
           </button>
           {onSwitchToClassic && (
