@@ -440,13 +440,38 @@ router.post('/:id/export', async (req, res) => {
       pool.query('SELECT * FROM quotation_milestones WHERE quotation_id=$1 ORDER BY sort_order', [req.params.id]),
     ]);
 
-    const payload = {
+    let payload = {
       ...quot,
       lines: linesR.rows,
       phases: phasesR.rows,
       epics: epicsR.rows,
       milestones: milestonesR.rows,
     };
+
+    // SPEC-FIX-01 (Opción A): si el cliente manda `override_state` en el
+    // body, lo usamos sobre la versión persistida — esto permite exportar
+    // la versión EN PANTALLA aunque haya cambios sin guardar (cuando el
+    // autosave está deshabilitado o pendiente de flush). Sólo confiamos
+    // en campos del editor; no permitimos override de id, type, ownership.
+    if (req.body && req.body.override_state && typeof req.body.override_state === 'object') {
+      const ov = req.body.override_state;
+      payload = {
+        ...payload,
+        // Datos editables del header
+        project_name: ov.project_name ?? payload.project_name,
+        client_name: ov.client_name ?? payload.client_name,
+        commercial_name: ov.commercial_name ?? payload.commercial_name,
+        preventa_name: ov.preventa_name ?? payload.preventa_name,
+        notes: ov.notes ?? payload.notes,
+        discount_pct: ov.discount_pct ?? payload.discount_pct,
+        metadata: { ...(payload.metadata || {}), ...(ov.metadata || {}) },
+        // Colecciones — el cliente las recalcula con calc.js antes de mandarlas.
+        lines: Array.isArray(ov.lines) ? ov.lines : payload.lines,
+        phases: Array.isArray(ov.phases) ? ov.phases : payload.phases,
+        epics: Array.isArray(ov.epics) ? ov.epics : payload.epics,
+        milestones: Array.isArray(ov.milestones) ? ov.milestones : payload.milestones,
+      };
+    }
 
     if (quot.type === 'fixed_scope') {
       if (!payload.lines.length) return res.status(400).json({ error: 'La cotización necesita al menos 1 perfil' });

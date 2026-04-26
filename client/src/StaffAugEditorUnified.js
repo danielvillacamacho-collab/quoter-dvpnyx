@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
+import useAutosave from './hooks/useAutosave';
+import AutosaveIndicator from './AutosaveIndicator';
 import {
   calcStaffAugLine,
   formatUSD,
@@ -395,16 +397,20 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
     finally { setBusy(null); }
   };
 
+  // Estilo muted cuando disabled, gemelo al de "Guardar borrador" cuando
+  // !canSave. Usamos aria-disabled + click-guard en vez de HTML disabled
+  // para que el tooltip nativo `title=` se dispare en hover.
+  const disabledStyle = disabled ? { opacity: 0.5, cursor: 'not-allowed' } : {};
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <button
         type="button"
-        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        onClick={() => !disabled && setOpen((o) => !o)}
-        disabled={disabled || !!busy}
+        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6, ...disabledStyle }}
+        onClick={() => { if (disabled || busy) return; setOpen((o) => !o); }}
+        disabled={!!busy}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-disabled={disabled}
+        aria-disabled={disabled || !!busy}
         title={disabled ? disabledReason : undefined}
       >
         {busy ? `Generando ${busy}…` : 'Exportar ▾'}
@@ -468,12 +474,17 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   );
   const marginOverride = data.metadata?.margin_pct != null ? Number(data.metadata.margin_pct) : defaultMargin;
 
+  // Autosave handle accesible vía ref para resetBaseline tras fetch.
+  const autosaveRef = useRef(null);
+
   useEffect(() => {
     if (!quotId) return;
     api.getQuotation(quotId).then((q) => {
       const mOverride = q.metadata?.margin_pct != null ? Number(q.metadata.margin_pct) : defaultMargin;
       const lines = (q.lines || []).map((l) => (params ? calcStaffAugLine(l, params, mOverride) : l));
-      setData({ ...q, lines });
+      const loaded = { ...q, lines };
+      setData(loaded);
+      if (autosaveRef.current) autosaveRef.current.resetBaseline(loaded);
       if (q.project_name) setInfoCollapsed(true);
     }).catch(() => nav('/'));
   }, [quotId, nav, params, defaultMargin]);
@@ -500,14 +511,22 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
 
   const hasProfitableLines = (data.lines || []).some((l) => Number(l.rate_month || 0) > 0);
   const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
-  const canExport = !isNew && hasProfitableLines && !dirty;
+  // Export ya no depende de !dirty: autosave persiste; si está off, doExport
+  // hace flush manual o manda el state como override en el body del export.
+  const canExport = !isNew && hasProfitableLines;
   const exportDisabledReason = isNew
-    ? 'Guarda primero para poder exportar'
-    : dirty
-      ? 'Guarda los cambios para exportar la versión más reciente'
-      : !hasProfitableLines
-        ? 'Agrega al menos un recurso con tarifa > 0 para exportar'
-        : '';
+    ? 'Debes guardar cambios para exportar'
+    : !hasProfitableLines
+      ? 'Agrega al menos un recurso con tarifa > 0 para exportar'
+      : '';
+
+  // ──────── Autosave (debounced PUT) ────────
+  const autosave = useAutosave({
+    quotId,
+    data,
+    onSaved: () => setDirty(false),
+  });
+  autosaveRef.current = autosave;
 
   const save = async (status) => {
     if (!canSave) {
@@ -520,7 +539,9 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
       const payload = { ...data, status: status || data.status };
       if (quotId) {
         const resp = await api.updateQuotation(quotId, payload);
-        setData((d) => ({ ...d, ...resp }));
+        const nextData = { ...data, ...resp };
+        setData(nextData);
+        autosave.resetBaseline(nextData);
         setDirty(false);
       } else {
         const resp = await api.createQuotation(payload);
@@ -537,7 +558,12 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   const doExport = async (format) => {
     if (!quotId) return;
     try {
-      const res = await api.exportQuotation(quotId, format);
+      // Flush antes de exportar.
+      if (autosave.enabled) {
+        await autosave.flush();
+      }
+      const overrideState = autosave.enabled ? null : data;
+      const res = await api.exportQuotation(quotId, format, overrideState);
       const url = URL.createObjectURL(res.blob);
       const a = document.createElement('a');
       a.href = url;
@@ -560,11 +586,19 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
           <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--purple-dark)', fontFamily: 'Montserrat' }}>
             {isNew ? 'Nueva Cotización' : 'Editar Cotización'} — Staff Augmentation
           </span>
-          {dirty && <span style={{ fontSize: 11, color: 'var(--warning)', fontStyle: 'italic' }}>· cambios sin guardar</span>}
+          {dirty && !autosave.enabled && <span style={{ fontSize: 11, color: 'var(--warning)', fontStyle: 'italic' }}>· cambios sin guardar</span>}
         </div>
         <div className="editor-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <AutosaveIndicator enabled={autosave.enabled && !isNew} status={autosave.status} lastSavedAt={autosave.lastSavedAt} />
           <ExportDropdown onExport={doExport} disabled={!canExport} disabledReason={exportDisabledReason} />
-          <button type="button" style={canSave ? s.btnOutline : { ...s.btnOutline, opacity: 0.5, cursor: 'not-allowed' }} onClick={() => save('draft')} disabled={saving || !canSave}>
+          <button
+            type="button"
+            style={canSave ? s.btnOutline : { ...s.btnOutline, opacity: 0.5, cursor: 'not-allowed' }}
+            onClick={() => { if (!canSave || saving) return; save('draft'); }}
+            disabled={saving}
+            aria-disabled={!canSave || saving}
+            title={!canSave ? 'Campos pendientes de diligenciar para guardar' : undefined}
+          >
             {saving ? 'Guardando…' : '💾 Guardar borrador'}
           </button>
           {onSwitchToClassic && (
