@@ -758,30 +758,39 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
     finally { setBusy(null); }
   };
 
-  // Visual disabled state: muted color + opacity + not-allowed cursor.
-  // El `title` muestra el motivo en hover (ej. "Guarda primero…") para que
-  // el usuario no piense que es un bug.
-  const isDisabled = disabled || !!busy;
+  // Visual disabled state — claramente apagado para que el usuario no
+  // dude. Background gris muy claro, texto gris, borde gris, opacidad
+  // baja, cursor not-allowed, candado 🔒 al inicio. Sin esto algunos
+  // monitores no muestran suficiente contraste.
+  // OJO: NO usamos el atributo HTML `disabled` cuando el motivo es de
+  // negocio (canExport=false), porque el browser bloquea los eventos de
+  // mouse en `<button disabled>` y el tooltip nativo `title=` no se
+  // dispara. En su lugar usamos `aria-disabled` + styling + click-guard.
+  // Para `busy` (export en curso) sí mantenemos el `disabled` real porque
+  // ahí queremos bloquear todo input.
   const disabledStyle = disabled ? {
-    background: 'transparent',
-    color: 'var(--text-light)',
-    borderColor: 'var(--border)',
-    opacity: 0.55,
+    background: '#f0f0f0',
+    color: '#999',
+    borderColor: '#d0d0d0',
+    opacity: 0.7,
     cursor: 'not-allowed',
   } : {};
+  const label = busy
+    ? `Generando ${busy}…`
+    : disabled ? '🔒 Exportar ▾' : 'Exportar ▾';
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <button
         type="button"
         style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6, ...disabledStyle }}
-        onClick={() => !isDisabled && setOpen(o => !o)}
-        disabled={isDisabled}
+        onClick={() => { if (disabled || busy) return; setOpen(o => !o); }}
+        disabled={!!busy}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-disabled={disabled}
+        aria-disabled={disabled || !!busy}
         title={disabled ? disabledReason : undefined}
       >
-        {busy ? `Generando ${busy}…` : 'Exportar ▾'}
+        {label}
       </button>
       {open && !disabled && (
         <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', zIndex: 50, minWidth: 180 }}>
@@ -818,7 +827,11 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
     metadata: { allocation: {}, financial_overrides: {} },
   });
 
-  // Load existing quotation if editing
+  // Load existing quotation if editing.
+  // CRÍTICO: setDirty(false) al final — sin esto, después de un POST
+  // (crear cotización nueva) el `dirty` queda true porque viene de las
+  // ediciones previas, y el botón Exportar permanece deshabilitado hasta
+  // un segundo Guardar. Reportado por preventa abr 22.
   useEffect(() => {
     if (!quotId) return;
     api.getQuotation(quotId).then(q => {
@@ -834,6 +847,7 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
       // Collapse project info by default if we already have data
       if (q.project_name) setInfoCollapsed(true);
       if ((q.epics || []).length > 0) setEpicsOpen(true);
+      setDirty(false);
     }).catch(() => nav('/'));
   }, [quotId, nav, params]);
 
