@@ -395,7 +395,10 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
     finally { setBusy(null); }
   };
 
-  // Visual disabled state: muted color + opacity + not-allowed cursor.
+  // Visual disabled state — claramente apagado para que el usuario no
+  // dude. Background gris muy claro, texto gris, borde gris, opacidad
+  // baja, cursor not-allowed, candado 🔒 al inicio. Sin esto algunos
+  // monitores no muestran suficiente contraste.
   // OJO: NO usamos el atributo HTML `disabled` cuando el motivo es de
   // negocio (canExport=false), porque el browser bloquea los eventos de
   // mouse en `<button disabled>` y el tooltip nativo `title=` no se
@@ -403,12 +406,15 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
   // Para `busy` (export en curso) sí mantenemos el `disabled` real porque
   // ahí queremos bloquear todo input.
   const disabledStyle = disabled ? {
-    background: 'transparent',
-    color: 'var(--text-light)',
-    borderColor: 'var(--border)',
-    opacity: 0.55,
+    background: '#f0f0f0',
+    color: '#999',
+    borderColor: '#d0d0d0',
+    opacity: 0.7,
     cursor: 'not-allowed',
   } : {};
+  const label = busy
+    ? `Generando ${busy}…`
+    : disabled ? '🔒 Exportar ▾' : 'Exportar ▾';
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <button
@@ -421,7 +427,7 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
         aria-disabled={disabled || !!busy}
         title={disabled ? disabledReason : undefined}
       >
-        {busy ? `Generando ${busy}…` : 'Exportar ▾'}
+        {label}
       </button>
       {open && !disabled && (
         <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', zIndex: 50, minWidth: 200 }}>
