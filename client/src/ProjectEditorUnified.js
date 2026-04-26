@@ -870,17 +870,18 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
   );
 
   const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
+  // Export disabled SOLO cuando faltan datos fundamentales que no
+  // podemos resolver con un auto-save (cotización nueva sin id, sin
+  // perfiles, sin fases con horas). El estado `dirty` ya NO bloquea
+  // el botón — el handler hace auto-save antes de exportar.
   const canExport = !isNew
     && (data.lines || []).length > 0
-    && (data.phases || []).some(p => Number(p.weeks || 0) > 0)
-    && !dirty;
+    && (data.phases || []).some(p => Number(p.weeks || 0) > 0);
   const exportDisabledReason = isNew
     ? 'Guarda primero para poder exportar'
-    : dirty
-      ? 'Guarda los cambios para exportar la versión más reciente'
-      : (data.lines || []).length === 0 || !(data.phases || []).some(p => Number(p.weeks || 0) > 0)
-        ? 'La cotización necesita al menos 1 perfil y 1 fase con horas > 0'
-        : '';
+    : (data.lines || []).length === 0 || !(data.phases || []).some(p => Number(p.weeks || 0) > 0)
+      ? 'La cotización necesita al menos 1 perfil y 1 fase con horas > 0'
+      : '';
 
   const save = async (status) => {
     if (!canSave) {
@@ -908,9 +909,30 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
     }
   };
 
+  // Auto-save antes de exportar: si hay cambios sin guardar, hacemos
+  // PUT primero y luego export. El usuario no necesita acordarse de
+  // dar Guardar manualmente. Para cotizaciones nuevas (!quotId) sí
+  // requiere Guardar explícito porque necesitamos el id para el path
+  // del export — eso lo bloquea canExport=false con el mensaje claro.
   const doExport = async (format) => {
     if (!quotId) return;
     try {
+      if (dirty) {
+        if (!canSave) {
+          // eslint-disable-next-line no-alert
+          alert('Completa el nombre del proyecto y el cliente antes de exportar.');
+          return;
+        }
+        setSaving(true);
+        try {
+          const payload = { ...data, status: data.status };
+          const resp = await api.updateQuotation(quotId, payload);
+          setData(d => ({ ...d, ...resp, metadata: { allocation: {}, financial_overrides: {}, ...(d.metadata || {}) } }));
+          setDirty(false);
+        } finally {
+          setSaving(false);
+        }
+      }
       const res = await api.exportQuotation(quotId, format);
       // res is a Blob; trigger download
       const url = URL.createObjectURL(res.blob);

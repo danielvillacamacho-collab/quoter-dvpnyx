@@ -525,14 +525,16 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
 
   const hasProfitableLines = (data.lines || []).some((l) => Number(l.rate_month || 0) > 0);
   const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
-  const canExport = !isNew && hasProfitableLines && !dirty;
+  // Export disabled SOLO cuando faltan datos fundamentales que no
+  // podemos resolver con un auto-save (cotización nueva sin id, sin
+  // recursos válidos). El estado `dirty` ya NO bloquea el botón —
+  // doExport hace auto-save antes de exportar.
+  const canExport = !isNew && hasProfitableLines;
   const exportDisabledReason = isNew
     ? 'Guarda primero para poder exportar'
-    : dirty
-      ? 'Guarda los cambios para exportar la versión más reciente'
-      : !hasProfitableLines
-        ? 'Agrega al menos un recurso con tarifa > 0 para exportar'
-        : '';
+    : !hasProfitableLines
+      ? 'Agrega al menos un recurso con tarifa > 0 para exportar'
+      : '';
 
   const save = async (status) => {
     if (!canSave) {
@@ -559,9 +561,30 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
     }
   };
 
+  // Auto-save antes de exportar: si hay cambios sin guardar, hacemos
+  // PUT primero y luego export. El usuario no necesita acordarse de
+  // dar Guardar manualmente. Para cotizaciones nuevas (!quotId) sí
+  // requiere Guardar explícito porque necesitamos el id para el path
+  // del export — eso lo bloquea canExport=false con el mensaje claro.
   const doExport = async (format) => {
     if (!quotId) return;
     try {
+      if (dirty) {
+        if (!canSave) {
+          // eslint-disable-next-line no-alert
+          alert('Completa el nombre del proyecto y el cliente antes de exportar.');
+          return;
+        }
+        setSaving(true);
+        try {
+          const payload = { ...data, status: data.status };
+          const resp = await api.updateQuotation(quotId, payload);
+          setData((d) => ({ ...d, ...resp }));
+          setDirty(false);
+        } finally {
+          setSaving(false);
+        }
+      }
       const res = await api.exportQuotation(quotId, format);
       const url = URL.createObjectURL(res.blob);
       const a = document.createElement('a');
