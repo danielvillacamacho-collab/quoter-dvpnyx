@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
+import useAutosave from './hooks/useAutosave';
+import AutosaveIndicator from './AutosaveIndicator';
 import {
   calcProjectProfile,
   calcProjectSummary,
@@ -758,39 +760,19 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
     finally { setBusy(null); }
   };
 
-  // Visual disabled state — claramente apagado para que el usuario no
-  // dude. Background gris muy claro, texto gris, borde gris, opacidad
-  // baja, cursor not-allowed, candado 🔒 al inicio. Sin esto algunos
-  // monitores no muestran suficiente contraste.
-  // OJO: NO usamos el atributo HTML `disabled` cuando el motivo es de
-  // negocio (canExport=false), porque el browser bloquea los eventos de
-  // mouse en `<button disabled>` y el tooltip nativo `title=` no se
-  // dispara. En su lugar usamos `aria-disabled` + styling + click-guard.
-  // Para `busy` (export en curso) sí mantenemos el `disabled` real porque
-  // ahí queremos bloquear todo input.
-  const disabledStyle = disabled ? {
-    background: '#f0f0f0',
-    color: '#999',
-    borderColor: '#d0d0d0',
-    opacity: 0.7,
-    cursor: 'not-allowed',
-  } : {};
-  const label = busy
-    ? `Generando ${busy}…`
-    : disabled ? '🔒 Exportar ▾' : 'Exportar ▾';
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <button
         type="button"
-        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6, ...disabledStyle }}
-        onClick={() => { if (disabled || busy) return; setOpen(o => !o); }}
-        disabled={!!busy}
+        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        onClick={() => !disabled && setOpen(o => !o)}
+        disabled={disabled || !!busy}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-disabled={disabled || !!busy}
+        aria-disabled={disabled}
         title={disabled ? disabledReason : undefined}
       >
-        {label}
+        {busy ? `Generando ${busy}…` : 'Exportar ▾'}
       </button>
       {open && !disabled && (
         <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', zIndex: 50, minWidth: 180 }}>
@@ -827,27 +809,31 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
     metadata: { allocation: {}, financial_overrides: {} },
   });
 
-  // Load existing quotation if editing.
-  // CRÍTICO: setDirty(false) al final — sin esto, después de un POST
-  // (crear cotización nueva) el `dirty` queda true porque viene de las
-  // ediciones previas, y el botón Exportar permanece deshabilitado hasta
-  // un segundo Guardar. Reportado por preventa abr 22.
+  // Autosave hook — declarado antes del load useEffect para poder llamar
+  // resetBaseline justo después del fetch y evitar que la transición
+  // defaults→loaded dispare un PUT espurio.
+  const autosaveRef = useRef(null);
+
+  // Load existing quotation if editing
   useEffect(() => {
     if (!quotId) return;
     api.getQuotation(quotId).then(q => {
       const lines = (q.lines || []).map(l => params ? calcProjectProfile(l, params) : l);
-      setData({
+      const loaded = {
         ...q,
         lines,
         phases: q.phases?.length ? q.phases : [...DEFAULT_PHASES],
         epics: q.epics || [],
         milestones: q.milestones || [],
         metadata: { allocation: {}, financial_overrides: {}, ...(q.metadata || {}) },
-      });
+      };
+      setData(loaded);
+      // Reset autosave baseline al estado recién cargado, así el hook NO
+      // interpreta la transición defaults→loaded como "edit del usuario".
+      if (autosaveRef.current) autosaveRef.current.resetBaseline(loaded);
       // Collapse project info by default if we already have data
       if (q.project_name) setInfoCollapsed(true);
       if ((q.epics || []).length > 0) setEpicsOpen(true);
-      setDirty(false);
     }).catch(() => nav('/'));
   }, [quotId, nav, params]);
 
@@ -870,10 +856,11 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
   );
 
   const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
-  // Export disabled SOLO cuando faltan datos fundamentales que no
-  // podemos resolver con un auto-save (cotización nueva sin id, sin
-  // perfiles, sin fases con horas). El estado `dirty` ya NO bloquea
-  // el botón — el handler hace auto-save antes de exportar.
+  // Export ya NO depende de !dirty: con autosave activo, los cambios se
+  // persisten solos; con autosave inactivo, doExport hace flush manual al
+  // PUT antes de generar el archivo. La condición de export queda sólo
+  // sobre datos fundamentalmente requeridos (ya guardado, ≥1 perfil,
+  // ≥1 fase con horas).
   const canExport = !isNew
     && (data.lines || []).length > 0
     && (data.phases || []).some(p => Number(p.weeks || 0) > 0);
@@ -882,6 +869,18 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
     : (data.lines || []).length === 0 || !(data.phases || []).some(p => Number(p.weeks || 0) > 0)
       ? 'La cotización necesita al menos 1 perfil y 1 fase con horas > 0'
       : '';
+
+  // ──────── Autosave (debounced PUT) ────────
+  // Sólo aplica a cotizaciones ya creadas. Para nuevas, el primer Guardar
+  // crea el registro y de ahí en adelante el autosave hace su trabajo.
+  const autosave = useAutosave({
+    quotId,
+    data,
+    onSaved: () => setDirty(false),
+  });
+  // Expose autosave handle to load useEffect via ref so we can resetBaseline
+  // right after fetch completes.
+  autosaveRef.current = autosave;
 
   const save = async (status) => {
     if (!canSave) {
@@ -895,7 +894,9 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
       let resp;
       if (quotId) {
         resp = await api.updateQuotation(quotId, payload);
-        setData(d => ({ ...d, ...resp, metadata: { allocation: {}, financial_overrides: {}, ...(d.metadata || {}) } }));
+        const nextData = { ...data, ...resp, metadata: { allocation: {}, financial_overrides: {}, ...(data.metadata || {}) } };
+        setData(nextData);
+        autosave.resetBaseline(nextData);
         setDirty(false);
       } else {
         resp = await api.createQuotation(payload);
@@ -909,31 +910,18 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
     }
   };
 
-  // Auto-save antes de exportar: si hay cambios sin guardar, hacemos
-  // PUT primero y luego export. El usuario no necesita acordarse de
-  // dar Guardar manualmente. Para cotizaciones nuevas (!quotId) sí
-  // requiere Guardar explícito porque necesitamos el id para el path
-  // del export — eso lo bloquea canExport=false con el mensaje claro.
   const doExport = async (format) => {
     if (!quotId) return;
     try {
-      if (dirty) {
-        if (!canSave) {
-          // eslint-disable-next-line no-alert
-          alert('Completa el nombre del proyecto y el cliente antes de exportar.');
-          return;
-        }
-        setSaving(true);
-        try {
-          const payload = { ...data, status: data.status };
-          const resp = await api.updateQuotation(quotId, payload);
-          setData(d => ({ ...d, ...resp, metadata: { allocation: {}, financial_overrides: {}, ...(d.metadata || {}) } }));
-          setDirty(false);
-        } finally {
-          setSaving(false);
-        }
+      // Flush antes de exportar: si autosave está activo, persiste los
+      // cambios pendientes; si está inactivo, mandamos el `state` actual
+      // como override en el body para que el server use lo que ve el
+      // usuario en pantalla (no la versión en BD potencialmente vieja).
+      if (autosave.enabled) {
+        await autosave.flush();
       }
-      const res = await api.exportQuotation(quotId, format);
+      const overrideState = autosave.enabled ? null : data;
+      const res = await api.exportQuotation(quotId, format, overrideState);
       // res is a Blob; trigger download
       const url = URL.createObjectURL(res.blob);
       const a = document.createElement('a');
@@ -958,9 +946,10 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
           <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--purple-dark)', fontFamily: 'Montserrat' }}>
             {isNew ? 'Nuevo Proyecto' : 'Editar Proyecto'} — Alcance Fijo
           </span>
-          {dirty && <span style={{ fontSize: 11, color: 'var(--warning)', fontStyle: 'italic' }}>· cambios sin guardar</span>}
+          {dirty && !autosave.enabled && <span style={{ fontSize: 11, color: 'var(--warning)', fontStyle: 'italic' }}>· cambios sin guardar</span>}
         </div>
         <div className="editor-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <AutosaveIndicator enabled={autosave.enabled && !isNew} status={autosave.status} lastSavedAt={autosave.lastSavedAt} />
           <ExportDropdown onExport={doExport} disabled={!canExport} disabledReason={exportDisabledReason} />
           <button type="button" style={canSave ? s.btnOutline : { ...s.btnOutline, opacity: 0.5, cursor: 'not-allowed' }} onClick={() => save('draft')} disabled={saving || !canSave}>
             {saving ? 'Guardando…' : '💾 Guardar borrador'}

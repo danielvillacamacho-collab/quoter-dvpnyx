@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
+import useAutosave from './hooks/useAutosave';
+import AutosaveIndicator from './AutosaveIndicator';
 import {
   calcStaffAugLine,
   formatUSD,
@@ -395,39 +397,19 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
     finally { setBusy(null); }
   };
 
-  // Visual disabled state — claramente apagado para que el usuario no
-  // dude. Background gris muy claro, texto gris, borde gris, opacidad
-  // baja, cursor not-allowed, candado 🔒 al inicio. Sin esto algunos
-  // monitores no muestran suficiente contraste.
-  // OJO: NO usamos el atributo HTML `disabled` cuando el motivo es de
-  // negocio (canExport=false), porque el browser bloquea los eventos de
-  // mouse en `<button disabled>` y el tooltip nativo `title=` no se
-  // dispara. En su lugar usamos `aria-disabled` + styling + click-guard.
-  // Para `busy` (export en curso) sí mantenemos el `disabled` real porque
-  // ahí queremos bloquear todo input.
-  const disabledStyle = disabled ? {
-    background: '#f0f0f0',
-    color: '#999',
-    borderColor: '#d0d0d0',
-    opacity: 0.7,
-    cursor: 'not-allowed',
-  } : {};
-  const label = busy
-    ? `Generando ${busy}…`
-    : disabled ? '🔒 Exportar ▾' : 'Exportar ▾';
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <button
         type="button"
-        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6, ...disabledStyle }}
-        onClick={() => { if (disabled || busy) return; setOpen((o) => !o); }}
-        disabled={!!busy}
+        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        disabled={disabled || !!busy}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-disabled={disabled || !!busy}
+        aria-disabled={disabled}
         title={disabled ? disabledReason : undefined}
       >
-        {label}
+        {busy ? `Generando ${busy}…` : 'Exportar ▾'}
       </button>
       {open && !disabled && (
         <div role="menu" style={{ position: 'absolute', top: 'calc(100% + 4px)', right: 0, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)', zIndex: 50, minWidth: 200 }}>
@@ -488,18 +470,18 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   );
   const marginOverride = data.metadata?.margin_pct != null ? Number(data.metadata.margin_pct) : defaultMargin;
 
-  // CRÍTICO: setDirty(false) al final — sin esto, después de un POST
-  // (crear cotización nueva) el `dirty` queda true porque viene de las
-  // ediciones previas, y el botón Exportar permanece deshabilitado hasta
-  // un segundo Guardar. Reportado por preventa abr 22.
+  // Autosave handle accesible vía ref para resetBaseline tras fetch.
+  const autosaveRef = useRef(null);
+
   useEffect(() => {
     if (!quotId) return;
     api.getQuotation(quotId).then((q) => {
       const mOverride = q.metadata?.margin_pct != null ? Number(q.metadata.margin_pct) : defaultMargin;
       const lines = (q.lines || []).map((l) => (params ? calcStaffAugLine(l, params, mOverride) : l));
-      setData({ ...q, lines });
+      const loaded = { ...q, lines };
+      setData(loaded);
+      if (autosaveRef.current) autosaveRef.current.resetBaseline(loaded);
       if (q.project_name) setInfoCollapsed(true);
-      setDirty(false);
     }).catch(() => nav('/'));
   }, [quotId, nav, params, defaultMargin]);
 
@@ -525,16 +507,22 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
 
   const hasProfitableLines = (data.lines || []).some((l) => Number(l.rate_month || 0) > 0);
   const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
-  // Export disabled SOLO cuando faltan datos fundamentales que no
-  // podemos resolver con un auto-save (cotización nueva sin id, sin
-  // recursos válidos). El estado `dirty` ya NO bloquea el botón —
-  // doExport hace auto-save antes de exportar.
+  // Export ya no depende de !dirty: autosave persiste; si está off, doExport
+  // hace flush manual o manda el state como override en el body del export.
   const canExport = !isNew && hasProfitableLines;
   const exportDisabledReason = isNew
     ? 'Guarda primero para poder exportar'
     : !hasProfitableLines
       ? 'Agrega al menos un recurso con tarifa > 0 para exportar'
       : '';
+
+  // ──────── Autosave (debounced PUT) ────────
+  const autosave = useAutosave({
+    quotId,
+    data,
+    onSaved: () => setDirty(false),
+  });
+  autosaveRef.current = autosave;
 
   const save = async (status) => {
     if (!canSave) {
@@ -547,7 +535,9 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
       const payload = { ...data, status: status || data.status };
       if (quotId) {
         const resp = await api.updateQuotation(quotId, payload);
-        setData((d) => ({ ...d, ...resp }));
+        const nextData = { ...data, ...resp };
+        setData(nextData);
+        autosave.resetBaseline(nextData);
         setDirty(false);
       } else {
         const resp = await api.createQuotation(payload);
@@ -561,31 +551,15 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
     }
   };
 
-  // Auto-save antes de exportar: si hay cambios sin guardar, hacemos
-  // PUT primero y luego export. El usuario no necesita acordarse de
-  // dar Guardar manualmente. Para cotizaciones nuevas (!quotId) sí
-  // requiere Guardar explícito porque necesitamos el id para el path
-  // del export — eso lo bloquea canExport=false con el mensaje claro.
   const doExport = async (format) => {
     if (!quotId) return;
     try {
-      if (dirty) {
-        if (!canSave) {
-          // eslint-disable-next-line no-alert
-          alert('Completa el nombre del proyecto y el cliente antes de exportar.');
-          return;
-        }
-        setSaving(true);
-        try {
-          const payload = { ...data, status: data.status };
-          const resp = await api.updateQuotation(quotId, payload);
-          setData((d) => ({ ...d, ...resp }));
-          setDirty(false);
-        } finally {
-          setSaving(false);
-        }
+      // Flush antes de exportar.
+      if (autosave.enabled) {
+        await autosave.flush();
       }
-      const res = await api.exportQuotation(quotId, format);
+      const overrideState = autosave.enabled ? null : data;
+      const res = await api.exportQuotation(quotId, format, overrideState);
       const url = URL.createObjectURL(res.blob);
       const a = document.createElement('a');
       a.href = url;
@@ -608,9 +582,10 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
           <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--purple-dark)', fontFamily: 'Montserrat' }}>
             {isNew ? 'Nueva Cotización' : 'Editar Cotización'} — Staff Augmentation
           </span>
-          {dirty && <span style={{ fontSize: 11, color: 'var(--warning)', fontStyle: 'italic' }}>· cambios sin guardar</span>}
+          {dirty && !autosave.enabled && <span style={{ fontSize: 11, color: 'var(--warning)', fontStyle: 'italic' }}>· cambios sin guardar</span>}
         </div>
         <div className="editor-actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <AutosaveIndicator enabled={autosave.enabled && !isNew} status={autosave.status} lastSavedAt={autosave.lastSavedAt} />
           <ExportDropdown onExport={doExport} disabled={!canExport} disabledReason={exportDisabledReason} />
           <button type="button" style={canSave ? s.btnOutline : { ...s.btnOutline, opacity: 0.5, cursor: 'not-allowed' }} onClick={() => save('draft')} disabled={saving || !canSave}>
             {saving ? 'Guardando…' : '💾 Guardar borrador'}

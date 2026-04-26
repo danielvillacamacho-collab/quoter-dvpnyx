@@ -42,12 +42,18 @@ export const deleteQuotation = (id) => api(`/quotations/${id}`, { method: 'DELET
  * Uses fetch directly so we can stream binary (ArrayBuffer) rather than
  * trying to parse as JSON like the default `api()` helper does.
  */
-export const exportQuotation = async (id, format) => {
+export const exportQuotation = async (id, format, overrideState = null) => {
   const token = getToken();
-  const res = await fetch(`${BASE}/quotations/${id}/export?format=${encodeURIComponent(format)}`, {
-    method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  // Si el cliente tiene un state más reciente que el persistido (autosave
+  // off + cambios sin guardar), lo manda como override en el body. El
+  // server lo valida y lo usa para generar el archivo sin tocar la BD.
+  const opts = { method: 'POST', headers };
+  if (overrideState) {
+    opts.headers = { ...headers, 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify({ override_state: overrideState });
+  }
+  const res = await fetch(`${BASE}/quotations/${id}/export?format=${encodeURIComponent(format)}`, opts);
   if (res.status === 401) { localStorage.removeItem('dvpnyx_token'); window.location.href = '/login'; return null; }
   if (!res.ok) {
     let msg = 'Error al exportar';

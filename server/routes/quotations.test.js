@@ -437,11 +437,18 @@ describe('POST /api/quotations/:id/export — fixed-scope export', () => {
   // Second helper that exposes response headers (the default one only returns
   // body, and we need Content-Type / Content-Disposition for these tests).
   const http = require('http');
-  const callWithHeaders = (method, url) => new Promise((resolve, reject) => {
+  const callWithHeaders = (method, url, body = null) => new Promise((resolve, reject) => {
     const srv = http.createServer(app).listen(0, () => {
       const { port } = srv.address();
+      const headers = { authorization: 'Bearer fake' };
+      let payload = null;
+      if (body) {
+        payload = JSON.stringify(body);
+        headers['content-type'] = 'application/json';
+        headers['content-length'] = Buffer.byteLength(payload);
+      }
       const req = http.request(
-        { host: '127.0.0.1', port, path: url, method, headers: { authorization: 'Bearer fake' } },
+        { host: '127.0.0.1', port, path: url, method, headers },
         (res) => {
           const chunks = [];
           res.on('data', (c) => chunks.push(c));
@@ -455,6 +462,7 @@ describe('POST /api/quotations/:id/export — fixed-scope export', () => {
         },
       );
       req.on('error', (e) => { srv.close(); reject(e); });
+      if (payload) req.write(payload);
       req.end();
     });
   });
@@ -575,5 +583,35 @@ describe('POST /api/quotations/:id/export — fixed-scope export', () => {
     expect(res.headers['content-type']).toBe('application/pdf');
     expect(res.headers['content-disposition']).toMatch(/\.pdf/);
     expect(res.raw.toString()).toBe('FAKE_PDF_BYTES');
+  });
+
+  it('SPEC-FIX-01: applies override_state from body so export reflects unsaved client changes', async () => {
+    pushQuotation({ project_name: 'Old Name', discount_pct: 0 });
+    pushChildren();
+    queryQueue.push({ rows: [] }); // audit log
+    const quotationExport = require('../utils/quotation_export');
+    quotationExport.generateXlsx.mockClear();
+    const res = await callWithHeaders(
+      'POST',
+      '/api/quotations/q1/export?format=xlsx',
+      { override_state: { project_name: 'New Name From Editor', discount_pct: 0.15 } },
+    );
+    expect(res.status).toBe(200);
+    expect(quotationExport.generateXlsx).toHaveBeenCalledTimes(1);
+    const calledWith = quotationExport.generateXlsx.mock.calls[0][0];
+    expect(calledWith.project_name).toBe('New Name From Editor');
+    expect(calledWith.discount_pct).toBe(0.15);
+  });
+
+  it('SPEC-FIX-01: ignores override_state when missing/invalid (falls back to DB)', async () => {
+    pushQuotation({ project_name: 'Persisted Name' });
+    pushChildren();
+    queryQueue.push({ rows: [] }); // audit log
+    const quotationExport = require('../utils/quotation_export');
+    quotationExport.generateXlsx.mockClear();
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(200);
+    const calledWith = quotationExport.generateXlsx.mock.calls[0][0];
+    expect(calledWith.project_name).toBe('Persisted Name');
   });
 });
