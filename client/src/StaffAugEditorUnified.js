@@ -395,13 +395,24 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
     finally { setBusy(null); }
   };
 
+  // Visual disabled state: muted color + opacity + not-allowed cursor.
+  // El `title` muestra el motivo en hover (ej. "Guarda primero…") para que
+  // el usuario no piense que es un bug.
+  const isDisabled = disabled || !!busy;
+  const disabledStyle = disabled ? {
+    background: 'transparent',
+    color: 'var(--text-light)',
+    borderColor: 'var(--border)',
+    opacity: 0.55,
+    cursor: 'not-allowed',
+  } : {};
   return (
     <div ref={ref} style={{ position: 'relative', display: 'inline-block' }}>
       <button
         type="button"
-        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6 }}
-        onClick={() => !disabled && setOpen((o) => !o)}
-        disabled={disabled || !!busy}
+        style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6, ...disabledStyle }}
+        onClick={() => !isDisabled && setOpen((o) => !o)}
+        disabled={isDisabled}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-disabled={disabled}
