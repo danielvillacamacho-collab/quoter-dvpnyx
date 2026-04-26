@@ -396,9 +396,12 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
   };
 
   // Visual disabled state: muted color + opacity + not-allowed cursor.
-  // El `title` muestra el motivo en hover (ej. "Guarda primero…") para que
-  // el usuario no piense que es un bug.
-  const isDisabled = disabled || !!busy;
+  // OJO: NO usamos el atributo HTML `disabled` cuando el motivo es de
+  // negocio (canExport=false), porque el browser bloquea los eventos de
+  // mouse en `<button disabled>` y el tooltip nativo `title=` no se
+  // dispara. En su lugar usamos `aria-disabled` + styling + click-guard.
+  // Para `busy` (export en curso) sí mantenemos el `disabled` real porque
+  // ahí queremos bloquear todo input.
   const disabledStyle = disabled ? {
     background: 'transparent',
     color: 'var(--text-light)',
@@ -411,11 +414,11 @@ function ExportDropdown({ onExport, disabled, disabledReason }) {
       <button
         type="button"
         style={{ ...s.btnOutline, display: 'inline-flex', alignItems: 'center', gap: 6, ...disabledStyle }}
-        onClick={() => !isDisabled && setOpen((o) => !o)}
-        disabled={isDisabled}
+        onClick={() => { if (disabled || busy) return; setOpen((o) => !o); }}
+        disabled={!!busy}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-disabled={disabled}
+        aria-disabled={disabled || !!busy}
         title={disabled ? disabledReason : undefined}
       >
         {busy ? `Generando ${busy}…` : 'Exportar ▾'}
@@ -479,6 +482,10 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   );
   const marginOverride = data.metadata?.margin_pct != null ? Number(data.metadata.margin_pct) : defaultMargin;
 
+  // CRÍTICO: setDirty(false) al final — sin esto, después de un POST
+  // (crear cotización nueva) el `dirty` queda true porque viene de las
+  // ediciones previas, y el botón Exportar permanece deshabilitado hasta
+  // un segundo Guardar. Reportado por preventa abr 22.
   useEffect(() => {
     if (!quotId) return;
     api.getQuotation(quotId).then((q) => {
@@ -486,6 +493,7 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
       const lines = (q.lines || []).map((l) => (params ? calcStaffAugLine(l, params, mOverride) : l));
       setData({ ...q, lines });
       if (q.project_name) setInfoCollapsed(true);
+      setDirty(false);
     }).catch(() => nav('/'));
   }, [quotId, nav, params, defaultMargin]);
 
