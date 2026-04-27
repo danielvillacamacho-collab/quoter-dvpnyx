@@ -39,6 +39,13 @@ const offsetMonth = (yyyymm, delta) => {
   while (m < 1) { m += 12; y -= 1; } while (m > 12) { m -= 12; y += 1; }
   return `${y}${String(m).padStart(2, '0')}`;
 };
+// Conversores entre YYYYMM (BD/URL) y YYYY-MM (input nativo type="month").
+const yyyymmToMonthInput = (yyyymm) => /^[0-9]{6}$/.test(yyyymm) ? `${yyyymm.slice(0, 4)}-${yyyymm.slice(4)}` : '';
+const monthInputToYyyymm = (val) => {
+  if (!val || typeof val !== 'string') return '';
+  const m = val.match(/^([0-9]{4})-([0-9]{2})$/);
+  return m ? `${m[1]}${m[2]}` : '';
+};
 
 const s = {
   page: { padding: 18 },
@@ -233,15 +240,23 @@ export default function Revenue() {
       <div style={s.filters}>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
           Desde
-          <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6}
-                 value={from} onChange={(e) => setFrom(e.target.value)}
-                 style={{ ...s.inp, width: 90 }} aria-label="Desde YYYYMM" />
+          <input
+            type="month"
+            value={yyyymmToMonthInput(from)}
+            onChange={(e) => setFrom(monthInputToYyyymm(e.target.value))}
+            style={{ ...s.inp, width: 150 }}
+            aria-label="Mes desde"
+          />
         </label>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
           Hasta
-          <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6}
-                 value={to} onChange={(e) => setTo(e.target.value)}
-                 style={{ ...s.inp, width: 90 }} aria-label="Hasta YYYYMM" />
+          <input
+            type="month"
+            value={yyyymmToMonthInput(to)}
+            onChange={(e) => setTo(monthInputToYyyymm(e.target.value))}
+            style={{ ...s.inp, width: 150 }}
+            aria-label="Mes hasta"
+          />
         </label>
         <select value={filters.type} onChange={(e) => setFilter('type', e.target.value)} style={s.inp} aria-label="Tipo">
           <option value="">Todos los tipos</option>
