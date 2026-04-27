@@ -19,6 +19,7 @@ import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
 import PipelineKanban from './modules/PipelineKanban';
 import Revenue from './modules/Revenue';
+import RevenuePlanEditor from './modules/RevenuePlanEditor';
 import Areas from './modules/Areas';
 import Skills from './modules/Skills';
 import Employees from './modules/Employees';
@@ -163,6 +164,7 @@ function Layout() {
           <Route path="/opportunities" element={<Opportunities />} />
           <Route path="/pipeline" element={<PipelineKanban />} />
           <Route path="/revenue" element={<Revenue />} />
+          <Route path="/revenue/plan/:contract_id" element={<RevenuePlanEditor />} />
           <Route path="/opportunities/:id" element={<OpportunityDetail />} />
           <Route path="/employees" element={<Employees />} />
           <Route path="/employees/:id" element={<EmployeeDetail />} />

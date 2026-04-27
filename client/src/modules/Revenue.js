@@ -23,6 +23,8 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom';
 import { apiGet, apiPut, apiPost } from '../utils/apiV2';
 
+const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`);
+
 const fmtUSD = (n) => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n)));
 const monthLabel = (yyyymm) => {
   const y = yyyymm.slice(0, 4); const m = Number(yyyymm.slice(4));
@@ -63,42 +65,25 @@ const s = {
   banner: { background: '#fffbe6', border: '1px solid #facc15', color: '#92400e', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 },
 };
 
-function EditableCell({ cell, contractId, yyyymm, onSaved, onCloseMonth }) {
+function EditableCell({ cell, contract, yyyymm, onSaved, onCloseMonth }) {
   const isClosed = cell?.status === 'closed';
-  const [projected, setProjected] = useState(cell ? String(cell.projected_usd ?? '') : '');
+  const isProject = contract?.type === 'project';
+  const planExists = cell != null;
   const [real, setReal] = useState(cell?.real_usd != null ? String(cell.real_usd) : '');
   const [savingField, setSavingField] = useState(null);
-  const projInitial = useRef(projected);
   const realInitial = useRef(real);
 
   useEffect(() => {
-    setProjected(cell ? String(cell.projected_usd ?? '') : '');
     setReal(cell?.real_usd != null ? String(cell.real_usd) : '');
-    projInitial.current = cell ? String(cell.projected_usd ?? '') : '';
     realInitial.current = cell?.real_usd != null ? String(cell.real_usd) : '';
   }, [cell]);
-
-  const flushProjected = async () => {
-    if (projected === projInitial.current) return;
-    setSavingField('projected');
-    try {
-      const v = projected === '' ? 0 : Number(projected);
-      const updated = await apiPut(`/api/revenue/${contractId}/${yyyymm}`, { projected_usd: v });
-      onSaved(updated);
-      projInitial.current = String(v);
-    } catch (e) {
-      // eslint-disable-next-line no-alert
-      alert('Error guardando proyección: ' + e.message);
-      setProjected(projInitial.current);
-    } finally { setSavingField(null); }
-  };
 
   const flushReal = async () => {
     if (real === realInitial.current) return;
     setSavingField('real');
     try {
       const v = real === '' ? null : Number(real);
-      const updated = await apiPut(`/api/revenue/${contractId}/${yyyymm}`, { real_usd: v });
+      const updated = await apiPut(`/api/revenue/${contract.id}/${yyyymm}`, { real_usd: v });
       onSaved(updated);
       realInitial.current = real;
     } catch (e) {
@@ -111,18 +96,16 @@ function EditableCell({ cell, contractId, yyyymm, onSaved, onCloseMonth }) {
   return (
     <td style={{ ...s.td, ...(isClosed ? s.cellClosed : {}) }}>
       <div style={s.cellInner}>
+        {/* PROY read-only: si es project, mostramos % + USD derivado; si no, USD directo. */}
         <div>
           <span style={s.cellLabel}>Proy</span>
-          <input
-            type="number" step="any" inputMode="decimal"
-            style={s.cellInput}
-            value={projected}
-            disabled={isClosed}
-            onChange={(e) => setProjected(e.target.value)}
-            onBlur={flushProjected}
-            placeholder="0"
-            aria-label={`Proyectado ${yyyymm}`}
-          />
+          <div style={{ ...s.cellInput, color: 'var(--text)', textAlign: 'right', cursor: 'default', padding: '3px 4px' }}>
+            {planExists
+              ? (isProject
+                  ? <span title={fmtUSD(cell.projected_usd)}>{fmtPct(cell.projected_pct)}<br /><span style={{ fontSize: 9, color: 'var(--text-light)' }}>{fmtUSD(cell.projected_usd)}</span></span>
+                  : fmtUSD(cell.projected_usd))
+              : <span style={{ fontSize: 9, color: 'var(--text-light)', fontStyle: 'italic' }}>sin plan</span>}
+          </div>
         </div>
         <div>
           <span style={s.cellLabel}>Real</span>
@@ -130,24 +113,23 @@ function EditableCell({ cell, contractId, yyyymm, onSaved, onCloseMonth }) {
             type="number" step="any" inputMode="decimal"
             style={s.cellInput}
             value={real}
-            disabled={isClosed}
+            disabled={isClosed || !planExists}
             onChange={(e) => setReal(e.target.value)}
             onBlur={flushReal}
-            placeholder="—"
+            placeholder={planExists ? '—' : 'declara plan'}
             aria-label={`Real ${yyyymm}`}
+            title={!planExists ? 'Declara primero el plan de reconocimiento del contrato' : undefined}
           />
         </div>
         {isClosed ? (
           <span style={s.closedBadge}>✓ Cerrado</span>
-        ) : real !== '' && real !== realInitial.current ? null : (
-          real !== '' && (
-            <button type="button"
-                    onClick={() => onCloseMonth(contractId, yyyymm, real)}
-                    style={{ fontSize: 10, color: 'var(--purple-dark)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'right' }}>
-              cerrar mes →
-            </button>
-          )
-        )}
+        ) : (real !== '' && real === realInitial.current && planExists && (
+          <button type="button"
+                  onClick={() => onCloseMonth(contract.id, yyyymm, real)}
+                  style={{ fontSize: 10, color: 'var(--purple-dark)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'right' }}>
+            cerrar mes →
+          </button>
+        ))}
         {savingField && <span style={{ fontSize: 9, color: 'var(--warning)' }}>guardando…</span>}
       </div>
     </td>
@@ -181,8 +163,11 @@ export default function Revenue() {
     setData((prev) => {
       const next = { ...prev, rows: prev.rows.map((r) => {
         if (r.contract.id !== updated.contract_id) return r;
+        const prevCell = r.cells[updated.yyyymm] || {};
         const cells = { ...r.cells, [updated.yyyymm]: {
-          projected_usd: Number(updated.projected_usd || 0),
+          // Mantener el plan (projected_usd / projected_pct) — ahora viene del endpoint /plan, no de la celda.
+          projected_usd: updated.projected_usd != null ? Number(updated.projected_usd) : prevCell.projected_usd ?? 0,
+          projected_pct: updated.projected_pct != null ? Number(updated.projected_pct) : prevCell.projected_pct ?? null,
           real_usd: updated.real_usd != null ? Number(updated.real_usd) : null,
           status: updated.status, notes: updated.notes,
           closed_at: updated.closed_at, closed_by: updated.closed_by,
@@ -310,12 +295,22 @@ export default function Revenue() {
                       {r.contract.client_name || '—'} · {r.contract.client_country || '—'} · <span style={{ textTransform: 'capitalize' }}>{r.contract.type}</span>
                       {r.contract.owner_name && <> · {r.contract.owner_name}</>}
                     </div>
+                    <div style={{ fontSize: 11, marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                      <span style={{ color: 'var(--text)' }}>
+                        <strong>{fmtUSD(r.contract.total_value_usd)}</strong>
+                        <span style={{ fontSize: 10, color: 'var(--text-light)', marginLeft: 4 }}>{r.contract.original_currency || 'USD'}</span>
+                      </span>
+                      <Link to={`/revenue/plan/${r.contract.id}`}
+                            style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: r.contract.plan_declared ? 'var(--bg)' : '#fff7e6', border: '1px solid var(--border)', color: r.contract.plan_declared ? 'var(--purple-dark)' : '#92400e', textDecoration: 'none', fontWeight: 600 }}>
+                        {r.contract.plan_declared ? '✎ Plan' : '⚠ Declarar plan'}
+                      </Link>
+                    </div>
                   </td>
                   {data.months.map((m) => (
                     <EditableCell
                       key={m}
                       cell={r.cells[m]}
-                      contractId={r.contract.id}
+                      contract={r.contract}
                       yyyymm={m}
                       onSaved={handleCellSaved}
                       onCloseMonth={closeMonth}
