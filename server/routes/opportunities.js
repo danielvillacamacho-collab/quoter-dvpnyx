@@ -37,20 +37,31 @@ router.use(auth);
 
 const VALID_STATUSES = ['open', 'qualified', 'proposal', 'negotiation', 'won', 'lost', 'cancelled'];
 const TERMINAL = new Set(['won', 'lost', 'cancelled']);
+const NON_TERMINAL = new Set(['open', 'qualified', 'proposal', 'negotiation']);
+// CRM-MVP-00.1: las transiciones se relajaron para soportar el drag-and-drop
+// del Kanban. La regla de integridad se mantiene: terminal es inmutable y
+// las transiciones a terminal exigen los datos requeridos (winning_quotation_id
+// para won, outcome_reason para lost/cancelled). Saltos hacia atrás o saltos
+// "ilegales" del flujo lineal SÍ son permitidos pero generan warnings que el
+// frontend muestra al usuario antes de confirmar.
 const TRANSITIONS = {
-  open:        new Set(['qualified', 'cancelled']),
-  qualified:   new Set(['proposal',  'cancelled']),
-  proposal:    new Set(['negotiation', 'won', 'lost', 'cancelled']),
-  negotiation: new Set(['won', 'lost', 'cancelled']),
+  open:        new Set(['qualified', 'proposal', 'negotiation', 'won', 'lost', 'cancelled']),
+  qualified:   new Set(['open', 'proposal', 'negotiation', 'won', 'lost', 'cancelled']),
+  proposal:    new Set(['open', 'qualified', 'negotiation', 'won', 'lost', 'cancelled']),
+  negotiation: new Set(['open', 'qualified', 'proposal', 'won', 'lost', 'cancelled']),
   won:         new Set(),
   lost:        new Set(),
   cancelled:   new Set(),
 };
+// Orden canónico para detectar saltos hacia atrás (warning en /status).
+const STAGE_ORDER = { open: 1, qualified: 2, proposal: 3, negotiation: 4, won: 5, lost: 5, cancelled: 5 };
 const VALID_OUTCOME_REASONS = ['price', 'timing', 'competition', 'technical_fit', 'client_internal', 'other'];
 
 const EDITABLE_FIELDS = [
   'name', 'description', 'account_owner_id', 'presales_lead_id',
   'squad_id', 'expected_close_date', 'tags', 'external_crm_id',
+  // CRM-MVP-00.1
+  'booking_amount_usd', 'next_step', 'next_step_due_date',
 ];
 
 /* -------- LIST -------- */
@@ -98,6 +109,98 @@ router.get('/', async (req, res) => {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('GET /opportunities failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+/* -------- KANBAN (CRM-MVP-00.1) --------
+ * Devuelve oportunidades agrupadas por stage con summaries (count, total
+ * USD, weighted USD) por columna y global. Reusa filtros del listado.
+ * Cap por columna 100 para evitar payloads gigantes; el frontend pagina
+ * con el listado normal si una columna se llena.
+ */
+const KANBAN_PER_COLUMN = 100;
+router.get('/kanban', async (req, res) => {
+  try {
+    const { STAGES } = require('../utils/pipeline');
+    const wheres = ['o.deleted_at IS NULL'];
+    const params = [];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
+    if (req.query.search) {
+      const like = '%' + req.query.search + '%';
+      wheres.push(`(LOWER(o.name) LIKE LOWER(${add(like)}) OR LOWER(o.description) LIKE LOWER(${add(like)}))`);
+    }
+    if (req.query.client_id) wheres.push(`o.client_id = ${add(req.query.client_id)}`);
+    if (req.query.owner_id)  wheres.push(`o.account_owner_id = ${add(req.query.owner_id)}`);
+    if (req.query.squad_id)  wheres.push(`o.squad_id = ${add(req.query.squad_id)}`);
+    if (req.query.from_expected_close) wheres.push(`o.expected_close_date >= ${add(req.query.from_expected_close)}`);
+    if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
+    if (req.query.min_amount_usd) wheres.push(`o.booking_amount_usd >= ${add(Number(req.query.min_amount_usd) || 0)}`);
+    const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
+
+    const { rows } = await pool.query(
+      `SELECT o.id, o.name, o.status, o.client_id, o.account_owner_id,
+              o.expected_close_date, o.booking_amount_usd, o.weighted_amount_usd,
+              o.probability, o.last_stage_change_at, o.next_step, o.next_step_due_date,
+              o.created_at,
+              c.name AS client_name,
+              u.name AS owner_name, u.email AS owner_email,
+              EXTRACT(DAY FROM NOW() - o.last_stage_change_at)::int AS days_in_current_stage,
+              (SELECT COUNT(*)::int FROM quotations q WHERE q.opportunity_id=o.id) AS quotations_count
+         FROM opportunities o
+         LEFT JOIN clients c ON c.id = o.client_id
+         LEFT JOIN users u ON u.id = o.account_owner_id
+         ${where}
+         ORDER BY o.last_stage_change_at DESC`,
+      params,
+    );
+
+    // Group by stage + compute summaries
+    const byStage = {};
+    STAGES.forEach((s) => { byStage[s.id] = { stage: s, opportunities: [], count: 0, total_usd: 0, weighted_usd: 0 }; });
+    rows.forEach((r) => {
+      const bucket = byStage[r.status] || byStage.open;
+      bucket.count += 1;
+      bucket.total_usd += Number(r.booking_amount_usd || 0);
+      bucket.weighted_usd += Number(r.weighted_amount_usd || 0);
+      if (bucket.opportunities.length < KANBAN_PER_COLUMN) bucket.opportunities.push(r);
+    });
+
+    const stages = STAGES.map((s) => {
+      const bucket = byStage[s.id];
+      return {
+        id: s.id,
+        label: s.label,
+        prob: s.prob,
+        color: s.color,
+        terminal: s.terminal,
+        sort: s.sort,
+        summary: {
+          count: bucket.count,
+          total_amount_usd: Math.round(bucket.total_usd * 100) / 100,
+          weighted_amount_usd: Math.round(bucket.weighted_usd * 100) / 100,
+          has_more: bucket.count > bucket.opportunities.length,
+        },
+        opportunities: bucket.opportunities,
+      };
+    });
+
+    const global_summary = stages.reduce(
+      (acc, s) => {
+        acc.total_opportunities += s.summary.count;
+        acc.total_amount_usd += s.summary.total_amount_usd;
+        acc.weighted_amount_usd += s.summary.weighted_amount_usd;
+        return acc;
+      },
+      { total_opportunities: 0, total_amount_usd: 0, weighted_amount_usd: 0 },
+    );
+    global_summary.total_amount_usd = Math.round(global_summary.total_amount_usd * 100) / 100;
+    global_summary.weighted_amount_usd = Math.round(global_summary.weighted_amount_usd * 100) / 100;
+
+    res.json({ stages, global_summary });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /opportunities/kanban failed:', err);
     res.status(500).json({ error: 'Error interno' });
   }
 });
@@ -477,8 +580,21 @@ router.post('/:id/status', async (req, res) => {
       });
     }
 
+    // CRM-MVP-00.1: warnings soft (no bloqueantes) calculados sobre la
+    // transición. Los devolvemos al cliente para que el modal del kanban
+    // los muestre. NO afectan persistencia — la transición ya pasó.
+    const warnings = [];
+    const fromOrder = STAGE_ORDER[current.status] || 0;
+    const toOrder = STAGE_ORDER[new_status] || 0;
+    if (fromOrder > 0 && toOrder > 0 && fromOrder > toOrder && !TERMINAL.has(new_status)) {
+      warnings.push({ code: 'backwards', message: `Movida hacia atrás: ${current.status} → ${new_status}.` });
+    }
+    if (Number(after.booking_amount_usd || 0) === 0 && ['proposal', 'negotiation', 'won'].includes(new_status)) {
+      warnings.push({ code: 'amount_zero', message: 'El monto USD está en 0. Recomendado actualizarlo.' });
+    }
+
     await connection.query('COMMIT');
-    res.json(after);
+    res.json({ ...after, warnings });
   } catch (err) {
     await connection.query('ROLLBACK').catch(() => {});
     // eslint-disable-next-line no-console
