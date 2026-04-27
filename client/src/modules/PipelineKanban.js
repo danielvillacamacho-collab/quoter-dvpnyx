@@ -292,8 +292,7 @@ export default function PipelineKanban() {
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams.toString()]);
+  }, [searchParams]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { apiGet('/api/users').then(setUsers).catch(() => {}); }, []);
