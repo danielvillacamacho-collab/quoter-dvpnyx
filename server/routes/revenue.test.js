@@ -137,17 +137,17 @@ describe('PUT /api/revenue/:contract_id/:yyyymm (REAL only after RR-MVP-00.2)', 
   });
 
   it('returns 409 when no plan period exists yet (PROY must be declared first)', async () => {
-    queryQueue.push({ rows: [{ id: 'k1' }] });   // contract exists
+    queryQueue.push({ rows: [{ id: 'k1', type: 'capacity', total_value_usd: 0 }] });   // contract exists
     queryQueue.push({ rows: [] });               // no existing period
     const res = await client.call('PUT', '/api/revenue/k1/202602', { real_usd: 1000 });
     expect(res.status).toBe(409);
     expect(res.body.error).toMatch(/plan/i);
   });
 
-  it('updates real_usd when period exists', async () => {
-    queryQueue.push({ rows: [{ id: 'k1' }] });
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: null, status: 'open' }] });
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: 1500, status: 'open' }] });
+  it('updates real_usd when period exists (capacity)', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'capacity', total_value_usd: 0 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: null, real_pct: null, status: 'open' }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: 1500, real_pct: null, status: 'open' }] });
     queryQueue.push({ rows: [] });               // audit_log
     const res = await client.call('PUT', '/api/revenue/k1/202602', { real_usd: 1500 });
     expect(res.status).toBe(200);
@@ -259,25 +259,82 @@ describe('GET/PUT /api/revenue/:contract_id/plan (RR-MVP-00.2)', () => {
 });
 
 describe('POST /api/revenue/:contract_id/:yyyymm/close', () => {
-  it('rejects close on non-existing period', async () => {
-    queryQueue.push({ rows: [] });
+  it('rejects close on non-existing contract (404)', async () => {
+    queryQueue.push({ rows: [] }); // contract not found
     const res = await client.call('POST', '/api/revenue/k1/202602/close', { real_usd: 1000 });
     expect(res.status).toBe(404);
   });
 
-  it('rejects close without real_usd when none set yet', async () => {
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, status: 'open' }] });
+  it('rejects close on non-existing period', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'capacity', total_value_usd: 0 }] });
+    queryQueue.push({ rows: [] }); // period missing
+    const res = await client.call('POST', '/api/revenue/k1/202602/close', { real_usd: 1000 });
+    expect(res.status).toBe(404);
+  });
+
+  it('rejects close without real_usd when none set yet (capacity)', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'capacity', total_value_usd: 0 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, real_pct: null, status: 'open' }] });
     const res = await client.call('POST', '/api/revenue/k1/202602/close', {});
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/real_usd/);
   });
 
-  it('closes a period with provided real_usd', async () => {
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, status: 'open' }] });
+  it('closes a period with provided real_usd (capacity)', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'capacity', total_value_usd: 0 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, real_pct: null, status: 'open' }] });
     queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: 5000, status: 'closed' }] });
     queryQueue.push({ rows: [] }); // audit_log
     const res = await client.call('POST', '/api/revenue/k1/202602/close', { real_usd: 5000 });
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('closed');
+  });
+
+  it('RR-MVP-00.5: closes a project period using real_pct, derives real_usd', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, real_pct: null, status: 'open' }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: 30000, real_pct: 0.3, status: 'closed' }] });
+    queryQueue.push({ rows: [] });
+    const res = await client.call('POST', '/api/revenue/k1/202602/close', { real_pct: 0.3 });
+    expect(res.status).toBe(200);
+    // The UPDATE was issued with real_usd = 0.3 × 100000 = 30000, real_pct = 0.3
+    const update = issuedQueries.find((q) => q.sql.includes('UPDATE revenue_periods SET') && q.sql.includes("status='closed'"));
+    expect(update.params[2]).toBe(30000);
+    expect(update.params[3]).toBe(0.3);
+  });
+});
+
+describe('RR-MVP-00.5: PUT real_pct for project contracts', () => {
+  it('rejects real_pct out of range (0..1)', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, real_pct: null, status: 'open' }] });
+    const res = await client.call('PUT', '/api/revenue/k1/202602', { real_pct: 1.5 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/real_pct/);
+  });
+
+  it('blocks (400) when cumulative SUM(real_pct) would exceed 1', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', real_usd: null, real_pct: null, status: 'open' }] });
+    queryQueue.push({ rows: [{ sum_pct: 0.8 }] }); // existing other months sum to 80%
+    const res = await client.call('PUT', '/api/revenue/k1/202603', { real_pct: 0.3 }); // 0.8 + 0.3 = 1.1
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('real_pct_sum_exceeds_1');
+  });
+
+  it('happy path: persists real_pct + derived real_usd', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, real_pct: null, status: 'open' }] });
+    queryQueue.push({ rows: [{ sum_pct: 0.4 }] }); // other months sum to 40%
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: 30000, real_pct: 0.3, status: 'open' }] }); // UPDATE
+    queryQueue.push({ rows: [] }); // audit_log
+    const res = await client.call('PUT', '/api/revenue/k1/202602', { real_pct: 0.3 });
+    expect(res.status).toBe(200);
+    expect(res.body.real_pct).toBe(0.3);
+    expect(res.body.real_usd).toBe(30000);
+    const update = issuedQueries.find((q) => q.sql.includes('UPDATE revenue_periods SET') && q.sql.includes("real_pct"));
+    // params: [contract_id, yyyymm, real_usd, real_pct, notes, user_id]
+    expect(update.params[2]).toBe(30000);
+    expect(update.params[3]).toBe(0.3);
   });
 });

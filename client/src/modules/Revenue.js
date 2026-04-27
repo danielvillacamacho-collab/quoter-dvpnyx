@@ -72,25 +72,43 @@ const s = {
   banner: { background: '#fffbe6', border: '1px solid #facc15', color: '#92400e', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 },
 };
 
+// Evita "30.000000000000004" cuando un float redondea raro tras *100.
+const formatPctForInput = (pctFraction) => pctFraction == null
+  ? ''
+  : Number((Number(pctFraction) * 100).toFixed(2)).toString();
+
 function EditableCell({ cell, contract, yyyymm, onSaved, onCloseMonth }) {
   const isClosed = cell?.status === 'closed';
   const isProject = contract?.type === 'project';
   const planExists = cell != null;
-  const [real, setReal] = useState(cell?.real_usd != null ? String(cell.real_usd) : '');
+  const totalValueUsd = Number(contract?.total_value_usd || 0);
+
+  // Para projects el input es % (string del input). Para no-projects es USD.
+  // Mantenemos el state como string del input que el usuario tipea.
+  const initialReal = isProject
+    ? formatPctForInput(cell?.real_pct)
+    : (cell?.real_usd != null ? String(cell.real_usd) : '');
+  const [real, setReal] = useState(initialReal);
   const [savingField, setSavingField] = useState(null);
-  const realInitial = useRef(real);
+  const realInitial = useRef(initialReal);
 
   useEffect(() => {
-    setReal(cell?.real_usd != null ? String(cell.real_usd) : '');
-    realInitial.current = cell?.real_usd != null ? String(cell.real_usd) : '';
-  }, [cell]);
+    const nextInit = isProject
+      ? formatPctForInput(cell?.real_pct)
+      : (cell?.real_usd != null ? String(cell.real_usd) : '');
+    setReal(nextInit);
+    realInitial.current = nextInit;
+  }, [cell, isProject]);
 
   const flushReal = async () => {
     if (real === realInitial.current) return;
     setSavingField('real');
     try {
-      const v = real === '' ? null : Number(real);
-      const updated = await apiPut(`/api/revenue/${contract.id}/${yyyymm}`, { real_usd: v });
+      const empty = real === '';
+      const body = isProject
+        ? { real_pct: empty ? null : Number(real) / 100 }
+        : { real_usd: empty ? null : Number(real) };
+      const updated = await apiPut(`/api/revenue/${contract.id}/${yyyymm}`, body);
       onSaved(updated);
       realInitial.current = real;
     } catch (e) {
@@ -99,6 +117,11 @@ function EditableCell({ cell, contract, yyyymm, onSaved, onCloseMonth }) {
       setReal(realInitial.current);
     } finally { setSavingField(null); }
   };
+
+  // USD derivado en vivo cuando el usuario tipea % (sin necesidad de guardar).
+  const liveDerivedUsd = isProject && real !== '' && !isNaN(Number(real))
+    ? (Number(real) / 100) * totalValueUsd
+    : null;
 
   return (
     <td style={{ ...s.td, ...(isClosed ? s.cellClosed : {}) }}>
@@ -115,24 +138,30 @@ function EditableCell({ cell, contract, yyyymm, onSaved, onCloseMonth }) {
           </div>
         </div>
         <div>
-          <span style={s.cellLabel}>Real</span>
+          <span style={s.cellLabel}>Real {isProject ? '(%)' : ''}</span>
           <input
             type="number" step="any" inputMode="decimal"
+            min="0" max={isProject ? '100' : undefined}
             style={s.cellInput}
             value={real}
             disabled={isClosed || !planExists}
             onChange={(e) => setReal(e.target.value)}
             onBlur={flushReal}
-            placeholder={planExists ? '—' : 'declara plan'}
+            placeholder={planExists ? (isProject ? '0' : '—') : 'declara plan'}
             aria-label={`Real ${yyyymm}`}
-            title={!planExists ? 'Declara primero el plan de reconocimiento del contrato' : undefined}
+            title={!planExists ? 'Declara primero el plan de reconocimiento del contrato' : (isProject ? 'Avance del proyecto este mes (0-100%)' : undefined)}
           />
+          {isProject && planExists && (
+            <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
+              {liveDerivedUsd != null ? fmtUSD(liveDerivedUsd) : (cell.real_usd != null ? fmtUSD(cell.real_usd) : '—')}
+            </span>
+          )}
         </div>
         {isClosed ? (
           <span style={s.closedBadge}>✓ Cerrado</span>
         ) : (real !== '' && real === realInitial.current && planExists && (
           <button type="button"
-                  onClick={() => onCloseMonth(contract.id, yyyymm, real)}
+                  onClick={() => onCloseMonth(contract.id, yyyymm, real, isProject)}
                   style={{ fontSize: 10, color: 'var(--purple-dark)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'right' }}>
             cerrar mes →
           </button>
@@ -176,6 +205,7 @@ export default function Revenue() {
           projected_usd: updated.projected_usd != null ? Number(updated.projected_usd) : prevCell.projected_usd ?? 0,
           projected_pct: updated.projected_pct != null ? Number(updated.projected_pct) : prevCell.projected_pct ?? null,
           real_usd: updated.real_usd != null ? Number(updated.real_usd) : null,
+          real_pct: updated.real_pct != null ? Number(updated.real_pct) : null,
           status: updated.status, notes: updated.notes,
           closed_at: updated.closed_at, closed_by: updated.closed_by,
           updated_at: updated.updated_at, updated_by: updated.updated_by,
@@ -200,11 +230,18 @@ export default function Revenue() {
     });
   };
 
-  const closeMonth = async (contractId, yyyymm, realValue) => {
+  const closeMonth = async (contractId, yyyymm, realValue, isProject) => {
+    const valueNum = Number(realValue);
+    // Para project, realValue viene en % (string del input). Convertimos
+    // para el confirm humano y el body.
+    const confirmText = isProject
+      ? `¿Cerrar el mes ${monthLabel(yyyymm)} con avance real ${valueNum.toFixed(2)}%?`
+      : `¿Cerrar el mes ${monthLabel(yyyymm)} con real ${fmtUSD(valueNum)}?`;
     // eslint-disable-next-line no-alert
-    if (!window.confirm(`¿Cerrar el mes ${monthLabel(yyyymm)} con real ${fmtUSD(realValue)}?\n\nUna vez cerrado, este placeholder NO bloquea ediciones futuras (eso lo hará el eng team), pero sí queda marcado como cerrado en el audit_log.`)) return;
+    if (!window.confirm(`${confirmText}\n\nUna vez cerrado, este placeholder NO bloquea ediciones futuras (eso lo hará el eng team), pero sí queda marcado como cerrado en el audit_log.`)) return;
     try {
-      const updated = await apiPost(`/api/revenue/${contractId}/${yyyymm}/close`, { real_usd: Number(realValue) });
+      const body = isProject ? { real_pct: valueNum / 100 } : { real_usd: valueNum };
+      const updated = await apiPost(`/api/revenue/${contractId}/${yyyymm}/close`, body);
       handleCellSaved(updated);
     } catch (e) {
       // eslint-disable-next-line no-alert

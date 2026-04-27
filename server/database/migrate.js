@@ -617,6 +617,10 @@ const V2_ALTERS = `
     PRIMARY KEY (contract_id, yyyymm)
   );
   ALTER TABLE revenue_periods ADD COLUMN IF NOT EXISTS projected_pct NUMERIC(7,4) NULL;
+  -- RR-MVP-00.5: para contratos type='project' el REAL también se captura
+  -- en % (0..1) y real_usd se deriva de real_pct × contracts.total_value_usd.
+  -- Para los demás tipos queda NULL (real_usd se ingresa directo).
+  ALTER TABLE revenue_periods ADD COLUMN IF NOT EXISTS real_pct NUMERIC(7,4) NULL;
   CREATE INDEX IF NOT EXISTS idx_revenue_periods_yyyymm ON revenue_periods(yyyymm);
   CREATE INDEX IF NOT EXISTS idx_revenue_periods_status ON revenue_periods(status);
 `;
