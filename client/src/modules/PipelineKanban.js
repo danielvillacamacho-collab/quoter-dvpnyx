@@ -195,7 +195,7 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
               <option value="">— Selecciona una cotización —</option>
               {quotations.map((q) => (
                 <option key={q.id} value={q.id}>
-                  {q.project_name || q.id} · {q.status} · {fmtUSD(q.total_usd)}
+                  {q.project_name || q.id} · {q.status}
                 </option>
               ))}
             </select>
