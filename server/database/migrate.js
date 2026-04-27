@@ -592,12 +592,18 @@ const V2_ALTERS = `
   -- only, multi-currency, atomic worker async, 4 motores polimórficos).
   -- Aquí sólo: 1 columna en contracts + 1 tabla revenue_periods + 1
   -- motor monthly_projection plano. Sin triggers DB. Sin multi-currency.
-  ALTER TABLE contracts ADD COLUMN IF NOT EXISTS total_value_usd NUMERIC(18,2) NOT NULL DEFAULT 0;
+  ALTER TABLE contracts ADD COLUMN IF NOT EXISTS total_value_usd  NUMERIC(18,2) NOT NULL DEFAULT 0;
+  ALTER TABLE contracts ADD COLUMN IF NOT EXISTS original_currency VARCHAR(3)  NOT NULL DEFAULT 'USD';
 
   CREATE TABLE IF NOT EXISTS revenue_periods (
     contract_id    UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
     yyyymm         CHAR(6) NOT NULL CHECK (yyyymm ~ '^[0-9]{6}$'),
     projected_usd  NUMERIC(18,2) NOT NULL DEFAULT 0,
+    -- projected_pct: porcentaje de avance del proyecto (0..1) para
+    -- contratos type='project'. Para los demás tipos queda NULL y se
+    -- ignora — esos llevan el monto USD directo en projected_usd. El
+    -- valor visible PROY = projected_pct * contracts.total_value_usd.
+    projected_pct  NUMERIC(7,4) NULL CHECK (projected_pct IS NULL OR (projected_pct >= 0 AND projected_pct <= 1)),
     real_usd       NUMERIC(18,2) NULL,
     status         VARCHAR(20) NOT NULL DEFAULT 'open'
                    CHECK (status IN ('open','closed')),
@@ -610,6 +616,7 @@ const V2_ALTERS = `
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (contract_id, yyyymm)
   );
+  ALTER TABLE revenue_periods ADD COLUMN IF NOT EXISTS projected_pct NUMERIC(7,4) NULL;
   CREATE INDEX IF NOT EXISTS idx_revenue_periods_yyyymm ON revenue_periods(yyyymm);
   CREATE INDEX IF NOT EXISTS idx_revenue_periods_status ON revenue_periods(status);
 `;

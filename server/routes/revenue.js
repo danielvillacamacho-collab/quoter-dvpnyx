@@ -73,12 +73,13 @@ router.get('/', async (req, res) => {
 
     const { rows: contracts } = await pool.query(
       `SELECT c.id, c.name, c.type, c.status, c.start_date, c.end_date,
-              c.total_value_usd,
+              c.total_value_usd, c.original_currency,
               cl.id   AS client_id,
               cl.name AS client_name,
               cl.country AS client_country,
               u.id   AS owner_id,
-              u.name AS owner_name
+              u.name AS owner_name,
+              EXISTS(SELECT 1 FROM revenue_periods rp WHERE rp.contract_id=c.id) AS plan_declared
          FROM contracts c
          LEFT JOIN clients cl ON cl.id = c.client_id
          LEFT JOIN users u    ON u.id  = c.account_owner_id
@@ -91,7 +92,7 @@ router.get('/', async (req, res) => {
     let periodsByContract = new Map();
     if (ids.length) {
       const { rows: periods } = await pool.query(
-        `SELECT contract_id, yyyymm, projected_usd, real_usd, status, notes,
+        `SELECT contract_id, yyyymm, projected_usd, projected_pct, real_usd, status, notes,
                 closed_at, closed_by, updated_at, updated_by
            FROM revenue_periods
           WHERE contract_id = ANY($1::uuid[]) AND yyyymm BETWEEN $2 AND $3`,
@@ -115,6 +116,7 @@ router.get('/', async (req, res) => {
         row_projected += p; if (r != null) row_real += r;
         cells[m] = cell ? {
           projected_usd: p,
+          projected_pct: cell.projected_pct != null ? Number(cell.projected_pct) : null,
           real_usd: r,
           status: cell.status,
           notes: cell.notes,
@@ -154,17 +156,162 @@ router.get('/', async (req, res) => {
   }
 });
 
-/* -------- UPSERT cell -------- */
-router.put('/:contract_id/:yyyymm', async (req, res) => {
-  const { contract_id, yyyymm } = req.params;
-  if (!YYYYMM_RE.test(yyyymm)) return res.status(400).json({ error: 'yyyymm inválido' });
+/* ====================================================================
+ * RR-MVP-00.2 — Plan de reconocimiento (PROY).
+ *
+ * Pantalla aparte donde el operations_owner declara la curva de
+ * reconocimiento esperada de un contrato.
+ *
+ *   - type='project'         → entrada en `pct` (0..1) por mes.
+ *                              projected_usd = pct × contracts.total_value_usd
+ *   - type='capacity'/'resell' → entrada directa en USD por mes.
+ *
+ * En la grilla matricial principal, PROY queda read-only. El usuario
+ * solo manipula REAL allí.
+ *
+ * Las rutas /plan deben ir ANTES de /:yyyymm porque Express matchea
+ * por orden y `plan` no es un yyyymm válido.
+ * ==================================================================== */
+
+router.get('/:contract_id/plan', async (req, res) => {
+  try {
+    const { rows: cRows } = await pool.query(
+      `SELECT c.id, c.name, c.type, c.status, c.start_date, c.end_date,
+              c.total_value_usd, c.original_currency,
+              cl.id AS client_id, cl.name AS client_name, cl.country AS client_country,
+              u.name AS owner_name
+         FROM contracts c
+         LEFT JOIN clients cl ON cl.id = c.client_id
+         LEFT JOIN users u    ON u.id  = c.account_owner_id
+        WHERE c.id=$1 AND c.deleted_at IS NULL`,
+      [req.params.contract_id],
+    );
+    if (!cRows.length) return res.status(404).json({ error: 'Contrato no encontrado' });
+
+    const { rows: periods } = await pool.query(
+      `SELECT yyyymm, projected_usd, projected_pct, real_usd, status, notes,
+              closed_at, closed_by, updated_at, updated_by
+         FROM revenue_periods
+        WHERE contract_id=$1
+        ORDER BY yyyymm ASC`,
+      [req.params.contract_id],
+    );
+
+    res.json({ contract: cRows[0], periods });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /revenue/:contract_id/plan failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+router.put('/:contract_id/plan', async (req, res) => {
+  const { contract_id } = req.params;
   const body = req.body || {};
-  const { projected_usd, real_usd, notes } = body;
+  const entries = Array.isArray(body.entries) ? body.entries : null;
+  if (!entries) return res.status(400).json({ error: 'entries[] es requerido' });
+  if (!entries.every((e) => YYYYMM_RE.test(String(e.yyyymm || '')))) {
+    return res.status(400).json({ error: 'Todas las entries deben tener un yyyymm válido' });
+  }
 
   const conn = await pool.connect();
   try {
     await conn.query('BEGIN');
-    // Verify contract exists
+    const { rows: cRows } = await conn.query(
+      `SELECT id, type, total_value_usd FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
+      [contract_id],
+    );
+    if (!cRows.length) {
+      await conn.query('ROLLBACK');
+      return res.status(404).json({ error: 'Contrato no encontrado' });
+    }
+    const contract = cRows[0];
+    const isProject = contract.type === 'project';
+    const totalValue = Number(contract.total_value_usd || 0);
+
+    for (const e of entries) {
+      if (isProject) {
+        if (e.pct == null || isNaN(Number(e.pct))) {
+          await conn.query('ROLLBACK');
+          return res.status(400).json({ error: `Entry ${e.yyyymm}: pct requerido para contratos de tipo project` });
+        }
+        const pct = Number(e.pct);
+        if (pct < 0 || pct > 1) {
+          await conn.query('ROLLBACK');
+          return res.status(400).json({ error: `Entry ${e.yyyymm}: pct debe estar entre 0 y 1` });
+        }
+      } else {
+        if (e.projected_usd == null || isNaN(Number(e.projected_usd))) {
+          await conn.query('ROLLBACK');
+          return res.status(400).json({ error: `Entry ${e.yyyymm}: projected_usd requerido para contratos no-project` });
+        }
+      }
+    }
+
+    let warnings = [];
+    if (isProject) {
+      const sumPct = entries.reduce((s, e) => s + Number(e.pct || 0), 0);
+      if (sumPct > 1.0001) {
+        warnings.push({ code: 'pct_sum_exceeds_1', message: `La suma de % declarados es ${(sumPct * 100).toFixed(2)}% (>100%). Revisa la curva.` });
+      }
+    }
+
+    const upserted = [];
+    for (const e of entries) {
+      const yyyymm = String(e.yyyymm);
+      const projectedPct = isProject ? Number(e.pct) : null;
+      const projectedUsd = isProject
+        ? Number(e.pct) * totalValue
+        : Number(e.projected_usd);
+
+      const { rows } = await conn.query(
+        `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, projected_pct,
+                                      created_by, updated_by)
+           VALUES ($1, $2, $3::numeric, $4::numeric, $5, $5)
+         ON CONFLICT (contract_id, yyyymm) DO UPDATE SET
+           projected_usd = EXCLUDED.projected_usd,
+           projected_pct = EXCLUDED.projected_pct,
+           updated_by    = EXCLUDED.updated_by,
+           updated_at    = NOW()
+         RETURNING contract_id, yyyymm, projected_usd, projected_pct, real_usd, status`,
+        [contract_id, yyyymm, projectedUsd, projectedPct, req.user.id],
+      );
+      upserted.push(rows[0]);
+    }
+
+    await conn.query(
+      `INSERT INTO audit_log (user_id, action, entity, entity_id, details)
+         VALUES ($1, 'revenue_plan_declared', 'contract', $2,
+                 jsonb_build_object('contract_id', $3::uuid,
+                                    'is_project', $4::boolean,
+                                    'entries_count', $5::int))`,
+      [req.user.id, contract_id, contract_id, isProject, entries.length],
+    );
+
+    await conn.query('COMMIT');
+    res.json({ entries: upserted, warnings, contract: { id: contract_id, type: contract.type, total_value_usd: totalValue } });
+  } catch (err) {
+    await conn.query('ROLLBACK').catch(() => {});
+    // eslint-disable-next-line no-console
+    console.error('PUT /revenue/:contract_id/plan failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  } finally {
+    conn.release();
+  }
+});
+
+/* -------- UPSERT cell (REAL only) -------- */
+// CRM-MVP-00.2: el PROY ya no se edita aquí (lo gestiona /plan). Este
+// endpoint sólo actualiza real_usd y notes desde la grilla.
+router.put('/:contract_id/:yyyymm', async (req, res) => {
+  const { contract_id, yyyymm } = req.params;
+  if (!YYYYMM_RE.test(yyyymm)) return res.status(400).json({ error: 'yyyymm inválido' });
+  const body = req.body || {};
+  const { real_usd, notes } = body;
+
+  const conn = await pool.connect();
+  try {
+    await conn.query('BEGIN');
     const { rows: cRows } = await conn.query(
       `SELECT id FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
       [contract_id],
@@ -174,71 +321,38 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
       return res.status(404).json({ error: 'Contrato no encontrado' });
     }
 
-    // Existing cell?
     const { rows: existing } = await conn.query(
       `SELECT * FROM revenue_periods WHERE contract_id=$1 AND yyyymm=$2 FOR UPDATE`,
       [contract_id, yyyymm],
     );
-
-    // Soft block: si está closed y se intenta editar, dejamos pasar pero
-    // anotamos en audit_log. Cuando entre el eng team, esto será un
-    // trigger DB inmutable.
-    const wasClosed = existing[0]?.status === 'closed';
-
-    // Resolver valores finales en JS (evita el sentinel 'present' del UPDATE).
-    // Reglas:
-    //   - projected_usd ausente del body  → mantener existente (o 0 si nuevo).
-    //   - projected_usd presente          → usar el valor (number).
-    //   - real_usd ausente del body       → mantener existente (o null si nuevo).
-    //   - real_usd presente y null        → setear a null (limpiar).
-    //   - real_usd presente y number      → usar el valor.
-    const realProvided = Object.prototype.hasOwnProperty.call(body, 'real_usd');
-    const baseProjected = existing[0]?.projected_usd ?? 0;
-    const baseReal = existing[0]?.real_usd ?? null;
-    const baseNotes = existing[0]?.notes ?? null;
-    const finalProjected = projected_usd != null ? Number(projected_usd) : Number(baseProjected);
-    const finalReal = realProvided ? (real_usd == null ? null : Number(real_usd)) : baseReal;
-    const finalNotes = notes != null ? notes : baseNotes;
-
-    let row;
     if (!existing.length) {
-      const { rows } = await conn.query(
-        `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, real_usd, notes,
-                                      created_by, updated_by)
-           VALUES ($1,$2,$3,$4::numeric,$5,$6,$6)
-           RETURNING *`,
-        [contract_id, yyyymm, finalProjected, finalReal, finalNotes, req.user.id],
-      );
-      row = rows[0];
-    } else {
-      const { rows } = await conn.query(
-        `UPDATE revenue_periods SET
-           projected_usd = $3,
-           real_usd      = $4::numeric,
-           notes         = $5,
-           updated_by    = $6,
-           updated_at    = NOW()
-         WHERE contract_id=$1 AND yyyymm=$2
-         RETURNING *`,
-        [contract_id, yyyymm, finalProjected, finalReal, finalNotes, req.user.id],
-      );
-      row = rows[0];
+      await conn.query('ROLLBACK');
+      return res.status(409).json({ error: 'Aún no hay plan declarado para este mes. Usa "Editar plan" antes de capturar reales.' });
     }
+    const wasClosed = existing[0].status === 'closed';
+    const realProvided = Object.prototype.hasOwnProperty.call(body, 'real_usd');
+    const finalReal = realProvided ? (real_usd == null ? null : Number(real_usd)) : existing[0].real_usd;
+    const finalNotes = notes != null ? notes : existing[0].notes;
 
-    // Audit (low-fidelity placeholder — eng team replaces with append-only history table).
-    // Cast TODOS los params explícitos: cuando real_usd es null sin cast, PG falla con
-    // "could not determine data type of parameter".
+    const { rows } = await conn.query(
+      `UPDATE revenue_periods SET
+         real_usd   = $3::numeric,
+         notes      = $4,
+         updated_by = $5,
+         updated_at = NOW()
+       WHERE contract_id=$1 AND yyyymm=$2
+       RETURNING *`,
+      [contract_id, yyyymm, finalReal, finalNotes, req.user.id],
+    );
+    const row = rows[0];
+
     await conn.query(
       `INSERT INTO audit_log (user_id, action, entity, entity_id, details)
-         VALUES ($1, 'revenue_period_upsert', 'revenue_period', $2,
+         VALUES ($1, 'revenue_period_real_update', 'revenue_period', $2,
                  jsonb_build_object('contract_id', $3::uuid, 'yyyymm', $4::text,
                                     'wasClosed', $5::boolean,
-                                    'projected_usd', $6::numeric, 'real_usd', $7::numeric))`,
-      [
-        req.user.id, contract_id, contract_id, yyyymm,
-        wasClosed,
-        row.projected_usd, row.real_usd,
-      ],
+                                    'real_usd', $6::numeric))`,
+      [req.user.id, contract_id, contract_id, yyyymm, wasClosed, row.real_usd],
     );
 
     await conn.query('COMMIT');
@@ -305,6 +419,7 @@ router.post('/:contract_id/:yyyymm/close', async (req, res) => {
     conn.release();
   }
 });
+
 
 module.exports = router;
 module.exports._internal = { expandMonths };

@@ -130,36 +130,102 @@ describe('GET /api/revenue', () => {
   });
 });
 
-describe('PUT /api/revenue/:contract_id/:yyyymm', () => {
+describe('PUT /api/revenue/:contract_id/:yyyymm (REAL only after RR-MVP-00.2)', () => {
   it('rejects invalid yyyymm', async () => {
-    const res = await client.call('PUT', '/api/revenue/k1/abcdef', { projected_usd: 1000 });
+    const res = await client.call('PUT', '/api/revenue/k1/abcdef', { real_usd: 1000 });
     expect(res.status).toBe(400);
   });
 
-  it('inserts new period when contract exists and cell does not', async () => {
+  it('returns 409 when no plan period exists yet (PROY must be declared first)', async () => {
     queryQueue.push({ rows: [{ id: 'k1' }] });   // contract exists
-    queryQueue.push({ rows: [] });               // existing cell empty
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: null, status: 'open' }] }); // INSERT
-    queryQueue.push({ rows: [] });               // audit_log
-    const res = await client.call('PUT', '/api/revenue/k1/202602', { projected_usd: 1000 });
-    expect(res.status).toBe(200);
-    expect(res.body.projected_usd).toBe(1000);
+    queryQueue.push({ rows: [] });               // no existing period
+    const res = await client.call('PUT', '/api/revenue/k1/202602', { real_usd: 1000 });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/plan/i);
   });
 
-  it('updates existing period', async () => {
+  it('updates real_usd when period exists', async () => {
     queryQueue.push({ rows: [{ id: 'k1' }] });
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 800, real_usd: null, status: 'open' }] });
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 1500, real_usd: null, status: 'open' }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: null, status: 'open' }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: 1500, status: 'open' }] });
     queryQueue.push({ rows: [] });               // audit_log
-    const res = await client.call('PUT', '/api/revenue/k1/202602', { projected_usd: 1500 });
+    const res = await client.call('PUT', '/api/revenue/k1/202602', { real_usd: 1500 });
     expect(res.status).toBe(200);
-    expect(res.body.projected_usd).toBe(1500);
+    expect(res.body.real_usd).toBe(1500);
   });
 
   it('returns 404 when contract is missing', async () => {
     queryQueue.push({ rows: [] });
-    const res = await client.call('PUT', '/api/revenue/k-missing/202602', { projected_usd: 100 });
+    const res = await client.call('PUT', '/api/revenue/k-missing/202602', { real_usd: 100 });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('GET/PUT /api/revenue/:contract_id/plan (RR-MVP-00.2)', () => {
+  it('GET plan returns contract metadata + existing periods', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', name: 'C', type: 'project', total_value_usd: 100000, original_currency: 'USD',
+                                start_date: '2026-01-01', end_date: '2026-12-31', status: 'active',
+                                client_id: 'c1', client_name: 'Acme', client_country: 'CO', owner_name: 'Laura' }] });
+    queryQueue.push({ rows: [
+      { yyyymm: '202602', projected_usd: 20000, projected_pct: 0.2, real_usd: null, status: 'open' },
+      { yyyymm: '202603', projected_usd: 30000, projected_pct: 0.3, real_usd: null, status: 'open' },
+    ] });
+    const res = await client.call('GET', '/api/revenue/k1/plan');
+    expect(res.status).toBe(200);
+    expect(res.body.contract.type).toBe('project');
+    expect(res.body.periods).toHaveLength(2);
+  });
+
+  it('PUT plan rejects when entries[] missing', async () => {
+    const res = await client.call('PUT', '/api/revenue/k1/plan', {});
+    expect(res.status).toBe(400);
+  });
+
+  it('PUT plan for project: validates pct required + computes projected_usd from total_value_usd', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 20000, projected_pct: 0.2 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', projected_usd: 50000, projected_pct: 0.5 }] });
+    queryQueue.push({ rows: [] }); // audit_log
+    const res = await client.call('PUT', '/api/revenue/k1/plan', {
+      entries: [{ yyyymm: '202602', pct: 0.2 }, { yyyymm: '202603', pct: 0.5 }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toHaveLength(2);
+    // The INSERT call sent projected_usd = pct × total_value_usd = 0.2 × 100000 = 20000
+    const insert1 = issuedQueries.find((q) => q.sql.includes('INSERT INTO revenue_periods'));
+    expect(insert1.params[2]).toBe(20000);
+  });
+
+  it('PUT plan for project: rejects pct out of range', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    const res = await client.call('PUT', '/api/revenue/k1/plan', {
+      entries: [{ yyyymm: '202602', pct: 1.5 }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/pct/);
+  });
+
+  it('PUT plan for capacity: takes projected_usd directly', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'capacity', total_value_usd: 0 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 7500 }] });
+    queryQueue.push({ rows: [] }); // audit_log
+    const res = await client.call('PUT', '/api/revenue/k1/plan', {
+      entries: [{ yyyymm: '202602', projected_usd: 7500 }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.entries[0].projected_usd).toBe(7500);
+  });
+
+  it('PUT plan for project: warns (not blocks) when pct sum exceeds 1', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 70000, projected_pct: 0.7 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', projected_usd: 60000, projected_pct: 0.6 }] });
+    queryQueue.push({ rows: [] });
+    const res = await client.call('PUT', '/api/revenue/k1/plan', {
+      entries: [{ yyyymm: '202602', pct: 0.7 }, { yyyymm: '202603', pct: 0.6 }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.warnings.some((w) => w.code === 'pct_sum_exceeds_1')).toBe(true);
   });
 });
 
