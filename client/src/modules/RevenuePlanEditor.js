@@ -80,12 +80,19 @@ export default function RevenuePlanEditor() {
   const [to, setTo] = useState('');
   // entries: { [yyyymm]: { pct?: number, usd?: number } } — almacenamos como string del input.
   const [entries, setEntries] = useState({});
+  // Valor de contrato + moneda editables — el plan editor también persiste estos
+  // dos campos al guardar, así el operations_owner no necesita ser admin del
+  // módulo de contratos para corregirlos. Strings para no perder ceros.
+  const [contractValue, setContractValue] = useState('');
+  const [contractCurrency, setContractCurrency] = useState('USD');
 
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
       const data = await apiGet(`/api/revenue/${contract_id}/plan`);
       setContract(data.contract);
+      setContractValue(data.contract.total_value_usd != null ? String(data.contract.total_value_usd) : '0');
+      setContractCurrency(data.contract.original_currency || 'USD');
       // Default range: contract.start_date → contract.end_date (o si no hay, ±6 meses).
       const startMonth = yyyymmFromDate(data.contract.start_date) || todayYYYYMM();
       const endMonth = yyyymmFromDate(data.contract.end_date)
@@ -114,7 +121,11 @@ export default function RevenuePlanEditor() {
 
   const months = useMemo(() => expandMonths(from, to), [from, to]);
   const isProject = contract?.type === 'project';
-  const totalValueUsd = Number(contract?.total_value_usd || 0);
+  // Valor "en vivo": lo que tipea el usuario en el input. Para project usamos
+  // este valor para derivar los USD por mes (multiplicar pct × value). Si está
+  // vacío o inválido, cae a 0 para no romper la UI; el botón Guardar valida.
+  const liveTotalValueUsd = Number(contractValue) || 0;
+  const totalValueUsd = liveTotalValueUsd; // alias usado en JSX existente
 
   const setEntryField = (yyyymm, field, value) => {
     setEntries((prev) => ({ ...prev, [yyyymm]: { ...(prev[yyyymm] || {}), [field]: value } }));
@@ -138,7 +149,18 @@ export default function RevenuePlanEditor() {
 
   const submit = async () => {
     if (!months.length) { setError('Rango de meses inválido'); return; }
+    const valueNum = Number(contractValue);
+    if (isNaN(valueNum) || valueNum < 0) {
+      setError('Valor del contrato inválido. Debe ser un número ≥ 0.');
+      return;
+    }
+    if (isProject && valueNum === 0) {
+      setError('Para contratos de tipo proyecto, el valor del contrato debe ser > 0 (sirve para calcular el USD por mes).');
+      return;
+    }
     const payload = {
+      total_value_usd: valueNum,
+      original_currency: contractCurrency || 'USD',
       entries: months.map((m) => {
         const e = entries[m] || {};
         if (isProject) {
@@ -186,13 +208,38 @@ export default function RevenuePlanEditor() {
         <h3 style={{ margin: '0 0 12px', fontSize: 14, color: 'var(--purple-dark)' }}>Datos del contrato</h3>
         <div style={s.metaGrid}>
           <div style={s.metaLabel}>Valor del contrato</div>
-          <div><strong>{fmtUSD(totalValueUsd)}</strong> <span style={{ color: 'var(--text-light)' }}>{contract.original_currency || 'USD'}</span></div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input
+              type="number" step="any" min="0"
+              value={contractValue}
+              onChange={(e) => setContractValue(e.target.value)}
+              placeholder="0"
+              style={{ ...s.inp, width: 160, textAlign: 'right' }}
+              aria-label="Valor del contrato"
+            />
+            <select value={contractCurrency} onChange={(e) => setContractCurrency(e.target.value)}
+                    style={{ ...s.inp, width: 80 }} aria-label="Moneda">
+              <option value="USD">USD</option>
+              <option value="COP">COP</option>
+              <option value="MXN">MXN</option>
+              <option value="GTQ">GTQ</option>
+              <option value="EUR">EUR</option>
+            </select>
+            <span style={{ fontSize: 11, color: 'var(--text-light)' }}>
+              ≈ {fmtUSD(liveTotalValueUsd)}
+            </span>
+          </div>
           <div style={s.metaLabel}>Tipo</div>
           <div style={{ textTransform: 'capitalize' }}>{contract.type}</div>
           <div style={s.metaLabel}>Inicio</div>
           <div>{contract.start_date || '—'}</div>
           <div style={s.metaLabel}>Fin</div>
           <div>{contract.end_date || '—'}</div>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 8, fontStyle: 'italic' }}>
+          {isProject
+            ? 'El valor del contrato se multiplica por el % de cada mes para calcular los USD reconocidos.'
+            : 'En este MVP el valor en moneda local se trata como USD (multi-currency real lo agregará el eng team).'}
         </div>
 
         <div style={s.rangeRow}>

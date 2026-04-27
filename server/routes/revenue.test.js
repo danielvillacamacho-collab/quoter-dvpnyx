@@ -216,8 +216,39 @@ describe('GET/PUT /api/revenue/:contract_id/plan (RR-MVP-00.2)', () => {
     expect(res.body.entries[0].projected_usd).toBe(7500);
   });
 
+  it('RR-MVP-00.3: PUT plan also updates contracts.total_value_usd + original_currency when sent in body', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 0, original_currency: 'USD' }] });
+    queryQueue.push({ rows: [] }); // UPDATE contracts
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 30000, projected_pct: 0.3 }] });
+    queryQueue.push({ rows: [] }); // audit_log
+    const res = await client.call('PUT', '/api/revenue/k1/plan', {
+      total_value_usd: 100000,
+      original_currency: 'cop',
+      entries: [{ yyyymm: '202602', pct: 0.3 }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.contract.total_value_usd).toBe(100000);
+    expect(res.body.contract.original_currency).toBe('COP');
+    // INSERT projected_usd computed from NEW total_value_usd: 0.3 × 100000 = 30000
+    const insertCall = issuedQueries.find((q) => q.sql.includes('INSERT INTO revenue_periods'));
+    expect(insertCall.params[2]).toBe(30000);
+    const updateContract = issuedQueries.find((q) => q.sql.includes('UPDATE contracts SET total_value_usd'));
+    expect(updateContract).toBeTruthy();
+    expect(updateContract.params).toEqual(['k1', 100000, 'COP']);
+  });
+
+  it('RR-MVP-00.3: PUT plan rejects negative total_value_usd', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 50000, original_currency: 'USD' }] });
+    const res = await client.call('PUT', '/api/revenue/k1/plan', {
+      total_value_usd: -500,
+      entries: [{ yyyymm: '202602', pct: 0.3 }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/total_value_usd/);
+  });
+
   it('PUT plan for project: warns (not blocks) when pct sum exceeds 1', async () => {
-    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000, original_currency: 'USD' }] });
     queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 70000, projected_pct: 0.7 }] });
     queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', projected_usd: 60000, projected_pct: 0.6 }] });
     queryQueue.push({ rows: [] });
