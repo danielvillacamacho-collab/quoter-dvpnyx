@@ -247,16 +247,14 @@ describe('GET/PUT /api/revenue/:contract_id/plan (RR-MVP-00.2)', () => {
     expect(res.body.error).toMatch(/total_value_usd/);
   });
 
-  it('PUT plan for project: warns (not blocks) when pct sum exceeds 1', async () => {
+  it('RR-MVP-00.4: PUT plan for project BLOCKS (400) when pct sum exceeds 1', async () => {
     queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000, original_currency: 'USD' }] });
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 70000, projected_pct: 0.7 }] });
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', projected_usd: 60000, projected_pct: 0.6 }] });
-    queryQueue.push({ rows: [] });
     const res = await client.call('PUT', '/api/revenue/k1/plan', {
       entries: [{ yyyymm: '202602', pct: 0.7 }, { yyyymm: '202603', pct: 0.6 }],
     });
-    expect(res.status).toBe(200);
-    expect(res.body.warnings.some((w) => w.code === 'pct_sum_exceeds_1')).toBe(true);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('pct_sum_exceeds_1');
+    expect(res.body.error).toMatch(/100%/);
   });
 });
 

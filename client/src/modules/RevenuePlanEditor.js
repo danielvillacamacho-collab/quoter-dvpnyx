@@ -107,8 +107,14 @@ export default function RevenuePlanEditor() {
       const isProject = data.contract.type === 'project';
       const seed = {};
       data.periods.forEach((p) => {
+        // Evita artefactos de IEEE 754 (0.803 * 100 = 80.30000000000001).
+        // NUMERIC(7,4) en BD = 4 decimales máx, redondeamos a 2 que es lo
+        // que el usuario espera ver en el input.
+        const pctDisplay = p.projected_pct != null
+          ? Number((Number(p.projected_pct) * 100).toFixed(2)).toString()
+          : '';
         seed[p.yyyymm] = isProject
-          ? { pct: p.projected_pct != null ? String(Number(p.projected_pct) * 100) : '' }
+          ? { pct: pctDisplay }
           : { usd: p.projected_usd != null ? String(p.projected_usd) : '' };
       });
       setEntries(seed);
@@ -175,6 +181,12 @@ export default function RevenuePlanEditor() {
     if (isProject) {
       for (const ent of payload.entries) {
         if (ent.pct < 0 || ent.pct > 1) { setError(`% fuera de rango en ${monthLabel(ent.yyyymm)} (${(ent.pct * 100).toFixed(1)}%). Cada mes debe estar entre 0 y 100.`); return; }
+      }
+      // Bloqueo duro: la suma acumulada NO puede exceder 100%.
+      const sumPct = payload.entries.reduce((acc, ent) => acc + (Number(ent.pct) || 0), 0);
+      if (sumPct > 1.0001) {
+        setError(`La suma de % declarados es ${(sumPct * 100).toFixed(2)}%. No puede exceder 100%. Ajusta la curva antes de guardar.`);
+        return;
       }
     }
     setSaving(true); setError(''); setSuccess('');
@@ -325,8 +337,8 @@ export default function RevenuePlanEditor() {
               {isProject ? (
                 <>
                   <td style={{ ...s.td, textAlign: 'right' }}>
-                    {fmtPct(totals.pct)}
-                    {totals.pct > 1.0001 && <span style={{ color: 'var(--warning)', marginLeft: 6 }}>⚠ >100%</span>}
+                    <span style={{ color: totals.pct > 1.0001 ? 'var(--danger)' : 'var(--text)', fontWeight: 700 }}>{fmtPct(totals.pct)}</span>
+                    {totals.pct > 1.0001 && <span style={{ color: 'var(--danger)', marginLeft: 6, fontSize: 11 }}>✕ excede 100%</span>}
                   </td>
                   <td style={{ ...s.td, textAlign: 'right' }}>{fmtUSD(totals.usd)}</td>
                 </>
@@ -339,9 +351,21 @@ export default function RevenuePlanEditor() {
 
         <div style={s.buttons}>
           <button type="button" onClick={() => nav('/revenue')} style={{ ...s.btn, ...s.btnGhost }}>Cancelar</button>
-          <button type="button" onClick={submit} disabled={saving} style={{ ...s.btn, ...s.btnPrimary, opacity: saving ? 0.6 : 1 }}>
-            {saving ? 'Guardando…' : 'Guardar plan'}
-          </button>
+          {(() => {
+            const overCap = isProject && totals.pct > 1.0001;
+            const blocked = saving || overCap;
+            return (
+              <button
+                type="button"
+                onClick={submit}
+                disabled={blocked}
+                title={overCap ? `La suma de % excede 100% (${(totals.pct * 100).toFixed(2)}%). Ajusta la curva.` : undefined}
+                style={{ ...s.btn, ...s.btnPrimary, opacity: blocked ? 0.5 : 1, cursor: blocked ? 'not-allowed' : 'pointer' }}
+              >
+                {saving ? 'Guardando…' : 'Guardar plan'}
+              </button>
+            );
+          })()}
         </div>
       </div>
     </div>

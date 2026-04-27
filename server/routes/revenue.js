@@ -275,8 +275,15 @@ router.put('/:contract_id/plan', async (req, res) => {
     let warnings = [];
     if (isProject) {
       const sumPct = entries.reduce((s, e) => s + Number(e.pct || 0), 0);
+      // RR-MVP-00.4: la suma >100% ahora es bloqueo duro, no warning. Un
+      // proyecto no puede tener avance acumulado mayor al 100% del contrato.
       if (sumPct > 1.0001) {
-        warnings.push({ code: 'pct_sum_exceeds_1', message: `La suma de % declarados es ${(sumPct * 100).toFixed(2)}% (>100%). Revisa la curva.` });
+        await conn.query('ROLLBACK');
+        return res.status(400).json({
+          error: `La suma de % declarados es ${(sumPct * 100).toFixed(2)}%. No puede exceder 100%.`,
+          code: 'pct_sum_exceeds_1',
+          sum_pct: sumPct,
+        });
       }
     }
 
