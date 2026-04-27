@@ -218,16 +218,40 @@ router.put('/:contract_id/plan', async (req, res) => {
   try {
     await conn.query('BEGIN');
     const { rows: cRows } = await conn.query(
-      `SELECT id, type, total_value_usd FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT id, type, total_value_usd, original_currency FROM contracts WHERE id=$1 AND deleted_at IS NULL FOR UPDATE`,
       [contract_id],
     );
     if (!cRows.length) {
       await conn.query('ROLLBACK');
       return res.status(404).json({ error: 'Contrato no encontrado' });
     }
+
+    // RR-MVP-00.3: el plan editor también permite ajustar el valor del
+    // contrato y la moneda en el mismo save. Se permite solo si vienen
+    // explícitos en el body. Así el operations_owner que entra a declarar
+    // el plan puede corregir el valor sin saltar al módulo de contratos
+    // (que es admin-only).
+    let totalValue = Number(cRows[0].total_value_usd || 0);
+    let originalCurrency = cRows[0].original_currency || 'USD';
+    const newValueProvided = body.total_value_usd != null;
+    const newCurrencyProvided = typeof body.original_currency === 'string' && body.original_currency.trim();
+    if (newValueProvided || newCurrencyProvided) {
+      const nextValue = newValueProvided ? Number(body.total_value_usd) : totalValue;
+      if (newValueProvided && (isNaN(nextValue) || nextValue < 0)) {
+        await conn.query('ROLLBACK');
+        return res.status(400).json({ error: 'total_value_usd inválido' });
+      }
+      const nextCurrency = newCurrencyProvided ? String(body.original_currency).trim().toUpperCase().slice(0, 3) : originalCurrency;
+      await conn.query(
+        `UPDATE contracts SET total_value_usd = $2, original_currency = $3, updated_at = NOW() WHERE id = $1`,
+        [contract_id, nextValue, nextCurrency],
+      );
+      totalValue = nextValue;
+      originalCurrency = nextCurrency;
+    }
+
     const contract = cRows[0];
     const isProject = contract.type === 'project';
-    const totalValue = Number(contract.total_value_usd || 0);
 
     for (const e of entries) {
       if (isProject) {
@@ -289,7 +313,7 @@ router.put('/:contract_id/plan', async (req, res) => {
     );
 
     await conn.query('COMMIT');
-    res.json({ entries: upserted, warnings, contract: { id: contract_id, type: contract.type, total_value_usd: totalValue } });
+    res.json({ entries: upserted, warnings, contract: { id: contract_id, type: contract.type, total_value_usd: totalValue, original_currency: originalCurrency } });
   } catch (err) {
     await conn.query('ROLLBACK').catch(() => {});
     // eslint-disable-next-line no-console
