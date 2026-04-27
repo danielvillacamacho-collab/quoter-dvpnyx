@@ -42,6 +42,7 @@ const ICONS = {
   '/clients':                 Building2,
   '/opportunities':           Briefcase,
   '/pipeline':                LayoutGrid,
+  '/revenue':                 BarChart3,
   '/contracts':               FileCheck2,
   '/resource-requests':       ClipboardList,
   '/assignments':             CalendarDays,
@@ -97,6 +98,11 @@ export function buildGroups(isAdmin) {
       title: 'Time Tracking', items: [
         { path: '/time/me',   label: 'Mis horas' },
         { path: '/time/team', label: 'Horas del equipo' },
+      ],
+    },
+    {
+      title: 'Finanzas', items: [
+        { path: '/revenue', label: 'Reconocimiento' },
       ],
     },
     {

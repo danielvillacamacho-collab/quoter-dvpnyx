@@ -495,7 +495,7 @@ router.post('/:id/status', async (req, res) => {
     let quotationSideEffects = null;
     if (new_status === 'won') {
       const { rows: qrows } = await connection.query(
-        `SELECT id, status FROM quotations WHERE id=$1 AND opportunity_id=$2`,
+        `SELECT id, status, type, project_name FROM quotations WHERE id=$1 AND opportunity_id=$2`,
         [winning_quotation_id, req.params.id],
       );
       if (!qrows.length) {
@@ -509,6 +509,53 @@ router.post('/:id/status', async (req, res) => {
           [winning.id],
         );
         quotationSideEffects = { promoted_to_approved: winning.id };
+      }
+
+      // RR-MVP-00.1: si la oportunidad aún no tiene contrato, crearlo
+      // automáticamente. Side effect síncrono (no worker async — eso lo
+      // hará el eng team cuando entre a refactorizar).
+      const { rows: existingContract } = await connection.query(
+        `SELECT id FROM contracts WHERE opportunity_id=$1 AND deleted_at IS NULL`,
+        [req.params.id],
+      );
+      if (!existingContract.length) {
+        // total_value_usd = SUM(quotation_lines.total) — quotations no tiene
+        // total_usd como columna (ver fix #61). Si la cotización no tiene
+        // líneas, queda en 0 y el operations_owner lo edita después.
+        const { rows: totalRow } = await connection.query(
+          `SELECT COALESCE(SUM(total), 0)::numeric AS total
+             FROM quotation_lines WHERE quotation_id=$1`,
+          [winning.id],
+        );
+        const totalValueUsd = Number(totalRow[0].total || 0);
+        // Mapeo type quotation → type contract.
+        const contractType = winning.type === 'fixed_scope' ? 'project' : 'capacity';
+        const startDate = current.expected_close_date || new Date().toISOString().slice(0, 10);
+        const { rows: createdContract } = await connection.query(
+          `INSERT INTO contracts (
+              name, client_id, opportunity_id, winning_quotation_id,
+              type, status, start_date, account_owner_id, squad_id,
+              total_value_usd, created_by, metadata
+            ) VALUES ($1,$2,$3,$4,$5,'planned',$6,$7,$8,$9,$10,$11)
+           RETURNING id, name, type, total_value_usd`,
+          [
+            winning.project_name || current.name,
+            current.client_id,
+            current.id,
+            winning.id,
+            contractType,
+            startDate,
+            current.account_owner_id,
+            current.squad_id,
+            totalValueUsd,
+            req.user.id,
+            JSON.stringify({ source_system: 'opportunity_won', auto_generated: true }),
+          ],
+        );
+        quotationSideEffects = {
+          ...(quotationSideEffects || {}),
+          contract_created: createdContract[0],
+        };
       }
     }
 
