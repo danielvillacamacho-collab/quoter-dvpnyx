@@ -30,6 +30,13 @@ const yyyymmFromDate = (str) => {
   if (isNaN(d.getTime())) return null;
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
+// Conversores entre formato BD (YYYYMM) y formato del <input type="month"> (YYYY-MM).
+const yyyymmToMonthInput = (yyyymm) => /^[0-9]{6}$/.test(yyyymm) ? `${yyyymm.slice(0, 4)}-${yyyymm.slice(4)}` : '';
+const monthInputToYyyymm = (val) => {
+  if (!val || typeof val !== 'string') return '';
+  const m = val.match(/^([0-9]{4})-([0-9]{2})$/);
+  return m ? `${m[1]}${m[2]}` : '';
+};
 const expandMonths = (from, to) => {
   if (!/^[0-9]{6}$/.test(from) || !/^[0-9]{6}$/.test(to)) return [];
   const out = [];
@@ -255,15 +262,25 @@ export default function RevenuePlanEditor() {
         </div>
 
         <div style={s.rangeRow}>
-          <label>Desde
-            <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6}
-                   value={from} onChange={(e) => setFrom(e.target.value)}
-                   style={{ ...s.inp, width: 90, marginLeft: 6 }} aria-label="Desde YYYYMM" />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            Desde
+            <input
+              type="month"
+              value={yyyymmToMonthInput(from)}
+              onChange={(e) => setFrom(monthInputToYyyymm(e.target.value))}
+              style={{ ...s.inp, width: 150 }}
+              aria-label="Mes desde"
+            />
           </label>
-          <label>Hasta
-            <input type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6}
-                   value={to} onChange={(e) => setTo(e.target.value)}
-                   style={{ ...s.inp, width: 90, marginLeft: 6 }} aria-label="Hasta YYYYMM" />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            Hasta
+            <input
+              type="month"
+              value={yyyymmToMonthInput(to)}
+              onChange={(e) => setTo(monthInputToYyyymm(e.target.value))}
+              style={{ ...s.inp, width: 150 }}
+              aria-label="Mes hasta"
+            />
           </label>
           <span style={{ fontSize: 12, color: 'var(--text-light)' }}>
             {months.length} mes{months.length === 1 ? '' : 'es'}
