@@ -267,9 +267,12 @@ describe('POST /api/opportunities/:id/status', () => {
     // open → won used to be 409. Ahora se permite porque el Kanban
     // necesita drag-and-drop libre. La integridad se mantiene vía
     // winning_quotation_id obligatorio (probado abajo).
-    queryQueue.push({ rows: [{ id: 'o1', status: 'open' }] });        // SELECT current
-    queryQueue.push({ rows: [{ id: 'q1', status: 'sent' }] });        // quotation lookup
-    queryQueue.push({ rows: [{ id: 'q1' }] });                        // UPDATE quotations
+    queryQueue.push({ rows: [{ id: 'o1', status: 'open', client_id: 'c1', account_owner_id: 'u1', squad_id: 's1', name: 'Deal' }] }); // SELECT current
+    queryQueue.push({ rows: [{ id: 'q1', status: 'sent', type: 'staff_aug', project_name: 'P1' }] }); // quotation lookup
+    queryQueue.push({ rows: [{ id: 'q1' }] });                                   // UPDATE quotations -> approved
+    queryQueue.push({ rows: [] });                                               // RR-MVP: SELECT existing contract (empty)
+    queryQueue.push({ rows: [{ total: 5000 }] });                                // RR-MVP: SUM lines
+    queryQueue.push({ rows: [{ id: 'k1', name: 'P1', type: 'capacity', total_value_usd: 5000 }] }); // RR-MVP: INSERT contract
     queryQueue.push({ rows: [{ id: 'o1', status: 'won', booking_amount_usd: 0, winning_quotation_id: 'q1' }] }); // UPDATE opp
     const res = await client.call('POST', '/api/opportunities/o1/status', {
       new_status: 'won', winning_quotation_id: 'q1',
@@ -305,9 +308,12 @@ describe('POST /api/opportunities/:id/status', () => {
 
   it('marks as won, promotes sent quotation to approved, and emits events', async () => {
     const { emitEvent } = require('../utils/events');
-    queryQueue.push({ rows: [{ id: 'o1', status: 'proposal' }] });          // SELECT current
-    queryQueue.push({ rows: [{ id: 'q1', status: 'sent' }] });              // quotation lookup
+    queryQueue.push({ rows: [{ id: 'o1', status: 'proposal', client_id: 'c1', account_owner_id: 'u1', squad_id: 's1', name: 'Deal' }] }); // SELECT current
+    queryQueue.push({ rows: [{ id: 'q1', status: 'sent', type: 'fixed_scope', project_name: 'P1' }] }); // quotation lookup
     queryQueue.push({ rows: [{ id: 'q1' }] });                              // UPDATE quotations -> approved
+    queryQueue.push({ rows: [] });                                          // RR-MVP: SELECT existing contract (empty)
+    queryQueue.push({ rows: [{ total: 12000 }] });                          // RR-MVP: SUM lines
+    queryQueue.push({ rows: [{ id: 'k1', name: 'P1', type: 'project', total_value_usd: 12000 }] }); // RR-MVP: INSERT contract
     queryQueue.push({ rows: [{ id: 'o1', status: 'won', winning_quotation_id: 'q1' }] }); // UPDATE opp
     const res = await client.call('POST', '/api/opportunities/o1/status', {
       new_status: 'won', winning_quotation_id: 'q1',
@@ -319,6 +325,18 @@ describe('POST /api/opportunities/:id/status', () => {
     expect(changed).toBeTruthy();
     expect(wonEvt).toBeTruthy();
     expect(wonEvt[1].payload.winning_quotation_id).toBe('q1');
+  });
+
+  it('RR-MVP-00.1: skips contract creation when one already exists for the opportunity (idempotency)', async () => {
+    queryQueue.push({ rows: [{ id: 'o1', status: 'proposal', client_id: 'c1', account_owner_id: 'u1', squad_id: 's1', name: 'Deal' }] }); // SELECT current
+    queryQueue.push({ rows: [{ id: 'q1', status: 'sent', type: 'fixed_scope', project_name: 'P1' }] }); // quotation lookup
+    queryQueue.push({ rows: [{ id: 'q1' }] });                              // UPDATE quotations -> approved
+    queryQueue.push({ rows: [{ id: 'k-existing' }] });                      // existing contract found → no INSERT
+    queryQueue.push({ rows: [{ id: 'o1', status: 'won', winning_quotation_id: 'q1' }] }); // UPDATE opp
+    const res = await client.call('POST', '/api/opportunities/o1/status', {
+      new_status: 'won', winning_quotation_id: 'q1',
+    });
+    expect(res.status).toBe(200);
   });
 
   it('marks as lost, rejects sent quotations, emits opportunity.lost', async () => {

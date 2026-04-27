@@ -580,6 +580,38 @@ const V2_ALTERS = `
     WHERE weighted_amount_usd = 0 AND booking_amount_usd > 0;
 
   CREATE INDEX IF NOT EXISTS idx_opportunities_status_close ON opportunities(status, expected_close_date) WHERE deleted_at IS NULL;
+
+  -- ==================================================================
+  -- RR-MVP-00.1 (Abril 27 2026) — Revenue recognition mínimo
+  -- ==================================================================
+  -- Decisión CTO+CPO: trabajo funcional placeholder. Reemplaza el Excel
+  -- mensual de revenue para que DMs/CFO puedan operar sin esa hoja.
+  -- TODO eng team: este módulo está intencionalmente simple. Cuando entren
+  -- a refactorizar, ver SPEC-RR-00 para el modelo NIIF 15-friendly real
+  -- (immutability triggers, plan_frozen_at, service_period_history append-
+  -- only, multi-currency, atomic worker async, 4 motores polimórficos).
+  -- Aquí sólo: 1 columna en contracts + 1 tabla revenue_periods + 1
+  -- motor monthly_projection plano. Sin triggers DB. Sin multi-currency.
+  ALTER TABLE contracts ADD COLUMN IF NOT EXISTS total_value_usd NUMERIC(18,2) NOT NULL DEFAULT 0;
+
+  CREATE TABLE IF NOT EXISTS revenue_periods (
+    contract_id    UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+    yyyymm         CHAR(6) NOT NULL CHECK (yyyymm ~ '^[0-9]{6}$'),
+    projected_usd  NUMERIC(18,2) NOT NULL DEFAULT 0,
+    real_usd       NUMERIC(18,2) NULL,
+    status         VARCHAR(20) NOT NULL DEFAULT 'open'
+                   CHECK (status IN ('open','closed')),
+    notes          TEXT NULL,
+    closed_at      TIMESTAMPTZ NULL,
+    closed_by      UUID NULL REFERENCES users(id),
+    created_by     UUID NULL REFERENCES users(id),
+    updated_by     UUID NULL REFERENCES users(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (contract_id, yyyymm)
+  );
+  CREATE INDEX IF NOT EXISTS idx_revenue_periods_yyyymm ON revenue_periods(yyyymm);
+  CREATE INDEX IF NOT EXISTS idx_revenue_periods_status ON revenue_periods(status);
 `;
 
 /* ==================================================================
