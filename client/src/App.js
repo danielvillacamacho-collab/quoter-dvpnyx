@@ -17,6 +17,7 @@ import { apiGet } from './utils/apiV2';
 import ComingSoon from './shell/ComingSoon';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
+import PipelineKanban from './modules/PipelineKanban';
 import Areas from './modules/Areas';
 import Skills from './modules/Skills';
 import Employees from './modules/Employees';
@@ -159,6 +160,7 @@ function Layout() {
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/opportunities" element={<Opportunities />} />
+          <Route path="/pipeline" element={<PipelineKanban />} />
           <Route path="/opportunities/:id" element={<OpportunityDetail />} />
           <Route path="/employees" element={<Employees />} />
           <Route path="/employees/:id" element={<EmployeeDetail />} />

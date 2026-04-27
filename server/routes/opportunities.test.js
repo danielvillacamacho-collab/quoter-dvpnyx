@@ -263,14 +263,20 @@ describe('POST /api/opportunities/:id/status', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects transition that is not allowed by the flow', async () => {
-    // current=open, new=won is not a valid transition from open
-    queryQueue.push({ rows: [{ id: 'o1', status: 'open' }] });
+  it('CRM-MVP-00.1: allows non-linear transitions with soft warnings (no longer 409)', async () => {
+    // open → won used to be 409. Ahora se permite porque el Kanban
+    // necesita drag-and-drop libre. La integridad se mantiene vía
+    // winning_quotation_id obligatorio (probado abajo).
+    queryQueue.push({ rows: [{ id: 'o1', status: 'open' }] });        // SELECT current
+    queryQueue.push({ rows: [{ id: 'q1', status: 'sent' }] });        // quotation lookup
+    queryQueue.push({ rows: [{ id: 'q1' }] });                        // UPDATE quotations
+    queryQueue.push({ rows: [{ id: 'o1', status: 'won', booking_amount_usd: 0, winning_quotation_id: 'q1' }] }); // UPDATE opp
     const res = await client.call('POST', '/api/opportunities/o1/status', {
       new_status: 'won', winning_quotation_id: 'q1',
     });
-    expect(res.status).toBe(409);
-    expect(res.body.error).toMatch(/Transición inválida/);
+    expect(res.status).toBe(200);
+    // amount_zero warning porque booking_amount_usd=0
+    expect(res.body.warnings.some((w) => w.code === 'amount_zero')).toBe(true);
   });
 
   it('rejects won without winning_quotation_id', async () => {
@@ -379,5 +385,53 @@ describe('GET /api/opportunities/export.csv', () => {
     queryQueue.push(new Error('boom'));
     const res = await client.call('GET', '/api/opportunities/export.csv');
     expect(res.status).toBe(500);
+  });
+});
+
+describe('GET /api/opportunities/kanban (CRM-MVP-00.1)', () => {
+  it('groups opportunities by stage with summaries and global summary', async () => {
+    queryQueue.push({ rows: [
+      { id: 'o1', name: 'Deal A', status: 'open',        booking_amount_usd: 10000, weighted_amount_usd: 500,   probability: 5,  client_name: 'Acme',  owner_name: 'Laura', last_stage_change_at: new Date(), days_in_current_stage: 1 },
+      { id: 'o2', name: 'Deal B', status: 'qualified',   booking_amount_usd: 50000, weighted_amount_usd: 10000, probability: 20, client_name: 'Beta',  owner_name: 'Laura', last_stage_change_at: new Date(), days_in_current_stage: 4 },
+      { id: 'o3', name: 'Deal C', status: 'qualified',   booking_amount_usd: 80000, weighted_amount_usd: 16000, probability: 20, client_name: 'Gamma', owner_name: 'Pablo', last_stage_change_at: new Date(), days_in_current_stage: 2 },
+      { id: 'o4', name: 'Deal D', status: 'won',         booking_amount_usd: 30000, weighted_amount_usd: 30000, probability: 100, client_name: 'Delta', owner_name: 'Laura', last_stage_change_at: new Date(), days_in_current_stage: 0 },
+    ] });
+    const res = await client.call('GET', '/api/opportunities/kanban');
+    expect(res.status).toBe(200);
+    expect(res.body.stages).toHaveLength(7);
+    const open = res.body.stages.find((s) => s.id === 'open');
+    expect(open.summary.count).toBe(1);
+    expect(open.summary.total_amount_usd).toBe(10000);
+    expect(open.summary.weighted_amount_usd).toBe(500);
+    const qualified = res.body.stages.find((s) => s.id === 'qualified');
+    expect(qualified.summary.count).toBe(2);
+    expect(qualified.summary.total_amount_usd).toBe(130000);
+    expect(qualified.summary.weighted_amount_usd).toBe(26000);
+    expect(res.body.global_summary.total_opportunities).toBe(4);
+    expect(res.body.global_summary.total_amount_usd).toBe(170000);
+  });
+
+  it('applies filters from query params (owner_id, min_amount_usd)', async () => {
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities/kanban?owner_id=u9&min_amount_usd=50000');
+    const sql = issuedQueries.find((q) => q.sql.includes('FROM opportunities o'))?.sql || '';
+    expect(sql).toMatch(/account_owner_id =/);
+    expect(sql).toMatch(/booking_amount_usd >=/);
+  });
+
+  it('respects per-column cap (KANBAN_PER_COLUMN=100): summary.has_more flag', async () => {
+    // 105 opportunities all in 'open' stage
+    const rows = Array.from({ length: 105 }, (_, i) => ({
+      id: `o${i}`, name: `Deal ${i}`, status: 'open',
+      booking_amount_usd: 1000, weighted_amount_usd: 50, probability: 5,
+      client_name: 'X', owner_name: 'Y', last_stage_change_at: new Date(), days_in_current_stage: 0,
+    }));
+    queryQueue.push({ rows });
+    const res = await client.call('GET', '/api/opportunities/kanban');
+    expect(res.status).toBe(200);
+    const open = res.body.stages.find((s) => s.id === 'open');
+    expect(open.summary.count).toBe(105);
+    expect(open.opportunities).toHaveLength(100);
+    expect(open.summary.has_more).toBe(true);
   });
 });

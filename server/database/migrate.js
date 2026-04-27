@@ -512,6 +512,74 @@ const V2_ALTERS = `
   CREATE INDEX IF NOT EXISTS idx_quotations_client      ON quotations(client_id)      WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_quotations_opportunity ON quotations(opportunity_id) WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_quotations_squad       ON quotations(squad_id)       WHERE deleted_at IS NULL;
+
+  -- ==================================================================
+  -- CRM-MVP-00.1 (Abril 27 2026) — Pipeline Kanban sobre opportunities
+  -- ==================================================================
+  -- Decisión (Daniel + CPO interim): construir CRM evolutivo sobre el
+  -- stack actual sin entrar en migración fundacional (TS, monorepo, RLS,
+  -- multi-tenant, Zod). Estas columnas son aditivas, los 7 valores de
+  -- status legacy se mantienen y se mapean a stages del pipeline en
+  -- código (server/utils/pipeline.js + client/src/utils/pipeline.js).
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS booking_amount_usd  NUMERIC(18,2) NOT NULL DEFAULT 0;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS probability         NUMERIC(5,2)  NOT NULL DEFAULT 5;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS weighted_amount_usd NUMERIC(18,2) NOT NULL DEFAULT 0;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS last_stage_change_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS next_step           TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS next_step_due_date  DATE NULL;
+
+  -- Trigger: cuando cambia status o booking_amount_usd, recalcular
+  -- probability + weighted + last_stage_change_at. Probability mapping
+  -- está hardcoded acá (mismos valores que en utils/pipeline.js).
+  CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    IF TG_OP = 'INSERT' OR NEW.status IS DISTINCT FROM OLD.status THEN
+      NEW.probability := CASE NEW.status
+        WHEN 'open'        THEN 5
+        WHEN 'qualified'   THEN 20
+        WHEN 'proposal'    THEN 50
+        WHEN 'negotiation' THEN 75
+        WHEN 'won'         THEN 100
+        WHEN 'lost'        THEN 0
+        WHEN 'cancelled'   THEN 0
+        ELSE 5
+      END;
+      IF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        NEW.last_stage_change_at := NOW();
+      END IF;
+    END IF;
+    NEW.weighted_amount_usd := COALESCE(NEW.booking_amount_usd, 0) * COALESCE(NEW.probability, 0) / 100.0;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  DROP TRIGGER IF EXISTS trg_opp_pipeline_recalc ON opportunities;
+  CREATE TRIGGER trg_opp_pipeline_recalc
+    BEFORE INSERT OR UPDATE ON opportunities
+    FOR EACH ROW
+    EXECUTE FUNCTION opp_pipeline_recalc();
+
+  -- Backfill probability + weighted para opportunities pre-CRM-MVP.
+  -- last_stage_change_at queda en updated_at (mejor aproximación disponible).
+  UPDATE opportunities SET
+    probability = CASE status
+      WHEN 'open'        THEN 5
+      WHEN 'qualified'   THEN 20
+      WHEN 'proposal'    THEN 50
+      WHEN 'negotiation' THEN 75
+      WHEN 'won'         THEN 100
+      ELSE 0
+    END,
+    last_stage_change_at = COALESCE(closed_at, updated_at, created_at, NOW())
+  WHERE probability = 5 AND status <> 'open';
+
+  -- Recalc weighted (en caso de que booking_amount_usd haya quedado en 0
+  -- el weighted también, lo que es correcto; este UPDATE solo es defensivo).
+  UPDATE opportunities SET weighted_amount_usd = COALESCE(booking_amount_usd, 0) * COALESCE(probability, 0) / 100.0
+    WHERE weighted_amount_usd = 0 AND booking_amount_usd > 0;
+
+  CREATE INDEX IF NOT EXISTS idx_opportunities_status_close ON opportunities(status, expected_close_date) WHERE deleted_at IS NULL;
 `;
 
 /* ==================================================================

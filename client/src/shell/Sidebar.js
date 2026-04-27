@@ -41,6 +41,7 @@ const ICONS = {
   '/quotation/new/fixed_scope': FileText,
   '/clients':                 Building2,
   '/opportunities':           Briefcase,
+  '/pipeline':                LayoutGrid,
   '/contracts':               FileCheck2,
   '/resource-requests':       ClipboardList,
   '/assignments':             CalendarDays,
@@ -72,6 +73,7 @@ export function buildGroups(isAdmin) {
         { path: '/quotation/new/fixed_scope', label: 'Nuevo Proyecto' },
         { path: '/clients',                  label: 'Clientes' },
         { path: '/opportunities',            label: 'Oportunidades' },
+        { path: '/pipeline',                 label: 'Pipeline' },
       ],
     },
     {
