@@ -185,51 +185,55 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
     // trigger DB inmutable.
     const wasClosed = existing[0]?.status === 'closed';
 
+    // Resolver valores finales en JS (evita el sentinel 'present' del UPDATE).
+    // Reglas:
+    //   - projected_usd ausente del body  → mantener existente (o 0 si nuevo).
+    //   - projected_usd presente          → usar el valor (number).
+    //   - real_usd ausente del body       → mantener existente (o null si nuevo).
+    //   - real_usd presente y null        → setear a null (limpiar).
+    //   - real_usd presente y number      → usar el valor.
+    const realProvided = Object.prototype.hasOwnProperty.call(body, 'real_usd');
+    const baseProjected = existing[0]?.projected_usd ?? 0;
+    const baseReal = existing[0]?.real_usd ?? null;
+    const baseNotes = existing[0]?.notes ?? null;
+    const finalProjected = projected_usd != null ? Number(projected_usd) : Number(baseProjected);
+    const finalReal = realProvided ? (real_usd == null ? null : Number(real_usd)) : baseReal;
+    const finalNotes = notes != null ? notes : baseNotes;
+
     let row;
     if (!existing.length) {
       const { rows } = await conn.query(
         `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, real_usd, notes,
                                       created_by, updated_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$6)
+           VALUES ($1,$2,$3,$4::numeric,$5,$6,$6)
            RETURNING *`,
-        [
-          contract_id, yyyymm,
-          projected_usd != null ? Number(projected_usd) : 0,
-          real_usd != null ? Number(real_usd) : null,
-          notes || null,
-          req.user.id,
-        ],
+        [contract_id, yyyymm, finalProjected, finalReal, finalNotes, req.user.id],
       );
       row = rows[0];
     } else {
       const { rows } = await conn.query(
         `UPDATE revenue_periods SET
-           projected_usd = COALESCE($3, projected_usd),
-           real_usd      = CASE WHEN $4::text IS NULL THEN real_usd ELSE $5::numeric END,
-           notes         = COALESCE($6, notes),
-           updated_by    = $7,
+           projected_usd = $3,
+           real_usd      = $4::numeric,
+           notes         = $5,
+           updated_by    = $6,
            updated_at    = NOW()
          WHERE contract_id=$1 AND yyyymm=$2
          RETURNING *`,
-        [
-          contract_id, yyyymm,
-          projected_usd != null ? Number(projected_usd) : null,
-          real_usd === undefined ? null : 'present',
-          real_usd !== undefined && real_usd !== null ? Number(real_usd) : null,
-          notes != null ? notes : null,
-          req.user.id,
-        ],
+        [contract_id, yyyymm, finalProjected, finalReal, finalNotes, req.user.id],
       );
       row = rows[0];
     }
 
     // Audit (low-fidelity placeholder — eng team replaces with append-only history table).
+    // Cast TODOS los params explícitos: cuando real_usd es null sin cast, PG falla con
+    // "could not determine data type of parameter".
     await conn.query(
       `INSERT INTO audit_log (user_id, action, entity, entity_id, details)
          VALUES ($1, 'revenue_period_upsert', 'revenue_period', $2,
                  jsonb_build_object('contract_id', $3::uuid, 'yyyymm', $4::text,
                                     'wasClosed', $5::boolean,
-                                    'projected_usd', $6::numeric, 'real_usd', $7))`,
+                                    'projected_usd', $6::numeric, 'real_usd', $7::numeric))`,
       [
         req.user.id, contract_id, contract_id, yyyymm,
         wasClosed,
