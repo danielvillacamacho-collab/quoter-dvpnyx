@@ -469,6 +469,56 @@ Body: `{ value?, label?, note? }`. Emite `parameter.updated` con before/after.
 
 ---
 
+## Employee Costs (admin/superadmin only — PII salarial)
+
+> Datos salariales sensibles. **Todo el endpoint `/api/employee-costs/*`** requiere rol `admin` o `superadmin`. Lead/member/viewer reciben 403. Spec: `spec_costos_empleado.docx` (Abril 2026).
+
+### `GET /api/employee-costs?period=YYYYMM` 🔒 admin
+Mass view del período. Devuelve `{ period, data, summary }` donde `data` tiene una entrada por cada empleado activo en el período (con su costo si existe + delta vs teórico + flag `is_new`). `summary` incluye `with_cost / without_cost / total_cost_usd / avg_cost_usd / locked_count`.
+
+### `GET /api/employee-costs/employee/:employeeId` 🔒 admin
+Histórico paginado por período (DESC) de un empleado. Devuelve `{ employee, history }`.
+
+### `GET /api/employee-costs/employee/:employeeId/:period` 🔒 admin
+404 si no hay row.
+
+### `GET /api/employee-costs/summary/:period` 🔒 admin
+KPIs del período (sin lista de empleados — más rápido).
+
+### `POST /api/employee-costs` 🔒 admin
+Body: `{ employee_id*, period*, currency*, gross_cost*, notes? }`. UPSERT por `(employee_id, period)`.
+- 400 con `code:'period_before_employee_start'` si el período es anterior al inicio.
+- 400 con `code:'period_after_employee_end'` si posterior a la terminación.
+- 400 con `code:'period_too_far_future'` si > 1 mes adelante.
+- 403 con `code:'period_locked'` si la row existente está locked y caller no es superadmin.
+- Response: `{ row, warnings }`. Warnings posibles: `fx_fallback_used`, `fx_missing`.
+
+### `PUT /api/employee-costs/:id` 🔒 admin
+Edita un row específico. Recalcula USD si cambia currency o gross_cost. Mismas reglas de lock que POST.
+
+### `DELETE /api/employee-costs/:id` 🔒 admin (superadmin si locked)
+Hard delete. Para corregir cargas erróneas.
+
+### `POST /api/employee-costs/bulk/preview` 🔒 admin
+Body: `{ period*, items: [{ employee_id, currency, gross_cost, notes? }] }`. Dry-run — devuelve `{ period, total, errors[], warnings[], applied[] }` sin escribir. Cada error tiene `code` accionable: `employee_id_invalid`, `employee_not_found`, `period_*`, `currency_invalid`, `gross_cost_invalid`, `period_locked`. Cap: 5000 items.
+
+### `POST /api/employee-costs/bulk/commit` 🔒 admin
+Mismo body que preview. **Atómico**: si hay cualquier error, ningún cambio se aplica. Response 400 con detalle si errors > 0.
+
+### `POST /api/employee-costs/copy-from-previous` 🔒 admin
+Body: `{ period* }`. Copia rows del período N-1 a N. Skip empleados ya en N (no sobreescribe) y empleados no activos en N. Marca `source='copy_from_prev'`. Recalcula FX con tasa del nuevo período.
+
+### `POST /api/employee-costs/lock/:period` 🔒 admin
+Marca todos los rows del período como `locked=true`. Idempotente. Auditado.
+
+### `POST /api/employee-costs/unlock/:period` 🔒 superadmin only
+Reabre el período. Auditado.
+
+### `POST /api/employee-costs/recalculate-usd/:period` 🔒 admin
+Recalcula `cost_usd` de rows abiertos del período (locked NO se tocan). Llamar después de actualizar exchange_rates. Response: `{ period, updated, unchanged }`.
+
+---
+
 ## AI Interactions
 
 ### `GET /api/ai-interactions` 🔒 admin

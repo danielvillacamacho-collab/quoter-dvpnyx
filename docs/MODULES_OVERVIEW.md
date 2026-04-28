@@ -290,6 +290,34 @@ Obligatorio al crear/editar capacity y project. Validación server-side con cód
 
 ---
 
+## Employee Costs (admin/superadmin only)
+
+**Qué hace:** registra el costo empresa mensual real de cada empleado. PII salarial. Habilita cálculo de márgenes y P&L por contrato.
+
+| Aspecto | Ubicación |
+|---|---|
+| Server | `server/routes/employee_costs.js` |
+| Util | `server/utils/cost_calc.js` (validaciones + conversión USD) + `client/src/utils/cost.js` (formato + helpers UI) |
+| UI mass view | `client/src/modules/EmployeeCosts.js` (`/admin/employee-costs`) |
+| UI CSV import | `client/src/modules/EmployeeCostsImport.js` (`/admin/employee-costs/import`) |
+| UI per-employee | sección "Costos" en `client/src/modules/EmployeeDetail.js` |
+| Tabla | `employee_costs` (PK = id; UNIQUE `(employee_id, period)`) |
+
+**Flujo principal (operaciones, ~5 min/mes):**
+1. Finanzas abre `/admin/employee-costs`, selecciona el mes.
+2. Click en **"📋 Copiar del mes anterior"** → trae los costos de N-1.
+3. Ajusta los 3-5 que cambiaron en la tabla in-place.
+4. Click en **"💾 Guardar todo"** → bulk/commit atómico.
+5. Al final del mes: **"🔒 Cerrar período"** → lock; sólo superadmin puede revertir.
+
+**Multi-currency:** USD, COP, MXN, GTQ, EUR. Conversión vía `exchange_rates`. Si no hay tasa del período, fallback a la última conocida (warning visible). Recálculo manual cuando cambia FX.
+
+**CSV import:** preview con validación + commit atómico.
+
+**Deuda:** ninguna activa (deprecación de columnas en `employees` ya marcada con COMMENT).
+
+---
+
 ## Exchange Rates
 
 **Qué hace:** tasas mensuales USD↔otra. Admin las gestiona desde `/admin/exchange-rates`.

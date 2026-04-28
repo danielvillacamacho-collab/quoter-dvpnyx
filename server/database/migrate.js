@@ -708,6 +708,93 @@ const V2_ALTERS = `
 
   COMMENT ON COLUMN contracts.contract_subtype IS
     'Clasificación dentro del type. capacity → staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project → fixed_scope|hour_pool. resell → NULL. Coherencia type↔subtype validada en server/routes/contracts.js.';
+
+  -- ==================================================================
+  -- EMPLOYEE-COSTS-MVP-00.1 (Abril 28 2026) — Costo empresa mensual
+  -- ==================================================================
+  -- Spec: spec_costos_empleado.docx (operaciones, prioridad ALTA).
+  --
+  -- Una row por (empleado, mes). Captura el costo empresa REAL en moneda
+  -- original + conversión a USD usando exchange_rates del mismo período.
+  -- Histórica e inmutable cuando locked=true (cierre contable).
+  --
+  -- Decisiones técnicas tomadas (ver docs/DECISIONS.md :: EMPLOYEE-COSTS):
+  --   - period CHAR(6) 'YYYYMM' (alineado con exchange_rates y revenue_periods).
+  --   - ON DELETE RESTRICT en employee_id — soft-delete del empleado NO toca
+  --     historial financiero. Para borrar un empleado con costos, primero hay
+  --     que purgar/archivar su historial (decisión consciente de superadmin).
+  --   - exchange_rate_used capturada al momento del cálculo (auditoría).
+  --     Si la tasa cambia después y el row no está locked, finanzas decide
+  --     vía endpoint de recálculo (no auto-recálculo silencioso).
+  --   - Costos PII: sin encryption at rest por ahora (depende de infra).
+  --     Acceso restringido a admin/superadmin a nivel route.
+  CREATE TABLE IF NOT EXISTS employee_costs (
+    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id          UUID NOT NULL REFERENCES employees(id) ON DELETE RESTRICT,
+    period               CHAR(6) NOT NULL CHECK (period ~ '^[0-9]{6}$'),
+    currency             VARCHAR(3) NOT NULL,
+    gross_cost           NUMERIC(14,2) NOT NULL CHECK (gross_cost >= 0),
+    cost_usd             NUMERIC(14,2) NULL CHECK (cost_usd IS NULL OR cost_usd >= 0),
+    exchange_rate_used   NUMERIC(18,8) NULL CHECK (exchange_rate_used IS NULL OR exchange_rate_used > 0),
+    locked               BOOLEAN NOT NULL DEFAULT false,
+    locked_at            TIMESTAMPTZ NULL,
+    locked_by            UUID NULL REFERENCES users(id),
+    source               VARCHAR(20) NOT NULL DEFAULT 'manual'
+      CHECK (source IN ('manual', 'payroll_sync', 'csv_import', 'copy_from_prev')),
+    notes                TEXT NULL,
+    created_by           UUID NOT NULL REFERENCES users(id),
+    updated_by           UUID NULL REFERENCES users(id),
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (employee_id, period)
+  );
+
+  -- CHECK currency contra catálogo expandible. Si se agrega una moneda nueva:
+  -- 1) ALTER aquí, 2) seed exchange_rate, 3) actualizar client/utils/cost.js.
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint WHERE conname = 'employee_costs_currency_check'
+    ) THEN
+      ALTER TABLE employee_costs ADD CONSTRAINT employee_costs_currency_check
+        CHECK (currency IN ('USD', 'COP', 'MXN', 'GTQ', 'EUR'));
+    END IF;
+  END $$;
+
+  CREATE INDEX IF NOT EXISTS employee_costs_period_idx     ON employee_costs(period);
+  CREATE INDEX IF NOT EXISTS employee_costs_employee_idx   ON employee_costs(employee_id);
+  CREATE INDEX IF NOT EXISTS employee_costs_locked_idx     ON employee_costs(locked) WHERE locked = false;
+  CREATE INDEX IF NOT EXISTS employee_costs_period_locked_idx
+    ON employee_costs(period, locked);
+
+  COMMENT ON TABLE  employee_costs IS
+    'Costo empresa mensual por empleado (PII: salarial). Una row por (employee_id, period). Multi-currency con conversión a USD vía exchange_rates. locked=true marca período cerrado (solo superadmin edita). Acceso restringido a admin/superadmin.';
+  COMMENT ON COLUMN employee_costs.period IS
+    'YYYYMM. Mismo formato que exchange_rates.yyyymm y revenue_periods.yyyymm.';
+  COMMENT ON COLUMN employee_costs.gross_cost IS
+    'PII:high — costo empresa total en moneda original (incluye salario + carga prestacional + beneficios). Acceso solo admin/superadmin.';
+  COMMENT ON COLUMN employee_costs.cost_usd IS
+    'PII:high — gross_cost convertido a USD usando exchange_rate_used. Para currency=USD se setea igual a gross_cost.';
+  COMMENT ON COLUMN employee_costs.exchange_rate_used IS
+    'Snapshot de la tasa al momento del cálculo. Si exchange_rates cambia después, este valor NO se actualiza automáticamente — finanzas decide vía POST /api/employee-costs/recalculate-usd/:period.';
+  COMMENT ON COLUMN employee_costs.locked IS
+    'true = período cerrado contablemente. Solo superadmin puede editar/deslockar. Audit log obligatorio en cada lock/unlock.';
+  COMMENT ON COLUMN employee_costs.source IS
+    'Cómo se cargó el dato: manual (form), csv_import (bulk preview/commit), copy_from_prev (acción "Copiar mes anterior"), payroll_sync (futura integración Giitic).';
+
+  -- Deprecación de columnas en employees (no se borran — preserva schema
+  -- existente, pero quedan NULL forever para nuevos empleados; la fuente
+  -- de verdad es employee_costs).
+  COMMENT ON COLUMN employees.company_monthly_cost IS
+    'DEPRECATED 2026-04: usar employee_costs.gross_cost. Esta columna queda NULL para nuevos empleados. Se mantiene en schema sólo por compatibilidad con datos legacy.';
+  COMMENT ON COLUMN employees.hourly_cost IS
+    'DEPRECATED 2026-04: usar employee_costs (cost_usd / horas_mes_estimadas) para derivar hourly. Esta columna queda NULL.';
+  COMMENT ON COLUMN employees.cost_currency IS
+    'DEPRECATED 2026-04: la moneda vive en employee_costs.currency por mes (puede variar).';
+  COMMENT ON COLUMN employees.cost_updated_at IS
+    'DEPRECATED 2026-04: usar employee_costs.updated_at del último período.';
+  COMMENT ON COLUMN employees.cost_updated_by IS
+    'DEPRECATED 2026-04: usar employee_costs.updated_by del último período.';
 `;
 
 /* ==================================================================

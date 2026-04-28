@@ -44,6 +44,7 @@ app.use('/api/squads',            _stubs.squads);
 app.use('/api/events',            _stubs.events);
 app.use('/api/notifications',     require('./routes/notifications')); // ✅ In-app notifications
 app.use('/api/ai-interactions',   require('./routes/ai_interactions')); // ✅ AI agent log + decision feedback
+app.use('/api/employee-costs',    require('./routes/employee_costs')); // ✅ Employee Costs (admin-only PII)
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.
