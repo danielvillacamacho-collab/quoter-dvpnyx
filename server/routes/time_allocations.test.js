@@ -99,10 +99,24 @@ describe('GET /api/time-allocations', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns 404 if user has no employee linked', async () => {
+  it('returns 404 if user has no employee linked (member role)', async () => {
     queryQueue.push({ rows: [] }); // no employee for user
     const res = await client.call('GET', '/api/time-allocations?week_start=2026-04-27');
     expect(res.status).toBe(404);
+    expect(res.body.code).toBe('no_employee_for_user');
+  });
+
+  it('admin without employee row receives 200 with employee picker (CEO use case)', async () => {
+    mockUser = { id: 'u-ceo', role: 'superadmin', name: 'Daniel CEO' };
+    queryQueue.push({ rows: [] }); // resolveEmployee returns no employee for the user
+    queryQueue.push({ rows: [
+      { id: 'e1', name: 'Laura', user_id: 'u1', email: 'laura@dvp.com' },
+      { id: 'e2', name: 'Pablo', user_id: 'u2', email: 'pablo@dvp.com' },
+    ] });
+    const res = await client.call('GET', '/api/time-allocations?week_start=2026-04-27');
+    expect(res.status).toBe(200);
+    expect(res.body.requires_employee_pick).toBe(true);
+    expect(res.body.available_employees).toHaveLength(2);
   });
 
   it('returns active assignments + allocations + summary', async () => {
