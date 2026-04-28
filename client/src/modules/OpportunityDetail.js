@@ -76,10 +76,16 @@ export default function OpportunityDetail() {
       const idx = Number(pick) - 1;
       if (!Number.isFinite(idx) || !winning[idx]) return;
       await doTransition({ new_status: 'won', winning_quotation_id: winning[idx].id });
-      // Prompt for contract creation
       // eslint-disable-next-line no-alert
-      if (window.confirm('¡Oportunidad ganada! ¿Crear un contrato desde esta oportunidad ahora?')) {
-        nav(`/contracts?client_id=${opp.client?.id || opp.client_id}&opportunity_id=${opp.id}&winning_quotation_id=${winning[idx].id}`);
+      if (window.confirm('¡Oportunidad ganada! ¿Crear un contrato desde esta cotización ahora? (un click — luego puedes ajustar los detalles)')) {
+        try {
+          const c = await apiPost(`/api/contracts/from-quotation/${winning[idx].id}`, {});
+          if (c && c.id) nav(`/contracts/${c.id}`);
+        } catch (e) {
+          // eslint-disable-next-line no-alert
+          alert('No se pudo crear el contrato automáticamente: ' + (e.message || 'error desconocido') + '\n\nTe llevamos al formulario manual.');
+          nav(`/contracts?client_id=${opp.client?.id || opp.client_id}&opportunity_id=${opp.id}&winning_quotation_id=${winning[idx].id}`);
+        }
       }
       return;
     }
@@ -153,6 +159,26 @@ export default function OpportunityDetail() {
             {' · '}
             <Link to={`/contracts?opportunity_id=${opp.id}`} style={s.link}>Ver contratos asociados →</Link>
           </div>
+          {opp.winning_quotation_id && (
+            <button
+              type="button"
+              style={{ ...s.btn('var(--purple-dark)'), marginTop: 10 }}
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const c = await apiPost(`/api/contracts/from-quotation/${opp.winning_quotation_id}`, {});
+                  if (c && c.id) nav(`/contracts/${c.id}`);
+                } catch (e) {
+                  // eslint-disable-next-line no-alert
+                  alert('No se pudo crear el contrato: ' + (e.message || 'error'));
+                } finally { setBusy(false); }
+              }}
+              aria-label="Convertir cotización ganadora en contrato"
+            >
+              📄 Crear contrato desde cotización ganadora
+            </button>
+          )}
         </div>
       )}
 

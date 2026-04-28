@@ -51,15 +51,9 @@ const EMPLOYEE_NAME_EXPR = `(first_name || ' ' || last_name) AS name`;
 
 async function resolveEmployee(req, requestedEmployeeId) {
   const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+  const isLead  = req.user.role === 'lead';
   if (requestedEmployeeId) {
-    if (!isAdmin) {
-      // Verificar que el empleado solicitado coincide con el caller.
-      const { rows } = await pool.query(
-        `SELECT id FROM employees WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`,
-        [requestedEmployeeId, req.user.id],
-      );
-      if (!rows.length) return { error: 'forbidden' };
-    } else {
+    if (isAdmin) {
       const { rows } = await pool.query(
         `SELECT id, ${EMPLOYEE_NAME_EXPR} FROM employees WHERE id=$1 AND deleted_at IS NULL`,
         [requestedEmployeeId],
@@ -67,10 +61,25 @@ async function resolveEmployee(req, requestedEmployeeId) {
       if (!rows.length) return { error: 'not_found' };
       return { employee: rows[0] };
     }
+    if (isLead) {
+      // Lead: puede ver al solicitado si (a) es él mismo, o (b) lo tiene
+      // como reporte directo (employees.manager_user_id = caller).
+      const { rows } = await pool.query(
+        `SELECT id, ${EMPLOYEE_NAME_EXPR} FROM employees
+          WHERE id=$1 AND deleted_at IS NULL
+            AND (user_id=$2 OR manager_user_id=$2)`,
+        [requestedEmployeeId, req.user.id],
+      );
+      if (!rows.length) return { error: 'forbidden' };
+      return { employee: rows[0] };
+    }
+    // Member u otro: sólo a sí mismo.
     const { rows } = await pool.query(
-      `SELECT id, ${EMPLOYEE_NAME_EXPR} FROM employees WHERE id=$1 AND deleted_at IS NULL`,
-      [requestedEmployeeId],
+      `SELECT id, ${EMPLOYEE_NAME_EXPR} FROM employees
+        WHERE id=$1 AND user_id=$2 AND deleted_at IS NULL`,
+      [requestedEmployeeId, req.user.id],
     );
+    if (!rows.length) return { error: 'forbidden' };
     return { employee: rows[0] };
   }
   // Default: derive from req.user.
@@ -80,6 +89,41 @@ async function resolveEmployee(req, requestedEmployeeId) {
   );
   if (!rows.length) return { error: 'no_employee_for_user' };
   return { employee: rows[0] };
+}
+
+/**
+ * Para leads sin employees row (manager puro): devolvemos picker con sus
+ * direct reports. Para admin sin employees: picker global. Para member:
+ * 404. La GET handler invoca esto cuando resolveEmployee devuelve
+ * 'no_employee_for_user'.
+ */
+async function loadCandidatesForRole(req) {
+  const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+  const isLead  = req.user.role === 'lead';
+  if (isAdmin) {
+    const { rows } = await pool.query(
+      `SELECT e.id, (e.first_name || ' ' || e.last_name) AS name, e.user_id, u.email
+         FROM employees e
+         LEFT JOIN users u ON u.id = e.user_id
+        WHERE e.deleted_at IS NULL
+        ORDER BY e.first_name ASC, e.last_name ASC
+        LIMIT 500`
+    );
+    return rows;
+  }
+  if (isLead) {
+    const { rows } = await pool.query(
+      `SELECT e.id, (e.first_name || ' ' || e.last_name) AS name, e.user_id, u.email
+         FROM employees e
+         LEFT JOIN users u ON u.id = e.user_id
+        WHERE e.deleted_at IS NULL
+          AND e.manager_user_id = $1
+        ORDER BY e.first_name ASC, e.last_name ASC`,
+      [req.user.id]
+    );
+    return rows;
+  }
+  return [];
 }
 
 router.get('/', async (req, res) => {
@@ -95,23 +139,19 @@ router.get('/', async (req, res) => {
     if (error === 'forbidden') return res.status(403).json({ error: 'No puedes ver allocations de otro empleado' });
     if (error === 'not_found') return res.status(404).json({ error: 'Empleado no encontrado' });
     if (error === 'no_employee_for_user') {
-      // Admin/superadmin sin employees row (caso CEO etc.): devolvemos 200
-      // con la lista de empleados disponibles para que la UI muestre un
-      // picker. Para non-admin, sí es un error real.
-      if (isAdmin) {
-        const { rows: candidates } = await pool.query(
-          `SELECT e.id, (e.first_name || ' ' || e.last_name) AS name, e.user_id, u.email
-             FROM employees e
-             LEFT JOIN users u ON u.id = e.user_id
-            WHERE e.deleted_at IS NULL
-            ORDER BY e.first_name ASC, e.last_name ASC
-            LIMIT 500`
-        );
+      // Admin/superadmin/lead sin employees row: devolvemos 200 con la
+      // lista de candidatos para que la UI muestre un picker.
+      // Admin: ve a todos. Lead: sólo a sus reportes directos.
+      const isLead = req.user.role === 'lead';
+      if (isAdmin || isLead) {
+        const candidates = await loadCandidatesForRole(req);
         return res.json({
           requires_employee_pick: true,
           available_employees: candidates,
           week_start_date: monday,
-          message: 'Tu usuario no tiene un empleado vinculado. Selecciona uno para ver su tiempo.',
+          message: isLead
+            ? 'Eres líder de equipo. Selecciona uno de tus reportes directos para ver/editar su tiempo.'
+            : 'Tu usuario no tiene un empleado vinculado. Selecciona uno para ver su tiempo.',
         });
       }
       return res.status(404).json({
