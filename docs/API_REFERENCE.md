@@ -508,6 +508,27 @@ Mismo body que preview. **Atómico**: si hay cualquier error, ningún cambio se 
 ### `POST /api/employee-costs/copy-from-previous` 🔒 admin
 Body: `{ period* }`. Copia rows del período N-1 a N. Skip empleados ya en N (no sobreescribe) y empleados no activos en N. Marca `source='copy_from_prev'`. Recalcula FX con tasa del nuevo período.
 
+### `POST /api/employee-costs/project-to-future` 🔒 admin
+Body: `{ base_period?, months_ahead*, growth_pct?, dry_run? }`.
+- `base_period` opcional — default = último período con costos en la DB.
+- `months_ahead` 1..12.
+- `growth_pct` -50..200, default 0. Crecimiento anual repartido mensualmente vía `(1+r)^(1/12)`.
+- `dry_run` true → preview con `details` sin escribir.
+
+Comportamiento:
+- **NO sobrescribe** rows con `source != 'projected'` (manuales/copy ganan).
+- **NO toca** rows `locked`.
+- **SÍ actualiza** rows existentes con `source='projected'` (idempotente).
+- Skip empleados terminados o no activos en el período destino.
+- Recalcula FX con la tasa del período destino.
+- Marca rows nuevos con `source='projected'`.
+
+Errors:
+- 400 con `code:'no_base_period'` si la DB está vacía y no se mandó `base_period`.
+- 400 con `code:'base_period_empty'` si el `base_period` indicado no tiene rows.
+
+Response: `{ base_period, target_periods, months_ahead, growth_pct, dry_run, created, updated, would_create, would_update, skipped_existing, skipped_locked, skipped_inactive, warnings, details? }`. `details` solo en dry_run.
+
 ### `POST /api/employee-costs/lock/:period` 🔒 admin
 Marca todos los rows del período como `locked=true`. Idempotente. Auditado.
 

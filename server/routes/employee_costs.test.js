@@ -456,6 +456,179 @@ describe('POST /api/employee-costs/recalculate-usd/:period', () => {
   });
 });
 
+describe('POST /api/employee-costs/project-to-future', () => {
+  it('rechaza months_ahead fuera de rango', async () => {
+    let res = await client.call('POST', '/api/employee-costs/project-to-future', { months_ahead: 0 });
+    expect(res.status).toBe(400);
+    res = await client.call('POST', '/api/employee-costs/project-to-future', { months_ahead: 13 });
+    expect(res.status).toBe(400);
+    res = await client.call('POST', '/api/employee-costs/project-to-future', { months_ahead: 'foo' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rechaza growth_pct fuera de rango', async () => {
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      months_ahead: 3, growth_pct: 500,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('400 con code:no_base_period si la DB está vacía y no se manda base', async () => {
+    queryQueue.push({ rows: [] }); // SELECT period DESC LIMIT 1
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', { months_ahead: 3 });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('no_base_period');
+  });
+
+  it('400 con code:base_period_empty si el base elegido no tiene rows', async () => {
+    queryQueue.push({ rows: [] }); // baseCosts vacío para 202602
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      base_period: '202602', months_ahead: 3,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('base_period_empty');
+  });
+
+  it('dry_run no escribe — devuelve preview', async () => {
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202604', currency: 'USD', gross_cost: 5000, cost_usd: 5000, exchange_rate_used: 1, locked: false, source: 'manual' },
+    ] }); // baseCosts
+    queryQueue.push({ rows: [
+      { id: UUID_E, start_date: new Date('2025-01-01'), end_date: null, status: 'active' },
+    ] }); // emps
+    queryQueue.push({ rows: [] }); // existingFuture
+    // No FX query (USD only).
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      base_period: '202604', months_ahead: 3, dry_run: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.dry_run).toBe(true);
+    expect(res.body.target_periods).toEqual(['202605', '202606', '202607']);
+    expect(res.body.would_create).toBe(3);
+    expect(res.body.created).toBe(0); // dry-run: no escribió
+    expect(res.body.details).toHaveLength(3);
+    // Sin growth: gross debe ser idéntico al base.
+    res.body.details.forEach((d) => {
+      expect(d.gross_cost).toBe(5000);
+    });
+  });
+
+  it('aplica growth_pct anual repartido mensualmente', async () => {
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202604', currency: 'USD', gross_cost: 1000, cost_usd: 1000, exchange_rate_used: 1, locked: false, source: 'manual' },
+    ] });
+    queryQueue.push({ rows: [
+      { id: UUID_E, start_date: new Date('2025-01-01'), end_date: null, status: 'active' },
+    ] });
+    queryQueue.push({ rows: [] });
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      base_period: '202604', months_ahead: 12, growth_pct: 12, dry_run: true,
+    });
+    expect(res.status).toBe(200);
+    // Mes 12 (período 202704): 1000 * 1.12 ≈ 1120 (con +12%/año split mensual).
+    const lastMonth = res.body.details[res.body.details.length - 1];
+    expect(lastMonth.gross_cost).toBeGreaterThan(1115);
+    expect(lastMonth.gross_cost).toBeLessThan(1125);
+    // Mes 1 (período 202605): apenas 1% sobre base.
+    const firstMonth = res.body.details.find((d) => d.period === '202605');
+    expect(firstMonth.gross_cost).toBeGreaterThan(1009);
+    expect(firstMonth.gross_cost).toBeLessThan(1011);
+  });
+
+  it('NO sobreescribe rows con source != projected (manual override gana)', async () => {
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202604', currency: 'USD', gross_cost: 1000, cost_usd: 1000, exchange_rate_used: 1, locked: false, source: 'manual' },
+    ] });
+    queryQueue.push({ rows: [
+      { id: UUID_E, start_date: new Date('2025-01-01'), end_date: null, status: 'active' },
+    ] });
+    // Existing future: ya hay un row 'manual' en 202605.
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202605', locked: false, source: 'manual' },
+    ] });
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      base_period: '202604', months_ahead: 3, dry_run: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.skipped_existing).toBe(1);
+    expect(res.body.would_create).toBe(2); // sólo 2 períodos (202606, 202607)
+  });
+
+  it('NO toca rows locked (incluso si source=projected)', async () => {
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202604', currency: 'USD', gross_cost: 1000, cost_usd: 1000, exchange_rate_used: 1, locked: false, source: 'manual' },
+    ] });
+    queryQueue.push({ rows: [
+      { id: UUID_E, start_date: new Date('2025-01-01'), end_date: null, status: 'active' },
+    ] });
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202605', locked: true, source: 'projected' },
+    ] });
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      base_period: '202604', months_ahead: 3, dry_run: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.skipped_locked).toBe(1);
+    expect(res.body.would_create).toBe(2);
+  });
+
+  it('SI sobreescribe rows con source=projected si no están locked (idempotente)', async () => {
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202604', currency: 'USD', gross_cost: 1000, cost_usd: 1000, exchange_rate_used: 1, locked: false, source: 'manual' },
+    ] });
+    queryQueue.push({ rows: [
+      { id: UUID_E, start_date: new Date('2025-01-01'), end_date: null, status: 'active' },
+    ] });
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202605', locked: false, source: 'projected' },
+    ] });
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      base_period: '202604', months_ahead: 3, dry_run: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.would_update).toBe(1); // 202605
+    expect(res.body.would_create).toBe(2); // 202606, 202607
+  });
+
+  it('skip empleados terminados antes del período destino', async () => {
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202604', currency: 'USD', gross_cost: 1000, cost_usd: 1000, exchange_rate_used: 1, locked: false, source: 'manual' },
+    ] });
+    queryQueue.push({ rows: [
+      // empleado terminado en mayo: 202605 OK, 202606+ inactivo.
+      { id: UUID_E, start_date: new Date('2025-01-01'), end_date: new Date('2026-05-15'), status: 'terminated' },
+    ] });
+    queryQueue.push({ rows: [] });
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      base_period: '202604', months_ahead: 4, dry_run: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.would_create).toBe(1); // sólo 202605
+    expect(res.body.skipped_inactive).toBe(3); // 202606, 202607, 202608
+  });
+
+  it('commit real (no dry-run) ejecuta INSERTs/UPDATEs', async () => {
+    queryQueue.push({ rows: [
+      { employee_id: UUID_E, period: '202604', currency: 'USD', gross_cost: 5000, cost_usd: 5000, exchange_rate_used: 1, locked: false, source: 'manual' },
+    ] });
+    queryQueue.push({ rows: [
+      { id: UUID_E, start_date: new Date('2025-01-01'), end_date: null, status: 'active' },
+    ] });
+    queryQueue.push({ rows: [] });
+    // Sin FX.
+    // 2 INSERTs (no enqueue results para INSERT-without-RETURNING; las control queries son ignored).
+    queryQueue.push({ rows: [] }); // INSERT 202605
+    queryQueue.push({ rows: [] }); // INSERT 202606
+    const res = await client.call('POST', '/api/employee-costs/project-to-future', {
+      base_period: '202604', months_ahead: 2,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(2);
+    expect(res.body.updated).toBe(0);
+    expect(res.body.dry_run).toBe(false);
+  });
+});
+
 describe('GET /api/employee-costs/employee/:employeeId', () => {
   it('rechaza employeeId no UUID', async () => {
     const res = await client.call('GET', '/api/employee-costs/employee/foo');

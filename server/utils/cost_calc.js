@@ -31,13 +31,42 @@ function validatePeriod(input) {
 
 /** Devuelve el período anterior. '202604' → '202603', '202601' → '202512'. */
 function previousPeriod(yyyymm) {
+  return addMonths(yyyymm, -1);
+}
+
+/**
+ * Suma N meses (puede ser negativo) a un período YYYYMM.
+ * '202611' + 3  → '202702'
+ * '202601' + -2 → '202511'
+ * Devuelve null si el input es inválido.
+ */
+function addMonths(yyyymm, n) {
   const v = validatePeriod(yyyymm);
   if (!v.ok) return null;
+  const delta = Number(n);
+  if (!Number.isInteger(delta)) return null;
   let year = parseInt(v.period.slice(0, 4), 10);
-  let month = parseInt(v.period.slice(4, 6), 10);
-  month -= 1;
-  if (month === 0) { month = 12; year -= 1; }
+  let month = parseInt(v.period.slice(4, 6), 10) + delta;
+  // Normalizar mes a rango 1..12, ajustando year.
+  while (month <= 0) { month += 12; year -= 1; }
+  while (month > 12) { month -= 12; year += 1; }
   return `${year}${String(month).padStart(2, '0')}`;
+}
+
+/**
+ * Genera lista de N períodos consecutivos hacia adelante desde `start`
+ * (inclusivo). Si N=3 y start='202604' → ['202604','202605','202606'].
+ */
+function periodsForward(start, count) {
+  const v = validatePeriod(start);
+  if (!v.ok || !Number.isInteger(count) || count < 1) return [];
+  const out = [];
+  let cur = v.period;
+  for (let i = 0; i < count; i++) {
+    out.push(cur);
+    cur = addMonths(cur, 1);
+  }
+  return out;
 }
 
 /** Comparar períodos lexicográficamente (funciona porque YYYYMM zero-padded). */
@@ -186,6 +215,8 @@ module.exports = {
   PERIOD_RE,
   validatePeriod,
   previousPeriod,
+  addMonths,
+  periodsForward,
   periodLessThan,
   periodLessOrEqual,
   currentPeriod,

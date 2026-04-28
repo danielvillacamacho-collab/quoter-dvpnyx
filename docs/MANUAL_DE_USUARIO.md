@@ -806,6 +806,13 @@ Esta es la vista que finanzas usa cada mes para cargar los costos de todo el equ
 
 **Otros botones:**
 - **🔄 Recalcular USD**: si cambiaste la tasa de cambio del período después de cargar costos, este botón recalcula los USD de los costos abiertos (los cerrados no se tocan).
+- **📈 Proyectar a futuro**: abre un modal para crear costos automáticamente en los próximos meses (3, 6, 9 ó 12). Útil para presupuestar el gasto del semestre/año sin cargar mes por mes.
+   - Toma como base el último período con costos (o uno que elijas).
+   - Permite aplicar un crecimiento anual opcional (ej: +5% YoY) que se reparte mensualmente.
+   - **Respeta cargas manuales**: si finanzas ya cargó un mes específico a mano, la proyección no lo toca.
+   - **Respeta períodos cerrados**: rows locked no se modifican.
+   - **Reproyectable**: se puede correr varias veces; sólo crea/actualiza rows con source `projected`.
+   - Las filas proyectadas aparecen con badge violeta **📈 Proyectado** para distinguirlas; se pueden editar manualmente y entonces dejan de ser "proyectadas".
 - **🔓 Reabrir período**: solo superadmin. Revierte el cierre.
 - **⤓ Importar CSV**: carga masiva con preview + commit. Columnas: `employee_id, currency, gross_cost, notes`.
 

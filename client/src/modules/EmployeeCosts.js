@@ -57,6 +57,8 @@ export default function EmployeeCosts() {
   const [drafts, setDrafts] = useState({});
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
+  // Modal de proyección a futuro.
+  const [projectModal, setProjectModal] = useState(null); // null | { monthsAhead, growthPct, basePeriod, preview }
 
   const load = useCallback(async () => {
     if (!isAdmin) return;
@@ -182,6 +184,47 @@ export default function EmployeeCosts() {
     } finally { setBusy(false); }
   };
 
+  /* Proyección a futuro: 2 fases — preview, luego apply. */
+  const openProjectModal = () => {
+    setProjectModal({ monthsAhead: 6, growthPct: 0, basePeriod: '', preview: null, err: '' });
+  };
+  const updateProjectField = (k, v) => setProjectModal((m) => ({ ...m, [k]: v, preview: null, err: '' }));
+  const projectPreview = async () => {
+    if (!projectModal) return;
+    setBusy(true);
+    try {
+      const result = await apiPost('/api/employee-costs/project-to-future', {
+        base_period: projectModal.basePeriod || undefined,
+        months_ahead: Number(projectModal.monthsAhead),
+        growth_pct: Number(projectModal.growthPct) || 0,
+        dry_run: true,
+      });
+      setProjectModal((m) => ({ ...m, preview: result, err: '' }));
+    } catch (e) {
+      setProjectModal((m) => ({ ...m, err: e.message || 'Error', preview: null }));
+    } finally { setBusy(false); }
+  };
+  const projectApply = async () => {
+    if (!projectModal?.preview) return;
+    setBusy(true);
+    try {
+      const result = await apiPost('/api/employee-costs/project-to-future', {
+        base_period: projectModal.preview.base_period,
+        months_ahead: projectModal.preview.months_ahead,
+        growth_pct: projectModal.preview.growth_pct,
+        dry_run: false,
+      });
+      setToast({
+        ok: true,
+        msg: `✓ Proyección aplicada: ${result.created} creados, ${result.updated} actualizados, ${result.skipped_existing} preservados (manuales), ${result.skipped_locked} cerrados, ${result.skipped_inactive} inactivos.`,
+      });
+      setProjectModal(null);
+      await load();
+    } catch (e) {
+      setProjectModal((m) => ({ ...m, err: e.message }));
+    } finally { setBusy(false); }
+  };
+
   const periodOptions = useMemo(() => recentPeriods(18), []);
   const withoutCostList = useMemo(
     () => data.data.filter((r) => !r.cost && !drafts[r.employee.id]),
@@ -278,6 +321,9 @@ export default function EmployeeCosts() {
         <button type="button" style={s.btnOutline} onClick={recalculate} disabled={busy}>
           🔄 Recalcular USD
         </button>
+        <button type="button" style={s.btnOutline} onClick={openProjectModal} disabled={busy} title="Proyectar el último costo conocido a los próximos meses">
+          📈 Proyectar a futuro
+        </button>
         <button type="button" style={s.btnOutline} onClick={lockPeriod} disabled={busy} title="Marca todos los costos como cerrados">
           🔒 Cerrar período
         </button>
@@ -348,6 +394,8 @@ export default function EmployeeCosts() {
                           {row.employee.first_name} {row.employee.last_name}
                         </Link>
                         {row.is_new && <span style={{ marginLeft: 6, fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#dbeafe', color: '#1e40af' }}>Nuevo</span>}
+                        {row.cost?.source === 'projected' && <span style={{ marginLeft: 6, fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#ede9fe', color: '#6b21a8' }} title="Costo proyectado automáticamente — edítalo si querés sobreescribir">📈 Proyectado</span>}
+                        {row.cost?.source === 'copy_from_prev' && <span style={{ marginLeft: 6, fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#e0f2fe', color: '#075985' }}>📋 Copiado</span>}
                         {dirty && <span style={{ marginLeft: 6, fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#fef3c7', color: '#92400e' }}>Sin guardar</span>}
                       </td>
                       <td style={{ ...s.td, fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}>{row.employee.level}</td>
@@ -409,6 +457,141 @@ export default function EmployeeCosts() {
           </div>
         )}
       </div>
+
+      {/* Modal de proyección a futuro */}
+      {projectModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Proyectar costos a futuro"
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200,
+          }}
+          onClick={() => setProjectModal(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 12, padding: 24, width: 640,
+              maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto',
+            }}
+          >
+            <h2 style={{ margin: 0, color: 'var(--purple-dark)', fontFamily: 'Montserrat' }}>
+              📈 Proyectar costos a futuro
+            </h2>
+            <p style={{ fontSize: 13, color: 'var(--text-light)', marginTop: 6 }}>
+              Toma el último costo conocido de cada empleado y crea entradas en los próximos meses.
+              No sobrescribe entradas manuales ni períodos cerrados. Reproyectable cuantas veces sea necesario.
+            </p>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
+              <div>
+                <label style={s.label}>Período base (opcional)</label>
+                <select
+                  style={s.input}
+                  value={projectModal.basePeriod}
+                  onChange={(e) => updateProjectField('basePeriod', e.target.value)}
+                  aria-label="Período base"
+                >
+                  <option value="">— Último período con costos (auto) —</option>
+                  {periodOptions.map((p) => <option key={p} value={p}>{formatPeriod(p)}</option>)}
+                </select>
+                <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
+                  Si lo dejas vacío, el sistema usa el último período con datos.
+                </div>
+              </div>
+              <div>
+                <label style={s.label}>Meses a proyectar *</label>
+                <select
+                  style={s.input}
+                  value={projectModal.monthsAhead}
+                  onChange={(e) => updateProjectField('monthsAhead', e.target.value)}
+                  aria-label="Meses a proyectar"
+                >
+                  <option value={3}>3 meses</option>
+                  <option value={6}>6 meses</option>
+                  <option value={9}>9 meses</option>
+                  <option value={12}>12 meses</option>
+                </select>
+              </div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <label style={s.label}>Crecimiento anual % (opcional)</label>
+                <input
+                  type="number"
+                  min="-50"
+                  max="200"
+                  step="0.5"
+                  style={s.input}
+                  value={projectModal.growthPct}
+                  onChange={(e) => updateProjectField('growthPct', e.target.value)}
+                  placeholder="0 = mantener costo igual"
+                  aria-label="Crecimiento anual"
+                />
+                <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
+                  Ej: 5 → +5% por año, repartido mensualmente. 0 → costo plano sin incremento.
+                </div>
+              </div>
+            </div>
+
+            {projectModal.err && (
+              <div style={{ marginTop: 12, color: 'var(--danger)', fontSize: 13 }}>{projectModal.err}</div>
+            )}
+
+            {projectModal.preview && (
+              <div style={{ marginTop: 16, background: 'var(--ds-bg-soft, #fafafa)', padding: 12, borderRadius: 8, fontSize: 13 }}>
+                <strong>Preview</strong> (no se ha aplicado nada todavía):
+                <ul style={{ marginTop: 8, paddingLeft: 20 }}>
+                  <li>Período base: <strong>{formatPeriod(projectModal.preview.base_period)}</strong></li>
+                  <li>Períodos destino: {projectModal.preview.target_periods.map(formatPeriod).join(', ')}</li>
+                  <li>Va a <strong>crear</strong>: {projectModal.preview.would_create} rows nuevos</li>
+                  <li>Va a <strong>actualizar</strong>: {projectModal.preview.would_update} proyecciones existentes</li>
+                  {projectModal.preview.skipped_existing > 0 && (
+                    <li style={{ color: 'var(--text-light)' }}>
+                      Preserva {projectModal.preview.skipped_existing} entradas manuales (no se tocan)
+                    </li>
+                  )}
+                  {projectModal.preview.skipped_locked > 0 && (
+                    <li style={{ color: 'var(--text-light)' }}>
+                      Salta {projectModal.preview.skipped_locked} rows en períodos cerrados
+                    </li>
+                  )}
+                  {projectModal.preview.skipped_inactive > 0 && (
+                    <li style={{ color: 'var(--text-light)' }}>
+                      Salta {projectModal.preview.skipped_inactive} (empleado terminado/inactivo en ese mes)
+                    </li>
+                  )}
+                  {projectModal.preview.warnings?.length > 0 && (
+                    <li style={{ color: 'var(--orange, #ca8a04)' }}>
+                      ⚠ {projectModal.preview.warnings.length} warnings de FX (tasa fallback o faltante)
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
+              <button type="button" style={s.btnOutline} onClick={() => setProjectModal(null)} disabled={busy}>
+                Cancelar
+              </button>
+              {!projectModal.preview ? (
+                <button type="button" style={s.btn()} onClick={projectPreview} disabled={busy}>
+                  {busy ? 'Calculando…' : 'Calcular preview'}
+                </button>
+              ) : (
+                <>
+                  <button type="button" style={s.btnOutline} onClick={() => setProjectModal((m) => ({ ...m, preview: null }))} disabled={busy}>
+                    Ajustar parámetros
+                  </button>
+                  <button type="button" style={s.btn('var(--ds-ok, #16a34a)')} onClick={projectApply} disabled={busy || (projectModal.preview.would_create + projectModal.preview.would_update === 0)}>
+                    {busy ? 'Aplicando…' : `Aplicar (${projectModal.preview.would_create + projectModal.preview.would_update} rows)`}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
