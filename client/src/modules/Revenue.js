@@ -25,6 +25,19 @@ import { apiGet, apiPut, apiPost } from '../utils/apiV2';
 
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`);
 
+// % cumplimiento real vs plan. null si no se puede computar (plan=0 o nulls).
+const cumplimientoPct = (real, plan) => {
+  if (real == null || plan == null || plan === 0) return null;
+  return real / plan;
+};
+const cumplimientoColor = (ratio) => {
+  if (ratio == null) return 'var(--text-light)';
+  if (ratio >= 1) return 'var(--success)';
+  if (ratio >= 0.8) return 'var(--warning)';
+  return 'var(--danger)';
+};
+const fmtCumplPct = (ratio) => (ratio == null ? '—' : `${(ratio * 100).toFixed(0)}%`);
+
 const fmtUSD = (n) => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n)));
 // Formatter generic — usa el código ISO; fallback a USD si Intl no reconoce.
 const fmtMoney = (n, ccy) => {
@@ -278,8 +291,14 @@ export default function Revenue() {
             {data.months.length > 0 && (
               <>
                 {data.months[0] && monthLabel(data.months[0])} → {data.months[data.months.length - 1] && monthLabel(data.months[data.months.length - 1])}
-                {' · '}<strong>Total proyectado: {fmtMoney(data.global_total.projected_amount_display, displayCurrency)}</strong>
-                {' · '}<strong>Real: {fmtMoney(data.global_total.real_amount_display, displayCurrency)}</strong>
+                {' · '}<strong style={{ fontSize: 14 }}>Total real: {fmtMoney(data.global_total.real_amount_display, displayCurrency)}</strong>
+                {' · '}<span style={{ color: 'var(--text-light)' }}>plan {fmtMoney(data.global_total.projected_amount_display, displayCurrency)}</span>
+                {(() => {
+                  const ratio = cumplimientoPct(data.global_total.real_amount_display, data.global_total.projected_amount_display);
+                  return ratio == null ? null : (
+                    <> · <strong style={{ color: cumplimientoColor(ratio) }}>{fmtCumplPct(ratio)} cumplido</strong></>
+                  );
+                })()}
                 {data.fx_missing && (
                   <span style={{ marginLeft: 8, color: 'var(--warning)' }} title="Hay contratos en monedas sin tasa configurada">
                     ⚠ tasas faltantes
@@ -403,8 +422,18 @@ export default function Revenue() {
                     />
                   ))}
                   <td style={s.rowTotalCell}>
-                    <div>{fmtMoney(r.row_total.projected_amount_display, displayCurrency)}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-light)' }}>real {fmtMoney(r.row_total.real_amount_display, displayCurrency)}</div>
+                    {(() => {
+                      const real = r.row_total.real_amount_display;
+                      const plan = r.row_total.projected_amount_display;
+                      const ratio = cumplimientoPct(real, plan);
+                      return (
+                        <>
+                          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--purple-dark)' }}>{fmtMoney(real, displayCurrency)}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text-light)', fontWeight: 400 }}>plan {fmtMoney(plan, displayCurrency)}</div>
+                          {ratio != null && <div style={{ fontSize: 10, fontWeight: 700, color: cumplimientoColor(ratio) }}>{fmtCumplPct(ratio)}</div>}
+                        </>
+                      );
+                    })()}
                   </td>
                 </tr>
               ))}
@@ -415,17 +444,35 @@ export default function Revenue() {
                   <td style={{ ...s.tdFirst, fontWeight: 700 }}>TOTALES</td>
                   {data.months.map((m) => {
                     const t = data.col_totals[m] || { projected_amount_display: 0, real_amount_display: 0 };
+                    const ratio = cumplimientoPct(t.real_amount_display, t.projected_amount_display);
                     return (
                       <td key={m} style={s.rowTotalCell}>
-                        <div>{fmtMoney(t.projected_amount_display, displayCurrency)}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-light)' }}>real {fmtMoney(t.real_amount_display, displayCurrency)}</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--purple-dark)' }}>{fmtMoney(t.real_amount_display, displayCurrency)}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-light)', fontWeight: 400 }}>plan {fmtMoney(t.projected_amount_display, displayCurrency)}</div>
+                        {ratio != null && <div style={{ fontSize: 10, fontWeight: 700, color: cumplimientoColor(ratio) }}>{fmtCumplPct(ratio)}</div>}
                       </td>
                     );
                   })}
-                  <td style={{ ...s.rowTotalCell, background: 'var(--teal)', color: '#fff' }}>
-                    <div>{fmtMoney(data.global_total.projected_amount_display, displayCurrency)}</div>
-                    <div style={{ fontSize: 10 }}>real {fmtMoney(data.global_total.real_amount_display, displayCurrency)}</div>
-                  </td>
+                  {(() => {
+                    const real = data.global_total.real_amount_display;
+                    const plan = data.global_total.projected_amount_display;
+                    const ratio = cumplimientoPct(real, plan);
+                    return (
+                      <td style={{ ...s.rowTotalCell, background: 'var(--teal)', color: '#fff' }}>
+                        <div style={{ fontSize: 14, fontWeight: 700 }}>{fmtMoney(real, displayCurrency)}</div>
+                        <div style={{ fontSize: 10, opacity: 0.85, fontWeight: 400 }}>plan {fmtMoney(plan, displayCurrency)}</div>
+                        {ratio != null && (
+                          <div style={{
+                            fontSize: 11,
+                            fontWeight: 700,
+                            color: ratio >= 1 ? '#d1fae5' : ratio >= 0.8 ? '#fde68a' : '#fecaca',
+                          }}>
+                            {fmtCumplPct(ratio)} cumplido
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })()}
                 </tr>
               </tfoot>
             )}
