@@ -320,3 +320,82 @@ describe('GET /api/contracts/export.csv', () => {
     expect(res.status).toBe(500);
   });
 });
+
+describe('POST /api/contracts/:id/kick-off — siembra resource_requests desde la cotización ganadora', () => {
+  const mkContract = (overrides = {}) => ({
+    id: 'ct1', name: 'Acme Project', status: 'planned',
+    winning_quotation_id: 'q1',
+    delivery_manager_id: 'u-dm', account_owner_id: 'u-owner', capacity_manager_id: null,
+    ...overrides,
+  });
+
+  it('rechaza si falta kick_off_date o no es ISO', async () => {
+    const res = await client.call('POST', '/api/contracts/ct1/kick-off', { kick_off_date: 'foo' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/kick_off_date/i);
+  });
+
+  it('admin puede invocar aunque no sea DM', async () => {
+    mockCurrentUser = { id: 'u-admin', role: 'admin' };
+    queryQueue.push({ rows: [mkContract()] });        // load contract
+    queryQueue.push({ rows: [] });                     // existing RRs (none)
+    queryQueue.push({ rows: [                           // quotation_lines
+      { id: 'l1', sort_order: 1, specialty: 'Desarrollo', role_title: 'Senior Dev', level: 5, country: 'CO', quantity: 2, duration_months: 6, hours_per_week: 40, phase: null },
+    ] });
+    queryQueue.push({ rows: [                           // areas
+      { id: 1, key: 'development', name: 'Desarrollo' },
+    ] });
+    queryQueue.push({ rows: [{ id: 'rr1', role_title: 'Senior Dev', level: 'L5', quantity: 2, weekly_hours: 40 }] }); // INSERT rr
+    queryQueue.push({ rows: [mkContract({ metadata: { kick_off_date: '2026-05-04' } })] }); // UPDATE contract
+
+    const res = await client.call('POST', '/api/contracts/ct1/kick-off', { kick_off_date: '2026-05-04' });
+    expect(res.status).toBe(201);
+    expect(res.body.kick_off_date).toBe('2026-05-04');
+    expect(res.body.created_requests).toHaveLength(1);
+    expect(res.body.created_requests[0].level).toBe('L5');
+  });
+
+  it('member que NO es DM/owner/cap-manager recibe 403', async () => {
+    mockCurrentUser = { id: 'u-stranger', role: 'member' };
+    queryQueue.push({ rows: [mkContract()] });
+    const res = await client.call('POST', '/api/contracts/ct1/kick-off', { kick_off_date: '2026-05-04' });
+    expect(res.status).toBe(403);
+  });
+
+  it('lead que ES delivery_manager puede invocar', async () => {
+    mockCurrentUser = { id: 'u-dm', role: 'lead' };
+    queryQueue.push({ rows: [mkContract()] });
+    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [
+      { id: 'l1', sort_order: 1, specialty: 'QA', role_title: null, level: 3, country: 'MX', quantity: 1, duration_months: 3, hours_per_week: 20, phase: 'Fase 1' },
+    ] });
+    queryQueue.push({ rows: [{ id: 1, key: 'testing', name: 'Testing' }] });
+    queryQueue.push({ rows: [{ id: 'rr2', role_title: 'QA L3', level: 'L3' }] });
+    queryQueue.push({ rows: [mkContract()] });
+
+    const res = await client.call('POST', '/api/contracts/ct1/kick-off', { kick_off_date: '2026-06-01' });
+    expect(res.status).toBe(201);
+    expect(res.body.created_requests[0].level).toBe('L3');
+  });
+
+  it('contrato sin winning_quotation_id → 400 con code', async () => {
+    queryQueue.push({ rows: [mkContract({ winning_quotation_id: null })] });
+    const res = await client.call('POST', '/api/contracts/ct1/kick-off', { kick_off_date: '2026-05-04' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('no_winning_quotation');
+  });
+
+  it('si ya tiene RRs y no hay force=1 → 409 already_seeded', async () => {
+    queryQueue.push({ rows: [mkContract()] });
+    queryQueue.push({ rows: [{ id: 'rr-prev' }] }); // existing RR
+    const res = await client.call('POST', '/api/contracts/ct1/kick-off', { kick_off_date: '2026-05-04' });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('already_seeded');
+  });
+
+  it('contrato completed/cancelled rechaza', async () => {
+    queryQueue.push({ rows: [mkContract({ status: 'completed' })] });
+    const res = await client.call('POST', '/api/contracts/ct1/kick-off', { kick_off_date: '2026-05-04' });
+    expect(res.status).toBe(400);
+  });
+});
