@@ -43,6 +43,12 @@ function mondayOf(dateIso) {
   return d.toISOString().slice(0, 10);
 }
 
+// employees no tiene una columna `name` plana — tiene `first_name` y
+// `last_name`. Concatenamos en SQL para mantener una shape única en el resto
+// del módulo (`employee.name` para mostrar). Bug fix tras 500 reportado en
+// dev al usuario daniel@doublevpartners.com (CEO sin employees row).
+const EMPLOYEE_NAME_EXPR = `(first_name || ' ' || last_name) AS name`;
+
 async function resolveEmployee(req, requestedEmployeeId) {
   const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
   if (requestedEmployeeId) {
@@ -55,21 +61,21 @@ async function resolveEmployee(req, requestedEmployeeId) {
       if (!rows.length) return { error: 'forbidden' };
     } else {
       const { rows } = await pool.query(
-        `SELECT id, name FROM employees WHERE id=$1 AND deleted_at IS NULL`,
+        `SELECT id, ${EMPLOYEE_NAME_EXPR} FROM employees WHERE id=$1 AND deleted_at IS NULL`,
         [requestedEmployeeId],
       );
       if (!rows.length) return { error: 'not_found' };
       return { employee: rows[0] };
     }
     const { rows } = await pool.query(
-      `SELECT id, name FROM employees WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT id, ${EMPLOYEE_NAME_EXPR} FROM employees WHERE id=$1 AND deleted_at IS NULL`,
       [requestedEmployeeId],
     );
     return { employee: rows[0] };
   }
   // Default: derive from req.user.
   const { rows } = await pool.query(
-    `SELECT id, name FROM employees WHERE user_id=$1 AND deleted_at IS NULL`,
+    `SELECT id, ${EMPLOYEE_NAME_EXPR} FROM employees WHERE user_id=$1 AND deleted_at IS NULL`,
     [req.user.id],
   );
   if (!rows.length) return { error: 'no_employee_for_user' };
@@ -94,11 +100,11 @@ router.get('/', async (req, res) => {
       // picker. Para non-admin, sí es un error real.
       if (isAdmin) {
         const { rows: candidates } = await pool.query(
-          `SELECT e.id, e.name, e.user_id, u.email
+          `SELECT e.id, (e.first_name || ' ' || e.last_name) AS name, e.user_id, u.email
              FROM employees e
              LEFT JOIN users u ON u.id = e.user_id
             WHERE e.deleted_at IS NULL
-            ORDER BY e.name ASC
+            ORDER BY e.first_name ASC, e.last_name ASC
             LIMIT 500`
         );
         return res.json({
