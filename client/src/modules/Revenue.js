@@ -26,6 +26,15 @@ import { apiGet, apiPut, apiPost } from '../utils/apiV2';
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`);
 
 const fmtUSD = (n) => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n)));
+// Formatter generic — usa el código ISO; fallback a USD si Intl no reconoce.
+const fmtMoney = (n, ccy) => {
+  if (n == null) return '—';
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: ccy || 'USD', maximumFractionDigits: 0 }).format(Number(n));
+  } catch (_) {
+    return `${ccy || ''} ${Number(n).toLocaleString()}`.trim();
+  }
+};
 const monthLabel = (yyyymm) => {
   const y = yyyymm.slice(0, 4); const m = Number(yyyymm.slice(4));
   const names = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
@@ -77,17 +86,21 @@ const formatPctForInput = (pctFraction) => pctFraction == null
   ? ''
   : Number((Number(pctFraction) * 100).toFixed(2)).toString();
 
-function EditableCell({ cell, contract, yyyymm, onSaved, onCloseMonth }) {
+function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onCloseMonth }) {
   const isClosed = cell?.status === 'closed';
   const isProject = contract?.type === 'project';
   const planExists = cell != null;
   const totalValueUsd = Number(contract?.total_value_usd || 0);
+  const ccyOrig = (contract?.original_currency || 'USD').toUpperCase();
+  const ccyDisplay = (displayCurrency || 'USD').toUpperCase();
+  const showDual = ccyOrig !== ccyDisplay;
+  const fxMissing = !!cell?.fx_missing;
 
-  // Para projects el input es % (string del input). Para no-projects es USD.
-  // Mantenemos el state como string del input que el usuario tipea.
+  // Para projects el input es % (string). Para no-projects es la moneda
+  // original del contrato (no la display). El usuario en COP captura en COP.
   const initialReal = isProject
     ? formatPctForInput(cell?.real_pct)
-    : (cell?.real_usd != null ? String(cell.real_usd) : '');
+    : (cell?.real_amount_original != null ? String(cell.real_amount_original) : '');
   const [real, setReal] = useState(initialReal);
   const [savingField, setSavingField] = useState(null);
   const realInitial = useRef(initialReal);
@@ -95,7 +108,7 @@ function EditableCell({ cell, contract, yyyymm, onSaved, onCloseMonth }) {
   useEffect(() => {
     const nextInit = isProject
       ? formatPctForInput(cell?.real_pct)
-      : (cell?.real_usd != null ? String(cell.real_usd) : '');
+      : (cell?.real_amount_original != null ? String(cell.real_amount_original) : '');
     setReal(nextInit);
     realInitial.current = nextInit;
   }, [cell, isProject]);
@@ -118,27 +131,53 @@ function EditableCell({ cell, contract, yyyymm, onSaved, onCloseMonth }) {
     } finally { setSavingField(null); }
   };
 
-  // USD derivado en vivo cuando el usuario tipea % (sin necesidad de guardar).
-  const liveDerivedUsd = isProject && real !== '' && !isNaN(Number(real))
+  // En la celda vemos:
+  //   - PROY: amount_display (primary) + amount_original (sub) si difieren.
+  //          Para project mostramos también % en la primera línea.
+  //   - REAL: input en moneda original (o % para project) + display amount derivado.
+  const projDisp = cell?.projected_amount_display;
+  const projOrig = cell?.projected_amount_original;
+  const realOrig = cell?.real_amount_original;
+  const realDisp = cell?.real_amount_display;
+
+  // USD/display derivado en vivo cuando el usuario tipea % (project).
+  const liveLocalUsd = isProject && real !== '' && !isNaN(Number(real))
     ? (Number(real) / 100) * totalValueUsd
     : null;
 
   return (
     <td style={{ ...s.td, ...(isClosed ? s.cellClosed : {}) }}>
       <div style={s.cellInner}>
-        {/* PROY read-only: si es project, mostramos % + USD derivado; si no, USD directo. */}
+        {/* PROY read-only */}
         <div>
-          <span style={s.cellLabel}>Proy</span>
+          <span style={s.cellLabel}>Proy {fxMissing && <span title="No hay tasa configurada">⚠</span>}</span>
           <div style={{ ...s.cellInput, color: 'var(--text)', textAlign: 'right', cursor: 'default', padding: '3px 4px' }}>
             {planExists
               ? (isProject
-                  ? <span title={fmtUSD(cell.projected_usd)}>{fmtPct(cell.projected_pct)}<br /><span style={{ fontSize: 9, color: 'var(--text-light)' }}>{fmtUSD(cell.projected_usd)}</span></span>
-                  : fmtUSD(cell.projected_usd))
+                  ? (
+                    <span title={fmtMoney(projOrig, ccyOrig)}>
+                      {fmtPct(cell.projected_pct)}<br />
+                      <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
+                        {fxMissing ? '— sin tasa' : fmtMoney(projDisp, ccyDisplay)}
+                        {showDual && projOrig != null && (
+                          <><br /><span style={{ color: 'var(--text-light)' }}>{fmtMoney(projOrig, ccyOrig)}</span></>
+                        )}
+                      </span>
+                    </span>
+                  )
+                  : (
+                    <span>
+                      {fxMissing ? '— sin tasa' : fmtMoney(projDisp, ccyDisplay)}
+                      {showDual && projOrig != null && (
+                        <><br /><span style={{ fontSize: 9, color: 'var(--text-light)' }}>{fmtMoney(projOrig, ccyOrig)}</span></>
+                      )}
+                    </span>
+                  ))
               : <span style={{ fontSize: 9, color: 'var(--text-light)', fontStyle: 'italic' }}>sin plan</span>}
           </div>
         </div>
         <div>
-          <span style={s.cellLabel}>Real {isProject ? '(%)' : ''}</span>
+          <span style={s.cellLabel}>Real {isProject ? '(%)' : `(${ccyOrig})`}</span>
           <input
             type="number" step="any" inputMode="decimal"
             min="0" max={isProject ? '100' : undefined}
@@ -149,11 +188,15 @@ function EditableCell({ cell, contract, yyyymm, onSaved, onCloseMonth }) {
             onBlur={flushReal}
             placeholder={planExists ? (isProject ? '0' : '—') : 'declara plan'}
             aria-label={`Real ${yyyymm}`}
-            title={!planExists ? 'Declara primero el plan de reconocimiento del contrato' : (isProject ? 'Avance del proyecto este mes (0-100%)' : undefined)}
+            title={!planExists
+              ? 'Declara primero el plan de reconocimiento del contrato'
+              : (isProject ? 'Avance del proyecto este mes (0-100%)' : `Monto real en ${ccyOrig}`)}
           />
-          {isProject && planExists && (
+          {planExists && (
             <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
-              {liveDerivedUsd != null ? fmtUSD(liveDerivedUsd) : (cell.real_usd != null ? fmtUSD(cell.real_usd) : '—')}
+              {isProject
+                ? (liveLocalUsd != null ? fmtMoney(liveLocalUsd, ccyOrig) : (realOrig != null ? fmtMoney(realOrig, ccyOrig) : '—'))
+                : (realDisp != null && showDual ? fmtMoney(realDisp, ccyDisplay) : (fxMissing ? '— sin tasa' : ''))}
             </span>
           )}
         </div>
@@ -176,7 +219,9 @@ export default function Revenue() {
   const [from, setFrom] = useState(() => offsetMonth(todayYYYYMM(), -3));
   const [to, setTo] = useState(() => offsetMonth(todayYYYYMM(), 5));
   const [filters, setFilters] = useState({ type: '', owner_id: '', country: '' });
-  const [data, setData] = useState({ months: [], rows: [], col_totals: {}, global_total: { projected_usd: 0, real_usd: 0 } });
+  // RR-MVP-00.6: moneda en la que el usuario quiere ver totales y celdas.
+  const [displayCurrency, setDisplayCurrency] = useState('USD');
+  const [data, setData] = useState({ months: [], rows: [], col_totals: {}, global_total: { projected_amount_display: 0, real_amount_display: 0 }, display_currency: 'USD' });
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -184,50 +229,21 @@ export default function Revenue() {
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      const qs = new URLSearchParams({ from, to });
+      const qs = new URLSearchParams({ from, to, display_currency: displayCurrency });
       Object.entries(filters).forEach(([k, v]) => { if (v) qs.set(k, v); });
       const result = await apiGet(`/api/revenue?${qs}`);
       setData(result);
     } catch (e) { setError(e.message || 'Error cargando revenue'); }
     finally { setLoading(false); }
-  }, [from, to, filters]);
+  }, [from, to, filters, displayCurrency]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { apiGet('/api/users').then(setUsers).catch(() => {}); }, []);
 
-  const handleCellSaved = (updated) => {
-    setData((prev) => {
-      const next = { ...prev, rows: prev.rows.map((r) => {
-        if (r.contract.id !== updated.contract_id) return r;
-        const prevCell = r.cells[updated.yyyymm] || {};
-        const cells = { ...r.cells, [updated.yyyymm]: {
-          // Mantener el plan (projected_usd / projected_pct) — ahora viene del endpoint /plan, no de la celda.
-          projected_usd: updated.projected_usd != null ? Number(updated.projected_usd) : prevCell.projected_usd ?? 0,
-          projected_pct: updated.projected_pct != null ? Number(updated.projected_pct) : prevCell.projected_pct ?? null,
-          real_usd: updated.real_usd != null ? Number(updated.real_usd) : null,
-          real_pct: updated.real_pct != null ? Number(updated.real_pct) : null,
-          status: updated.status, notes: updated.notes,
-          closed_at: updated.closed_at, closed_by: updated.closed_by,
-          updated_at: updated.updated_at, updated_by: updated.updated_by,
-        } };
-        let row_projected = 0; let row_real = 0;
-        Object.values(cells).forEach((c) => { if (c) { row_projected += c.projected_usd; if (c.real_usd != null) row_real += c.real_usd; } });
-        return { ...r, cells, row_total: { projected_usd: row_projected, real_usd: row_real } };
-      }) };
-      // Recompute col + global
-      next.col_totals = {};
-      next.months.forEach((m) => { next.col_totals[m] = { projected_usd: 0, real_usd: 0 }; });
-      let gp = 0; let gr = 0;
-      next.rows.forEach((r) => next.months.forEach((m) => {
-        const c = r.cells[m]; if (c) {
-          next.col_totals[m].projected_usd += c.projected_usd;
-          if (c.real_usd != null) next.col_totals[m].real_usd += c.real_usd;
-          gp += c.projected_usd; if (c.real_usd != null) gr += c.real_usd;
-        }
-      }));
-      next.global_total = { projected_usd: gp, real_usd: gr };
-      return next;
-    });
+  const handleCellSaved = () => {
+    // RR-MVP-00.6: con FX en juego, recomputar locally es propenso a errores.
+    // Refetch full matrix — el placeholder lo absorbe; eng team optimizará.
+    load();
   };
 
   const closeMonth = async (contractId, yyyymm, realValue, isProject) => {
@@ -262,8 +278,13 @@ export default function Revenue() {
             {data.months.length > 0 && (
               <>
                 {data.months[0] && monthLabel(data.months[0])} → {data.months[data.months.length - 1] && monthLabel(data.months[data.months.length - 1])}
-                {' · '}<strong>Total proyectado: {fmtUSD(data.global_total.projected_usd)}</strong>
-                {' · '}<strong>Real: {fmtUSD(data.global_total.real_usd)}</strong>
+                {' · '}<strong>Total proyectado: {fmtMoney(data.global_total.projected_amount_display, displayCurrency)}</strong>
+                {' · '}<strong>Real: {fmtMoney(data.global_total.real_amount_display, displayCurrency)}</strong>
+                {data.fx_missing && (
+                  <span style={{ marginLeft: 8, color: 'var(--warning)' }} title="Hay contratos en monedas sin tasa configurada">
+                    ⚠ tasas faltantes
+                  </span>
+                )}
               </>
             )}
           </div>
@@ -294,6 +315,18 @@ export default function Revenue() {
             style={{ ...s.inp, width: 150 }}
             aria-label="Mes hasta"
           />
+        </label>
+        <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
+          Moneda
+          <select value={displayCurrency} onChange={(e) => setDisplayCurrency(e.target.value)}
+                  style={{ ...s.inp, width: 90 }} aria-label="Moneda de vista">
+            <option value="USD">USD</option>
+            <option value="COP">COP</option>
+            <option value="MXN">MXN</option>
+            <option value="GTQ">GTQ</option>
+            <option value="EUR">EUR</option>
+            <option value="PEN">PEN</option>
+          </select>
         </label>
         <select value={filters.type} onChange={(e) => setFilter('type', e.target.value)} style={s.inp} aria-label="Tipo">
           <option value="">Todos los tipos</option>
@@ -364,13 +397,14 @@ export default function Revenue() {
                       cell={r.cells[m]}
                       contract={r.contract}
                       yyyymm={m}
+                      displayCurrency={displayCurrency}
                       onSaved={handleCellSaved}
                       onCloseMonth={closeMonth}
                     />
                   ))}
                   <td style={s.rowTotalCell}>
-                    <div>{fmtUSD(r.row_total.projected_usd)}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-light)' }}>real {fmtUSD(r.row_total.real_usd)}</div>
+                    <div>{fmtMoney(r.row_total.projected_amount_display, displayCurrency)}</div>
+                    <div style={{ fontSize: 10, color: 'var(--text-light)' }}>real {fmtMoney(r.row_total.real_amount_display, displayCurrency)}</div>
                   </td>
                 </tr>
               ))}
@@ -380,17 +414,17 @@ export default function Revenue() {
                 <tr style={s.totalRow}>
                   <td style={{ ...s.tdFirst, fontWeight: 700 }}>TOTALES</td>
                   {data.months.map((m) => {
-                    const t = data.col_totals[m] || { projected_usd: 0, real_usd: 0 };
+                    const t = data.col_totals[m] || { projected_amount_display: 0, real_amount_display: 0 };
                     return (
                       <td key={m} style={s.rowTotalCell}>
-                        <div>{fmtUSD(t.projected_usd)}</div>
-                        <div style={{ fontSize: 10, color: 'var(--text-light)' }}>real {fmtUSD(t.real_usd)}</div>
+                        <div>{fmtMoney(t.projected_amount_display, displayCurrency)}</div>
+                        <div style={{ fontSize: 10, color: 'var(--text-light)' }}>real {fmtMoney(t.real_amount_display, displayCurrency)}</div>
                       </td>
                     );
                   })}
                   <td style={{ ...s.rowTotalCell, background: 'var(--teal)', color: '#fff' }}>
-                    <div>{fmtUSD(data.global_total.projected_usd)}</div>
-                    <div style={{ fontSize: 10 }}>real {fmtUSD(data.global_total.real_usd)}</div>
+                    <div>{fmtMoney(data.global_total.projected_amount_display, displayCurrency)}</div>
+                    <div style={{ fontSize: 10 }}>real {fmtMoney(data.global_total.real_amount_display, displayCurrency)}</div>
                   </td>
                 </tr>
               </tfoot>

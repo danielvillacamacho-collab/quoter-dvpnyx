@@ -55,6 +55,7 @@ const ICONS = {
   '/reports':                 BarChart3,
   '/wiki':                    BookOpen,
   '/admin/params':            Settings,
+  '/admin/exchange-rates':    BarChart3,
   '/admin/users':             UserCog,
   '/admin/bulk-import':       Upload,
   '/preferencias':            Palette,
@@ -116,9 +117,10 @@ export function buildGroups(isAdmin) {
   if (isAdmin) {
     groups.push({
       title: 'Configuración', items: [
-        { path: '/admin/params',      label: 'Parámetros'    },
-        { path: '/admin/users',       label: 'Usuarios'      },
-        { path: '/admin/bulk-import', label: 'Carga masiva'  },
+        { path: '/admin/params',         label: 'Parámetros'      },
+        { path: '/admin/exchange-rates', label: 'Tasas de cambio' },
+        { path: '/admin/users',          label: 'Usuarios'        },
+        { path: '/admin/bulk-import',    label: 'Carga masiva'    },
       ],
     });
   }

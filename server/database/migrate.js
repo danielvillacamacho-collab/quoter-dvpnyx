@@ -623,6 +623,26 @@ const V2_ALTERS = `
   ALTER TABLE revenue_periods ADD COLUMN IF NOT EXISTS real_pct NUMERIC(7,4) NULL;
   CREATE INDEX IF NOT EXISTS idx_revenue_periods_yyyymm ON revenue_periods(yyyymm);
   CREATE INDEX IF NOT EXISTS idx_revenue_periods_status ON revenue_periods(status);
+
+  -- RR-MVP-00.6 (Abril 2026): tasas de cambio mensuales tipo "USDCOP".
+  -- Convención: usd_rate = N tal que 1 USD = N <currency>. USD propio NO
+  -- vive en esta tabla — código asume rate=1.0 implícito.
+  -- Para convertir A → B usando rates del mes Y:
+  --     amount_in_USD = amount_in_A / usd_rate(Y, A)   (o = amount_in_A si A=USD)
+  --     amount_in_B   = amount_in_USD × usd_rate(Y, B) (o = amount_in_USD si B=USD)
+  -- Si no hay rate para el período, fallback al último rate disponible para
+  -- esa moneda (LATERAL JOIN en query). El admin gestiona estos rates desde
+  -- /admin/exchange-rates (mismo formato que el Excel).
+  CREATE TABLE IF NOT EXISTS exchange_rates (
+    yyyymm     CHAR(6) NOT NULL CHECK (yyyymm ~ '^[0-9]{6}$'),
+    currency   VARCHAR(3) NOT NULL,
+    usd_rate   NUMERIC(18,8) NOT NULL CHECK (usd_rate > 0),
+    notes      TEXT NULL,
+    updated_by UUID NULL REFERENCES users(id),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (yyyymm, currency)
+  );
+  CREATE INDEX IF NOT EXISTS idx_exchange_rates_currency ON exchange_rates(currency, yyyymm);
 `;
 
 /* ==================================================================

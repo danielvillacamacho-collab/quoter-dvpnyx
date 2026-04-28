@@ -30,6 +30,7 @@ app.use('/api/skills',            require('./routes/skills'));       // ✅ Spri
 app.use('/api/areas',             require('./routes/areas'));        // ✅ Sprint 3 EA-1
 app.use('/api/contracts',         require('./routes/contracts'));    // ✅ Sprint 4 EK-1/EK-2
 app.use('/api/revenue',           require('./routes/revenue'));      // ✅ RR-MVP-00.1 (placeholder, eng team to refactor)
+app.use('/api/admin/exchange-rates', require('./routes/exchange_rates')); // ✅ RR-MVP-00.6 (placeholder)
 app.use('/api/resource-requests', require('./routes/resource_requests')); // ✅ Sprint 4 ER-1/ER-2
 app.use('/api/assignments',       require('./routes/assignments'));  // ✅ Sprint 4 EN-1/EN-2/EN-5
 app.use('/api/capacity',          require('./routes/capacity'));     // ✅ Sprint 6 US-BK-1 (planner)
