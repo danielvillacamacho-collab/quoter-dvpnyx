@@ -457,7 +457,7 @@ Costo empresa mensual real por empleado. Spec original: `spec_costos_empleado.do
 | `exchange_rate_used` | NUMERIC(18,8) NULL | snapshot de la tasa usada (auditoría). NO se actualiza automáticamente cuando cambia exchange_rates |
 | `locked` | BOOLEAN DEFAULT false | true = período cerrado contablemente |
 | `locked_at`, `locked_by` | | quien cerró el período |
-| `source` | VARCHAR(20) | CHECK: `manual` \| `payroll_sync` \| `csv_import` \| `copy_from_prev` |
+| `source` | VARCHAR(20) | CHECK: `manual` \| `payroll_sync` \| `csv_import` \| `copy_from_prev` \| `projected` |
 | `notes` | TEXT NULL | |
 | `created_by`, `updated_by`, `created_at`, `updated_at` | | |
 

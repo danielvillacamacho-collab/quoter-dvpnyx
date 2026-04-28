@@ -740,7 +740,7 @@ const V2_ALTERS = `
     locked_at            TIMESTAMPTZ NULL,
     locked_by            UUID NULL REFERENCES users(id),
     source               VARCHAR(20) NOT NULL DEFAULT 'manual'
-      CHECK (source IN ('manual', 'payroll_sync', 'csv_import', 'copy_from_prev')),
+      CHECK (source IN ('manual', 'payroll_sync', 'csv_import', 'copy_from_prev', 'projected')),
     notes                TEXT NULL,
     created_by           UUID NOT NULL REFERENCES users(id),
     updated_by           UUID NULL REFERENCES users(id),
@@ -780,7 +780,30 @@ const V2_ALTERS = `
   COMMENT ON COLUMN employee_costs.locked IS
     'true = período cerrado contablemente. Solo superadmin puede editar/deslockar. Audit log obligatorio en cada lock/unlock.';
   COMMENT ON COLUMN employee_costs.source IS
-    'Cómo se cargó el dato: manual (form), csv_import (bulk preview/commit), copy_from_prev (acción "Copiar mes anterior"), payroll_sync (futura integración Giitic).';
+    'Cómo se cargó el dato: manual (form), csv_import (bulk preview/commit), copy_from_prev (acción "Copiar mes anterior"), projected (proyección automática hacia el futuro), payroll_sync (futura integración Giitic).';
+
+  -- Idempotente: en DBs creadas con la versión inicial del CHECK (sin
+  -- 'projected'), reescribimos la constraint. Postgres no tiene "ALTER
+  -- CHECK", así que dropeamos y recreamos.
+  DO $$
+  DECLARE
+    cdef text;
+  BEGIN
+    SELECT pg_get_constraintdef(c.oid) INTO cdef
+      FROM pg_constraint c
+      JOIN pg_class t ON t.oid = c.conrelid
+     WHERE t.relname = 'employee_costs' AND c.conname = 'employee_costs_source_check';
+    IF cdef IS NOT NULL AND cdef NOT LIKE '%projected%' THEN
+      ALTER TABLE employee_costs DROP CONSTRAINT employee_costs_source_check;
+    END IF;
+    -- Recrear si fue dropeada o no existe.
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint WHERE conname = 'employee_costs_source_check'
+    ) THEN
+      ALTER TABLE employee_costs ADD CONSTRAINT employee_costs_source_check
+        CHECK (source IN ('manual','payroll_sync','csv_import','copy_from_prev','projected'));
+    END IF;
+  END $$;
 
   -- Deprecación de columnas en employees (no se borran — preserva schema
   -- existente, pero quedan NULL forever para nuevos empleados; la fuente

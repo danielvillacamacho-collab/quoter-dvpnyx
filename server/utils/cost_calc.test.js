@@ -1,6 +1,6 @@
 const {
   VALID_CURRENCIES,
-  validatePeriod, previousPeriod, currentPeriod,
+  validatePeriod, previousPeriod, addMonths, periodsForward, currentPeriod,
   periodLessThan, periodLessOrEqual, periodWithinAllowedFuture,
   validateCurrency, convertToUsd, validateEmployeePeriod, deltaVsTheoretical,
 } = require('./cost_calc');
@@ -32,6 +32,53 @@ describe('previousPeriod', () => {
   it('mes intermedio', () => expect(previousPeriod('202604')).toBe('202603'));
   it('rollover de año', () => expect(previousPeriod('202601')).toBe('202512'));
   it('null si inválido', () => expect(previousPeriod('foo')).toBeNull());
+});
+
+describe('addMonths', () => {
+  it('suma positiva sin rollover', () => {
+    expect(addMonths('202604', 3)).toBe('202607');
+  });
+  it('rollover hacia adelante', () => {
+    expect(addMonths('202611', 3)).toBe('202702');
+    expect(addMonths('202612', 1)).toBe('202701');
+  });
+  it('suma negativa con rollover hacia atrás', () => {
+    expect(addMonths('202602', -3)).toBe('202511');
+    expect(addMonths('202601', -1)).toBe('202512');
+  });
+  it('cero devuelve el mismo período', () => {
+    expect(addMonths('202604', 0)).toBe('202604');
+  });
+  it('rangos grandes (12+)', () => {
+    expect(addMonths('202604', 12)).toBe('202704');
+    expect(addMonths('202604', 24)).toBe('202804');
+    expect(addMonths('202604', -12)).toBe('202504');
+  });
+  it('null para inputs inválidos', () => {
+    expect(addMonths('foo', 1)).toBeNull();
+    expect(addMonths('202604', 'foo')).toBeNull();
+    expect(addMonths('202604', 1.5)).toBeNull();
+  });
+});
+
+describe('periodsForward', () => {
+  it('genera N períodos consecutivos hacia adelante', () => {
+    expect(periodsForward('202604', 3)).toEqual(['202604', '202605', '202606']);
+  });
+  it('atraviesa frontera de año', () => {
+    expect(periodsForward('202611', 4)).toEqual(['202611', '202612', '202701', '202702']);
+  });
+  it('count=1 devuelve solo el inicial', () => {
+    expect(periodsForward('202604', 1)).toEqual(['202604']);
+  });
+  it('count inválido devuelve []', () => {
+    expect(periodsForward('202604', 0)).toEqual([]);
+    expect(periodsForward('202604', -1)).toEqual([]);
+    expect(periodsForward('202604', 1.5)).toEqual([]);
+  });
+  it('start inválido devuelve []', () => {
+    expect(periodsForward('foo', 3)).toEqual([]);
+  });
 });
 
 describe('comparadores de período', () => {

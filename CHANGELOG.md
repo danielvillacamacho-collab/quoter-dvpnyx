@@ -17,6 +17,56 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ---
 
+## Phase 16.1 — Proyección de costos a futuro (2026-04-28)
+
+### feat(employee-costs): "Proyectar a futuro" para planear gasto sin cargar mes por mes
+
+Refinamiento solicitado tras Phase 16: finanzas necesita proyectar el gasto a los próximos meses sin tener que entrar manualmente cada uno.
+
+**Schema:**
+- Extiende `employee_costs.source` CHECK con valor `'projected'` (idempotente: dropea+recrea constraint en DBs ya migradas, sin perder datos).
+
+**Util:**
+- `addMonths(period, n)` y `periodsForward(start, count)` en `cost_calc.js` con tests (incluye rollovers de año, valores negativos, edge cases).
+
+**Server:**
+- `POST /api/employee-costs/project-to-future` con body `{ base_period?, months_ahead, growth_pct?, dry_run? }`.
+  - `months_ahead` 1..12 (cap duro).
+  - `growth_pct` opcional, repartido mensualmente vía `(1+r)^(1/12)`.
+  - `dry_run` para preview con `details` antes de aplicar.
+  - **No sobreescribe entradas manuales** (source != projected gana).
+  - **No toca períodos cerrados** (locked).
+  - **Reproyectable**: rows con source=projected se actualizan; idempotencia garantizada.
+  - Skip empleados terminados/inactivos en el período destino.
+  - Recalcula FX con la tasa del período destino (no asume base).
+- Evento `employee_cost.projected_to_future` con resumen completo.
+
+**Cliente:**
+- Nuevo botón **"📈 Proyectar a futuro"** en `/admin/employee-costs`.
+- Modal de 2 fases (preview → apply) con:
+  - Selector de período base (default: auto-detectar último con costos).
+  - Selector de meses (3/6/9/12).
+  - Input de growth anual %.
+  - Preview con conteos: a crear, a actualizar, preservados (manuales), saltados (locked), saltados (inactivos), warnings FX.
+- Badge violeta **"📈 Proyectado"** en filas con source='projected' (mass view + EmployeeDetail). Editable: editar a mano transforma la fila en source='manual' y la respeta en proyecciones futuras.
+- Badge azul claro **"📋 Copiado"** para `copy_from_prev` (visualmente distinguible).
+
+**Tests:** +22 server (10 del endpoint nuevo, 12 de helpers `addMonths`/`periodsForward`). Total **774/774 server, 353/353 cliente**, build limpio.
+
+**Casos cubiertos:**
+✓ Rechaza months_ahead fuera de 1..12.
+✓ Rechaza growth_pct fuera de -50..200.
+✓ 400 con code accionable si DB vacía o base_period sin rows.
+✓ Dry_run no escribe.
+✓ Growth_pct anual aplicado mes a mes correctamente.
+✓ Preserva manuales (skipped_existing).
+✓ No toca locked.
+✓ Actualiza projected anteriores (idempotente).
+✓ Skip empleados terminados antes del período destino.
+✓ Commit real ejecuta INSERTs.
+
+---
+
 ## Phase 16 — Employee Costs (2026-04-28)
 
 ### feat(employee-costs): módulo de costos empresa mensual por empleado

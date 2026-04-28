@@ -296,7 +296,12 @@ export default function EmployeeDetail() {
                       <td style={{ ...s.td, fontSize: 12 }}>{c.currency}</td>
                       <td style={{ ...s.td, textAlign: 'right' }}>{c.cost_usd != null ? formatMoney(c.cost_usd, 'USD') : '—'}</td>
                       <td style={{ ...s.td, textAlign: 'right', fontSize: 12 }}>{c.exchange_rate_used || '—'}</td>
-                      <td style={{ ...s.td, fontSize: 12 }}>{c.locked ? '🔒 Cerrado' : '✏ Abierto'}</td>
+                      <td style={{ ...s.td, fontSize: 12 }}>
+                        {c.locked ? '🔒 Cerrado' : '✏ Abierto'}
+                        {c.source === 'projected' && (
+                          <span style={{ marginLeft: 6, fontSize: 10, padding: '2px 6px', borderRadius: 3, background: '#ede9fe', color: '#6b21a8' }} title="Proyectado automáticamente">📈</span>
+                        )}
+                      </td>
                       <td style={{ ...s.td, fontSize: 12 }}>{c.notes || '—'}</td>
                       <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
                         <button

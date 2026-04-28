@@ -20,6 +20,7 @@
  *   POST   /api/employee-costs/bulk/preview             dry-run de un payload masivo
  *   POST   /api/employee-costs/bulk/commit              upsert masivo en transacción
  *   POST   /api/employee-costs/copy-from-previous       copia rows del período N-1 al N (sin lockear)
+ *   POST   /api/employee-costs/project-to-future        proyecta el último período conocido N meses adelante (con growth opcional)
  *
  *   POST   /api/employee-costs/lock/:period             marca todos los rows del período como locked
  *   POST   /api/employee-costs/unlock/:period           SUPERADMIN — revierte un lock
@@ -38,6 +39,7 @@ const { serverError, safeRollback } = require('../utils/http');
 const {
   validatePeriod, validateCurrency, convertToUsd,
   validateEmployeePeriod, deltaVsTheoretical, previousPeriod, currentPeriod,
+  addMonths, periodsForward, periodLessOrEqual,
 } = require('../utils/cost_calc');
 
 // Acceso restringido a admin/superadmin a NIVEL DE ROUTER. Más conservador
@@ -793,6 +795,266 @@ router.post('/copy-from-previous', async (req, res) => {
   } catch (err) {
     await safeRollback(conn, 'POST /employee-costs/copy-from-previous');
     serverError(res, 'POST /employee-costs/copy-from-previous', err);
+  } finally { conn.release(); }
+});
+
+/* ============================================================
+ * POST /api/employee-costs/project-to-future
+ *
+ * Proyecta el último costo conocido de cada empleado hacia los
+ * próximos N meses, con opcional growth rate anual.
+ *
+ * Body:
+ *   {
+ *     base_period?:    YYYYMM,  // default: último período con costos guardados
+ *     months_ahead:    number,  // 1..12 (cap duro)
+ *     growth_pct?:     number,  // % anual; ej. 5 → +5%/año split mensualmente
+ *     dry_run?:        boolean, // default false. true = no escribe, devuelve preview
+ *   }
+ *
+ * Reglas:
+ *   - NO sobreescribe rows existentes (los manuales/copy ganan).
+ *   - NO toca rows locked.
+ *   - Solo proyecta a empleados activos durante el período destino
+ *     (start_date ≤ período destino ≤ end_date si terminado).
+ *   - Recalcula FX con la tasa del período destino (no asume la anterior).
+ *   - source = 'projected'.
+ *   - Si growth_pct se aplica, multiplica gross_cost en moneda original
+ *     (no en USD) — preservar la moneda del empleado.
+ *
+ * Idempotente: reproyectar es seguro; los rows ya proyectados se
+ * actualizan (mantienen source='projected') sólo si nadie los editó
+ * manualmente. La detección "manual override" es por source != 'projected'.
+ *
+ * Response:
+ *   { base_period, target_periods: [...],
+ *     created: N, updated: N, skipped_existing: N, skipped_locked: N,
+ *     warnings: [...], details: [...] }
+ * ============================================================ */
+router.post('/project-to-future', async (req, res) => {
+  const conn = await pool.connect();
+  try {
+    const body = req.body || {};
+    const dryRun = body.dry_run === true;
+
+    const monthsAhead = Number(body.months_ahead);
+    if (!Number.isInteger(monthsAhead) || monthsAhead < 1 || monthsAhead > 12) {
+      conn.release();
+      return res.status(400).json({ error: 'months_ahead debe ser entero entre 1 y 12' });
+    }
+    const growthPct = body.growth_pct != null ? Number(body.growth_pct) : 0;
+    if (!Number.isFinite(growthPct) || growthPct < -50 || growthPct > 200) {
+      conn.release();
+      return res.status(400).json({ error: 'growth_pct debe ser número entre -50 y 200' });
+    }
+
+    // Resolver base_period: si el caller no manda uno, usamos el período más
+    // reciente con AL MENOS un costo registrado. Si la DB está vacía no hay
+    // base — devolver 400 con instrucción.
+    let basePeriod;
+    if (body.base_period) {
+      const v = validatePeriod(body.base_period);
+      if (!v.ok) { conn.release(); return res.status(400).json({ error: v.error }); }
+      basePeriod = v.period;
+    } else {
+      const { rows } = await conn.query(
+        `SELECT period FROM employee_costs ORDER BY period DESC LIMIT 1`
+      );
+      if (!rows.length) {
+        conn.release();
+        return res.status(400).json({
+          error: 'No hay ningún costo registrado para usar como base. Carga al menos un mes antes de proyectar.',
+          code: 'no_base_period',
+        });
+      }
+      basePeriod = rows[0].period;
+    }
+
+    // Períodos destino: del siguiente al basePeriod, N meses hacia adelante.
+    const firstTarget = addMonths(basePeriod, 1);
+    const targetPeriods = periodsForward(firstTarget, monthsAhead);
+
+    // Cargar costos del basePeriod — son los "templates" a proyectar.
+    const { rows: baseCosts } = await conn.query(
+      `SELECT * FROM employee_costs WHERE period = $1`, [basePeriod]
+    );
+    if (!baseCosts.length) {
+      conn.release();
+      return res.status(400).json({
+        error: `El período base ${basePeriod} no tiene costos registrados. Selecciona otro período.`,
+        code: 'base_period_empty',
+      });
+    }
+
+    // Empleados activos por período destino (cargamos start/end de los
+    // employees involucrados de una vez).
+    const empIds = baseCosts.map((c) => c.employee_id);
+    const { rows: emps } = await conn.query(
+      `SELECT id, start_date, end_date, status
+         FROM employees WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
+      [empIds]
+    );
+    const empById = new Map(emps.map((e) => [e.id, e]));
+
+    // Costos existentes en los períodos destino — para skip / detectar override.
+    const { rows: existingFuture } = await conn.query(
+      `SELECT employee_id, period, locked, source FROM employee_costs
+        WHERE employee_id = ANY($1::uuid[]) AND period = ANY($2::char[])`,
+      [empIds, targetPeriods]
+    );
+    const existingByKey = new Map(
+      existingFuture.map((c) => [`${c.employee_id}|${c.period}`, c])
+    );
+
+    // FX rates necesarias para todos (target_period × currency).
+    const currencies = [...new Set(baseCosts.map((c) => c.currency).filter((c) => c !== 'USD'))];
+    const fxByCcy = {};
+    if (currencies.length > 0) {
+      const maxTarget = targetPeriods[targetPeriods.length - 1];
+      const { rows: fxRows } = await conn.query(
+        `SELECT yyyymm, currency, usd_rate FROM exchange_rates
+          WHERE currency = ANY($1::varchar[]) AND yyyymm <= $2
+          ORDER BY yyyymm DESC`,
+        [currencies, maxTarget]
+      );
+      for (const r of fxRows) {
+        if (!fxByCcy[r.currency]) fxByCcy[r.currency] = [];
+        fxByCcy[r.currency].push({ period: r.yyyymm, rate: Number(r.usd_rate) });
+      }
+    }
+    const resolveRate = (period, ccy) => {
+      if (ccy === 'USD') return { rate: 1, fallback_period: null };
+      const list = fxByCcy[ccy] || [];
+      const direct = list.find((r) => r.period === period);
+      if (direct) return { rate: direct.rate, fallback_period: null };
+      const fb = list.find((r) => r.period < period);
+      return fb ? { rate: fb.rate, fallback_period: fb.period } : { rate: null, fallback_period: null };
+    };
+
+    // Growth mensual derivado del growth anual: (1+r)^(1/12) - 1.
+    // monthIndex 0 = primer mes proyectado (base+1), 1 = base+2, etc.
+    const monthlyGrowth = growthPct === 0
+      ? 1
+      : Math.pow(1 + growthPct / 100, 1 / 12);
+
+    if (!dryRun) await conn.query('BEGIN');
+
+    const warnings = [];
+    const details = [];
+    let created = 0;
+    let updated = 0;
+    let skippedExisting = 0;
+    let skippedLocked = 0;
+    let skippedInactive = 0;
+
+    for (let mi = 0; mi < targetPeriods.length; mi++) {
+      const targetPeriod = targetPeriods[mi];
+      const factor = Math.pow(monthlyGrowth, mi + 1);
+
+      for (const baseRow of baseCosts) {
+        const emp = empById.get(baseRow.employee_id);
+        if (!emp) continue; // empleado borrado entre cargar baseCosts y emps
+        // Validar que el empleado siga activo en targetPeriod.
+        const epc = validateEmployeePeriod(emp, targetPeriod, { monthsAhead: 12 });
+        if (!epc.ok) { skippedInactive++; continue; }
+
+        const key = `${baseRow.employee_id}|${targetPeriod}`;
+        const existing = existingByKey.get(key);
+        if (existing && existing.locked) { skippedLocked++; continue; }
+        // Si ya hay un row con source != 'projected', es una carga manual —
+        // NO la sobreescribimos. La proyección respeta cargas explícitas.
+        if (existing && existing.source !== 'projected') { skippedExisting++; continue; }
+
+        const projectedGross = Math.round(Number(baseRow.gross_cost) * factor * 100) / 100;
+        const fx = resolveRate(targetPeriod, baseRow.currency);
+        const conv = convertToUsd(projectedGross, baseRow.currency, fx.rate);
+        if (baseRow.currency !== 'USD' && fx.fallback_period) {
+          warnings.push({
+            employee_id: baseRow.employee_id, target_period: targetPeriod,
+            code: 'fx_fallback_used', fallback_period: fx.fallback_period,
+          });
+        }
+        if (baseRow.currency !== 'USD' && fx.rate == null) {
+          warnings.push({
+            employee_id: baseRow.employee_id, target_period: targetPeriod,
+            code: 'fx_missing',
+          });
+        }
+
+        details.push({
+          employee_id: baseRow.employee_id,
+          period: targetPeriod,
+          currency: baseRow.currency,
+          gross_cost: projectedGross,
+          cost_usd: conv.cost_usd,
+          action: existing ? 'would_update' : 'would_create',
+        });
+
+        if (!dryRun) {
+          if (existing) {
+            await conn.query(
+              `UPDATE employee_costs
+                  SET currency = $1, gross_cost = $2, cost_usd = $3, exchange_rate_used = $4,
+                      source = 'projected', updated_by = $5, updated_at = NOW()
+                WHERE employee_id = $6 AND period = $7`,
+              [baseRow.currency, projectedGross, conv.cost_usd, conv.exchange_rate_used,
+               req.user.id, baseRow.employee_id, targetPeriod]
+            );
+            updated++;
+          } else {
+            await conn.query(
+              `INSERT INTO employee_costs
+                 (employee_id, period, currency, gross_cost, cost_usd, exchange_rate_used,
+                  notes, source, created_by, updated_by)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, 'projected', $8, $8)`,
+              [baseRow.employee_id, targetPeriod, baseRow.currency,
+               projectedGross, conv.cost_usd, conv.exchange_rate_used,
+               growthPct === 0
+                 ? `Proyectado desde ${basePeriod}`
+                 : `Proyectado desde ${basePeriod} con +${growthPct}%/año`,
+               req.user.id]
+            );
+            created++;
+          }
+        }
+      }
+    }
+
+    if (!dryRun) {
+      await conn.query('COMMIT');
+      await emitEvent(pool, {
+        event_type: 'employee_cost.projected_to_future',
+        entity_type: 'employee_cost', entity_id: null,
+        actor_user_id: req.user.id,
+        payload: {
+          base_period: basePeriod, months_ahead: monthsAhead,
+          growth_pct: growthPct,
+          target_periods: targetPeriods,
+          created, updated, skipped_existing: skippedExisting, skipped_locked: skippedLocked,
+        },
+        req,
+      });
+    }
+
+    res.json({
+      base_period: basePeriod,
+      target_periods: targetPeriods,
+      months_ahead: monthsAhead,
+      growth_pct: growthPct,
+      dry_run: dryRun,
+      created: dryRun ? 0 : created,
+      updated: dryRun ? 0 : updated,
+      would_create: dryRun ? details.filter((d) => d.action === 'would_create').length : 0,
+      would_update: dryRun ? details.filter((d) => d.action === 'would_update').length : 0,
+      skipped_existing: skippedExisting,
+      skipped_locked: skippedLocked,
+      skipped_inactive: skippedInactive,
+      warnings,
+      details: dryRun ? details : undefined,
+    });
+  } catch (err) {
+    await safeRollback(conn, 'POST /employee-costs/project-to-future');
+    serverError(res, 'POST /employee-costs/project-to-future', err);
   } finally { conn.release(); }
 });
 
