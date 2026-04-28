@@ -6,6 +6,12 @@
 >
 > 1. **Local** (inmediato, sin AWS) — `docker-compose.dev.yml`.
 > 2. **AWS Dev Stack** (requiere cuenta AWS aparte) — CDK `--context env=dev`.
+>
+> **Antes de codear, leer:**
+> - [`docs/CONVENTIONS.md`](CONVENTIONS.md) — patrones obligatorios (helpers `parsePagination`, `serverError`, `safeRollback`, etc.)
+> - [`docs/MODULES_OVERVIEW.md`](MODULES_OVERVIEW.md) — para saber dónde tocar
+> - [`docs/specs/v2/03_data_model.md`](specs/v2/03_data_model.md) — schema completo
+> - [`docs/AI_INTEGRATION_GUIDE.md`](AI_INTEGRATION_GUIDE.md) — antes de tocar agentes IA
 
 ---
 
@@ -140,7 +146,31 @@ feat/*  ──► PR a develop → CI verde obligatorio antes de merge
 | `develop` | AWS Dev Stack (cuando se active)        | Sí (develop-ci + aws-infra) |
 | `feat/*`  | Ninguno, sólo tests en CI               | No               |
 
-## 4. Rollback en dev
+## 4. Correr tests local
+
+```bash
+# Backend (638 tests, 36 suites, ~2s)
+cd server && ./node_modules/.bin/jest
+
+# Frontend (325 / 327, 33 suites, ~7s — las 2 fallas TimeMe son pre-existentes)
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false
+
+# Build de producción del cliente (chequea warnings)
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js build
+
+# Tests de un archivo específico
+cd server && ./node_modules/.bin/jest routes/contracts
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false --testPathPattern='ContractDetail'
+
+# Coverage
+cd server && ./node_modules/.bin/jest --coverage
+```
+
+**Mock de pool en tests de servidor**: ver patrón en [`docs/CONVENTIONS.md §7`](CONVENTIONS.md#7-server-tests). Los tests de rutas no tocan DB real — mockean `database/pool` con un queryQueue.
+
+---
+
+## 5. Rollback en dev
 
 Un error en dev **no** debe propagarse a producción. Reglas:
 

@@ -2,13 +2,21 @@
 
 Guía corta de cómo trabajar este repo sin romperlo. Si algo no está acá, preguntar antes de asumir.
 
+> **Antes de tu primer PR**, leer:
+> - [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) — patrones obligatorios (helpers, error handling, pagination, tests)
+> - [`docs/MODULES_OVERVIEW.md`](docs/MODULES_OVERVIEW.md) — para saber qué módulo tocar
+> - [`docs/DECISIONS.md`](docs/DECISIONS.md) — el "por qué" detrás de las cosas raras del código
+
 ## TL;DR
 
 1. Ramear desde `develop`, PR hacia `develop`.
 2. Tests obligatorios (back y front). El CI los corre igualmente.
-3. Commits `feat: …` / `fix: …` / `chore: …`, en inglés o español consistente con el resto del hilo.
+3. Commits `feat(scope): …` / `fix(scope): …` / `chore(scope): …`. Español está bien, inglés también — consistente con el hilo.
 4. No tocar `main` directo. `main` = producción.
 5. No commitear secretos ni `.env`. El `.gitignore` los filtra pero verificá.
+6. **Endpoint nuevo sin test = PR rechazado.** Sin excepciones.
+7. **Cambio de schema sin actualizar `docs/specs/v2/03_data_model.md` = PR rechazado.**
+8. **Llamada a un agente IA sin pasar por `utils/ai_logger.run()` = PR rechazado.** Ver [`docs/AI_INTEGRATION_GUIDE.md`](docs/AI_INTEGRATION_GUIDE.md).
 
 ---
 
@@ -59,10 +67,16 @@ Evitar commits "WIP", "updates", "stuff". Si el trabajo es grande, hacer commits
 - ✅ Todos los workflows de CI verdes (tests + lint + build + health check).
 - ✅ Descripción clara: qué cambia, por qué, cómo se testea.
 - ✅ Tests nuevos si hay comportamiento observable (endpoint nuevo, componente nuevo, branch lógica nueva).
-- ✅ Si toca schema de DB: migración en `server/database/migrate.js` **idempotente** (`IF NOT EXISTS`, `CREATE OR REPLACE`, `ADD COLUMN IF NOT EXISTS`).
-- ✅ Si toca API: actualizar `docs/specs/v2/05_api_spec.md`.
-- ✅ Si toca comportamiento de usuario: actualizar `docs/MANUAL_DE_USUARIO.md` y `CHANGELOG.md`.
+- ✅ Si toca schema de DB: migración en `server/database/migrate.js` **idempotente** (`IF NOT EXISTS`, `CREATE OR REPLACE`, `ADD COLUMN IF NOT EXISTS`) **+ actualizar `docs/specs/v2/03_data_model.md`** en el mismo PR.
+- ✅ Si toca API: actualizar [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md).
+- ✅ Si toca comportamiento de usuario: actualizar [`docs/MANUAL_DE_USUARIO.md`](docs/MANUAL_DE_USUARIO.md) y [`CHANGELOG.md`](CHANGELOG.md).
+- ✅ Si agrega/elimina módulo: actualizar [`docs/MODULES_OVERVIEW.md`](docs/MODULES_OVERVIEW.md) y [`docs/ROADMAP.md`](docs/ROADMAP.md).
+- ✅ Si toma una decisión técnica notable: agregar entrada en [`docs/DECISIONS.md`](docs/DECISIONS.md).
 - ✅ Sin secretos. Sin `console.log` huérfanos en código de producción (ok en tests).
+- ✅ Manejo de errores: `serverError(res, where, err)` en cada catch (no `res.status(500)` directo).
+- ✅ Transacciones: `safeRollback(conn, where)` + `finally { conn.release() }` (no `.catch(()=>{})` silencioso).
+- ✅ Pagination: `parsePagination(req.query)` en cada listado.
+- ✅ Validación de UUIDs en parámetros antes de query: `isValidUUID(id)`.
 
 ### Formato de descripción de PR
 
@@ -94,24 +108,26 @@ Evitar commits "WIP", "updates", "stuff". Si el trabajo es grande, hacer commits
 ### Correr local
 
 ```bash
-# Backend
-cd server && npx jest
-cd server && npx jest --coverage   # con coverage
+# Backend (638 tests en 36 suites, ~2s)
+cd server && ./node_modules/.bin/jest
+cd server && ./node_modules/.bin/jest --coverage
 
-# Frontend
-cd client && CI=true npx react-scripts test --watchAll=false
-cd client && CI=true npx react-scripts test --watchAll=false --coverage
+# Frontend (325 / 327 — 2 fallas TimeMe pre-existentes)
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false
+
+# Build de producción cliente
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js build
 ```
 
 ### Qué se espera
 
-- **Backend**: Jest + supertest, Postgres de test en CI (service docker en GitHub Actions). Cobertura actual: **456 tests en 25 suites**. Thresholds sugeridos:
+- **Backend**: Jest + supertest. Tests mockean `database/pool` con `queryQueue` (no tocan DB real). Patrón en [`docs/CONVENTIONS.md §7`](docs/CONVENTIONS.md#7-server-tests). Thresholds sugeridos:
   - statements: 80%
   - branches:  70%
   - functions: 80%
   - lines:     80%
 
-- **Frontend**: Jest + React Testing Library. Queries por `findByText` / `getByLabelText` en español. **318 tests en 32 suites**. Mock de `apiV2` / `api` por suite.
+- **Frontend**: Jest + React Testing Library. Queries por `findByText` / `getByLabelText` en español. Mock de `apiV2` / `api` por suite.
 
 ### Patrones
 
