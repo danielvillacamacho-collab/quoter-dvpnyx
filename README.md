@@ -1,21 +1,33 @@
 # DVPNYX Quoter + Capacity Planner
 
-SaaS interno de Double V Partners que integra **quote → contract → staff → bill**: cotizaciones de staff augmentation y proyectos de alcance fijo, gestión de contratos, solicitudes de recursos, asignación de empleados, time tracking y reportes ejecutivos.
+SaaS interno de **Double V Partners** que integra **quote → contract → staff → bill**: cotizaciones de staff augmentation y proyectos de alcance fijo, contratos, solicitudes de recursos, asignación de empleados, time tracking, plan-vs-real semanal, revenue mensual y reportes ejecutivos.
 
 **Producción:** https://quoter.doublevpartners.com · **Dev:** https://dev.quoter.doublevpartners.com
 
+> **Última actualización docs:** Mayo 2026. Snapshot post `chore/ai-readiness-foundations`.
+
 ---
 
-## 📦 Entrega a nuevo equipo
+## 📚 Documentación — empezá por acá
 
-Si estás arrancando con este proyecto, **empezá aquí**:
-
-1. [`HANDOFF.md`](HANDOFF.md) — punto de entrada, 10 min de lectura.
-2. [`docs/PROJECT_STATE_HANDOFF.md`](docs/PROJECT_STATE_HANDOFF.md) — estado real del sistema, tech debt, preguntas abiertas.
-3. [`ARCHITECTURE.md`](ARCHITECTURE.md) — diagramas, flujos, puntos de extensión.
-4. [`CONTRIBUTING.md`](CONTRIBUTING.md) — ramas, commits, PRs, tests.
-5. [`CHANGELOG.md`](CHANGELOG.md) — historial por fases.
-6. [`SECURITY.md`](SECURITY.md) — modelo de amenazas y reporte de vulnerabilidades.
+| # | Documento | Para quién | Tiempo |
+|---|---|---|---|
+| 1 | [`HANDOFF.md`](HANDOFF.md) | **Equipo entrante** — punto de entrada | 10 min |
+| 2 | [`docs/PROJECT_STATE_HANDOFF.md`](docs/PROJECT_STATE_HANDOFF.md) | Estado real del sistema, deudas, decisiones | 20 min |
+| 3 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Diagramas, flujos, stack, AI layer | 15 min |
+| 4 | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) | Patrones de código actuales (server + client) | 15 min |
+| 5 | [`docs/MODULES_OVERVIEW.md`](docs/MODULES_OVERVIEW.md) | Mapa módulo por módulo (qué/dónde/deuda) | 20 min |
+| 6 | [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | Catálogo de ~85 endpoints | referencia |
+| 7 | [`docs/specs/v2/03_data_model.md`](docs/specs/v2/03_data_model.md) | Schema completo (28 tablas) | referencia |
+| 8 | [`docs/AI_INTEGRATION_GUIDE.md`](docs/AI_INTEGRATION_GUIDE.md) | **Cómo conectar agentes IA** (Claude/GPT) | 25 min |
+| 9 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Qué está vivo / qué falta / qué se difiere | 10 min |
+| 10 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Decisiones técnicas (ADR-style) | referencia |
+| 11 | [`docs/MANUAL_DE_USUARIO.md`](docs/MANUAL_DE_USUARIO.md) | Vista funcional end-to-end | 30 min |
+| 12 | [`docs/ONBOARDING_DEV.md`](docs/ONBOARDING_DEV.md) | Setup dev local, troubleshooting | referencia |
+| 13 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Branching, commits, PRs, tests | 10 min |
+| 14 | [`CHANGELOG.md`](CHANGELOG.md) | Historial por fases | referencia |
+| 15 | [`SECURITY.md`](SECURITY.md) | Modelo de amenazas, secrets | 10 min |
+| 16 | [`docs/RUNBOOKS_INDEX.md`](docs/RUNBOOKS_INDEX.md) | Runbooks ops (deploy, rollback, DR) | referencia |
 
 ---
 
@@ -30,40 +42,40 @@ docker compose -f docker-compose.dev.yml up --build
 # → DB:      127.0.0.1:55432 (postgres/postgres, db: dvpnyx)
 ```
 
-Credenciales seed:
+Credenciales seed (`server/database/seed.js`):
 - `admin@dvpnyx.com` / `admin123` — superadmin
 - `user@dvpnyx.com` / `user123` — member
 
 ### Tests
 
 ```bash
-# Backend — 456 tests en 25 suites
-cd server && npx jest
+# Backend — 638 tests en 36 suites
+cd server && ./node_modules/.bin/jest
 
-# Frontend — 318 tests en 32 suites
-cd client && npm run test:ci
+# Frontend — 325/327 (las 2 fallas son TimeMe pre-existentes)
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false
 
-# Con cobertura
-cd server && npm run test:coverage
-cd client && npm run test:coverage
+# Build de producción del cliente
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js build
 ```
 
-Setup detallado, troubleshooting y variables de entorno: [`docs/ONBOARDING_DEV.md`](docs/ONBOARDING_DEV.md).
+Setup detallado: [`docs/ONBOARDING_DEV.md`](docs/ONBOARDING_DEV.md).
 
 ---
 
 ## 🧱 Stack
 
 | Capa | Tecnología |
-|------|-----------|
-| Frontend | React 18 + react-router-dom 6, Create React App 5, fonts self-hosted (`@fontsource/*`), DS con tokens CSS (`--ds-*`) |
-| Backend | Node 20 + Express 4, `pg` driver nativo, JWT (`jsonwebtoken`), `helmet`, `express-rate-limit`, `express-validator` |
-| DB | PostgreSQL 16 |
-| Packaging | Dockerfile multi-stage; `client/build` servido por el mismo Express en prod |
+|---|---|
+| Frontend | React 18 + react-router-dom 6, Create React App 5, fonts `@fontsource/*`, design tokens CSS OKLCH |
+| Backend | Node 20 + Express 4, `pg` driver nativo, JWT, `helmet`, `bcryptjs`, `express-rate-limit` |
+| DB | PostgreSQL 16 (con `uuid-ossp` siempre, `vector` opcional) |
+| AI-readiness | `ai_interactions` log, `ai_prompt_templates` versioning, embeddings `vector(1536)` con HNSW |
+| Packaging | Dockerfile multi-stage; `client/build` servido por Express en prod |
 | Reverse proxy | Traefik (TLS + host rule) |
-| CI/CD | 6 GitHub Actions → GHCR → EC2 (ver [`.github/workflows/`](.github/workflows/)) |
-| Testing | Jest + supertest (backend) · Jest + React Testing Library (frontend) |
-| Infra alterna | AWS CDK (TypeScript) en [`infra/`](infra/) — stack listo para activar |
+| CI/CD | 6 GitHub Actions → GHCR → EC2 |
+| Testing | Jest + supertest + RTL |
+| Infra alterna | AWS CDK (TS) en `infra/` — listo para activar |
 
 ---
 
@@ -71,81 +83,103 @@ Setup detallado, troubleshooting y variables de entorno: [`docs/ONBOARDING_DEV.m
 
 ```
 dvpnyx-quoter/
-├── HANDOFF.md              ← primer archivo a leer
-├── ARCHITECTURE.md         ← diagramas + flujos técnicos
+├── README.md                 ← este archivo
+├── HANDOFF.md                ← punto de entrada del equipo
+├── ARCHITECTURE.md           ← diagramas + flujos técnicos
 ├── CHANGELOG.md
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 ├── LICENSE
-├── client/                 # React 18 SPA (CRA)
+├── client/                   # React 18 SPA (CRA)
 │   └── src/
 │       ├── App.js
 │       ├── AuthContext.js
-│       ├── theme.css       # tokens DS — fuente única de estilos
-│       ├── modules/*.js    # una pantalla por módulo
-│       ├── shell/*.js      # Sidebar, Topbar, StatusBadge, Avatar, …
+│       ├── theme.css         # tokens DS — fuente única de estilos
+│       ├── modules/*.js      # una pantalla por módulo
+│       ├── shell/*.js        # Sidebar, Topbar, Badges, ErrorBoundary, …
 │       └── utils/{api,apiV2,calc}.js
-├── server/                 # Express + pg
+├── server/                   # Express + pg
 │   ├── index.js
 │   ├── database/
-│   │   ├── migrate.js      # DDL idempotente (corre en cada deploy)
-│   │   ├── migrate_v2_data.js
+│   │   ├── migrate.js        # DDL idempotente (corre en cada deploy)
 │   │   ├── seed.js
 │   │   └── pool.js
 │   ├── middleware/auth.js
-│   ├── routes/*.js         # una ruta por entidad
-│   └── utils/{calc,events,candidate_matcher,capacity_planner,assignment_validation,bulk_import,…}.js
+│   ├── routes/*.js           # una ruta por entidad
+│   └── utils/                # helpers compartidos
+│       ├── sanitize.js, http.js
+│       ├── events.js
+│       ├── ai_logger.js, json_schema.js, level.js, slug.js
+│       ├── calc.js, candidate_matcher.js, capacity_planner.js
+│       └── assignment_validation.js
 ├── docs/
 │   ├── PROJECT_STATE_HANDOFF.md
 │   ├── MANUAL_DE_USUARIO.md
 │   ├── ONBOARDING_DEV.md
-│   ├── runbooks/           # DEPLOY / ROLLBACK / DR / BULK / V2_MIGRATION
-│   └── specs/v2/           # specs originales (pueden estar desfasadas; código manda)
-├── infra/                  # AWS CDK (TS)
-├── .github/workflows/
+│   ├── CONVENTIONS.md         ← patrones de código
+│   ├── MODULES_OVERVIEW.md    ← mapa módulo por módulo
+│   ├── API_REFERENCE.md       ← catálogo de endpoints
+│   ├── AI_INTEGRATION_GUIDE.md
+│   ├── ROADMAP.md
+│   ├── DECISIONS.md           ← ADR-style
+│   ├── RUNBOOKS_INDEX.md
+│   ├── runbooks/              # deploy, rollback, DR, bulk import, V2 migration
+│   └── specs/v2/              # specs originales (código gana cuando hay conflicto)
+├── infra/                    # AWS CDK (TS) — stack listo para activar
+├── .github/workflows/        # 6 pipelines
 ├── Dockerfile
-├── docker-compose.yml      # prod-like
+├── docker-compose.yml
 └── docker-compose.dev.yml
 ```
 
 ---
 
-## 🔐 Roles y permisos (V2)
+## 🔐 Roles y permisos
 
 | Rol | Descripción | Permisos típicos |
-|-----|-------------|------------------|
-| `superadmin` | Dios | Todo + impersonation |
-| `admin` | Operativo | CRUD de todas las entidades |
-| `lead` | Lidera un squad | Aprueba asignaciones (aspiracional — chequeo formal pendiente) |
+|---|---|---|
+| `superadmin` | Bypass total | Todo + impersonation |
+| `admin` | Operativo | CRUD de todas las entidades, kick-off de cualquier contrato |
+| `lead` | Líder de equipo | Ve tiempo + plan-vs-real de sus reportes directos (`employees.manager_user_id = users.id`). Puede hacer kick-off si es DM del contrato |
 | `member` | Usuario estándar | Cotiza, registra horas, ve sus propios datos |
-| `viewer` | Solo lectura | Acceso lectura a reportes |
+| `viewer` | Solo lectura | Reportes |
+| `preventa` | Legacy | Middleware reescribe a `member` + `function='preventa'` |
 
-Campo adicional `users.function` (comercial / preventa / delivery / capacity / finanzas) para visibilidades futuras por función.
+Campo adicional `users.function` (comercial / preventa / delivery_manager / capacity_manager / project_manager / fte_tecnico / people / finance / pmo / admin) para visibilidades futuras.
 
 ---
 
 ## 🌿 Branching
 
 | Rama | Destino | CI/CD |
-|------|---------|-------|
-| `main` | Producción (`quoter.doublevpartners.com`) | `deploy.yml` (manual release PR desde `develop`) |
+|---|---|---|
+| `main` | Producción (`quoter.doublevpartners.com`) | `deploy.yml` (PR manual desde `develop`) |
 | `develop` | Dev (`dev.quoter.doublevpartners.com`) | `develop-ci.yml` + `deploy-dev.yml` |
-| `feat/*`, `fix/*`, `chore/*` | — | Tests en PR |
+| `feat/*`, `fix/*`, `chore/*`, `docs/*` | — | Tests en PR |
 
-Detalle en [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Convenciones de commits y PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ---
 
-## 🧪 Salud del código al momento de la entrega (2026-04-21)
+## 🧪 Salud del código (mayo 2026)
 
 | Métrica | Valor |
-|---------|-------|
-| Tests backend | 456 / 456 ✅ |
-| Tests frontend | 318 / 318 ✅ |
-| Build warnings | 0 |
-| TODOs / FIXMEs huérfanos | 0 |
+|---|---|
+| Tests backend | **638 / 638** ✅ |
+| Tests frontend | 325 / 327 (2 TimeMe pre-existentes, no bloqueantes) |
+| Build cliente | Limpio, sin warnings |
+| Tablas en DB | 28 |
+| Endpoints API | ~85 |
+| Módulos UI | ~25 |
+| TODOs huérfanos | 0 |
 | Secretos commiteados | 0 |
 | CI pipelines activos | 6 |
+
+Verifícalo:
+```bash
+cd server && ./node_modules/.bin/jest          # 638 ✅
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false
+```
 
 ---
 
@@ -154,10 +188,11 @@ Detalle en [`CONTRIBUTING.md`](CONTRIBUTING.md).
 ### Local (desarrollo)
 `docker compose -f docker-compose.dev.yml up --build` — todo en contenedores.
 
-### Producción actual (Traefik + EC2 + GHCR)
-Flujo automatizado vía GitHub Actions. Runbook: [`docs/runbooks/DEPLOY.md`](docs/runbooks/DEPLOY.md).
-Rollback: [`docs/runbooks/ROLLBACK.md`](docs/runbooks/ROLLBACK.md).
-DR: [`docs/runbooks/DR.md`](docs/runbooks/DR.md).
+### Producción (Traefik + EC2 + GHCR)
+Automatizado vía GitHub Actions.
+- Runbook: [`docs/runbooks/DEPLOY.md`](docs/runbooks/DEPLOY.md)
+- Rollback: [`docs/runbooks/ROLLBACK.md`](docs/runbooks/ROLLBACK.md)
+- DR: [`docs/runbooks/DR.md`](docs/runbooks/DR.md)
 
 ### Alternativa AWS (CDK)
 Stack TypeScript en [`infra/`](infra/). Inactivo hoy; activable cuando se decida migrar de EC2 a ECS/Fargate + RDS.
@@ -167,28 +202,40 @@ Stack TypeScript en [`infra/`](infra/). Inactivo hoy; activable cuando se decida
 ## 🔧 Variables de entorno
 
 | Variable | Descripción | Default (dev) |
-|----------|-------------|---------------|
-| `DB_HOST` | Host Postgres | `localhost` |
-| `DB_PORT` | Puerto Postgres | `5432` |
-| `DB_NAME` | Database | `dvpnyx` |
-| `DB_USER` | Usuario | `postgres` |
-| `DB_PASSWORD` | Password | (requerido en prod) |
+|---|---|---|
+| `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` | Postgres | `localhost`, `5432`, `dvpnyx`, `postgres`, … |
+| `DB_SSL` | Habilitar SSL (RDS) | `false` |
 | `JWT_SECRET` | Secreto JWT | (requerido) |
 | `JWT_EXPIRES_IN` | TTL del token | `8h` |
 | `PORT` | Puerto API | `4000` |
 | `NODE_ENV` | Ambiente | `development` |
 | `CLIENT_URL` | Origin CORS | `http://localhost:3000` |
 | `APP_VERSION` | Versión (para `/api/health`) | `2.0.0-dev` |
-| `GIT_SHA` / `REACT_APP_GIT_SHA` | SHA commit (para `/api/health`) | `unknown` |
+| `GIT_SHA`, `REACT_APP_GIT_SHA` | SHA commit (para `/api/health`) | `unknown` |
+| `ANTHROPIC_API_KEY` | (futuro, para agentes IA) | — |
+| `OPENAI_API_KEY` | (futuro, para embeddings) | — |
 
 Ver [`server/.env.example`](server/.env.example) y [`.env.example`](.env.example).
 
 ---
 
-## 📜 Licencia
+## 🤖 AI-readiness
 
-Propiedad de Double V Partners. Ver [`LICENSE`](LICENSE). Third-party bajo sus licencias respectivas (ver `node_modules/`).
+El sistema tiene capa lista para integrar agentes IA con observabilidad y feedback loop. **Antes de conectar el primer agente, leer [`docs/AI_INTEGRATION_GUIDE.md`](docs/AI_INTEGRATION_GUIDE.md)**.
+
+Resumen:
+- `ai_interactions` table loguea cada llamada (modelo, prompt, output, decisión humana, costo, latencia).
+- `ai_prompt_templates` versionados para reproducibilidad y A/B testing.
+- `pgvector` opcional con columnas `*_embedding vector(1536)` en 7 tablas (skills, employees, requests, opportunities, contracts, quotations, areas).
+- `utils/ai_logger.js :: run()` — wrapper obligatorio para toda llamada a un agente.
+- `delivery_facts` denormalizada para forecasting ML.
 
 ---
 
-*README actualizado 2026-04-21 como parte de la entrega formal a nuevo equipo. Si algo acá queda desactualizado, la fuente de verdad es `HANDOFF.md` + el código.*
+## 📜 Licencia
+
+Propiedad de Double V Partners. Ver [`LICENSE`](LICENSE). Third-party bajo sus licencias respectivas.
+
+---
+
+*Si algo aquí queda desactualizado, la fuente de verdad es `HANDOFF.md` + el código. Actualizar este README cuando cambien tests counts, endpoints clave o cuando se agregue un módulo nuevo.*

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { apiGet } from '../utils/apiV2';
+import { apiGet, apiPost } from '../utils/apiV2';
 import CandidatesModal from './CandidatesModal';
 
 /**
@@ -639,6 +639,8 @@ export default function CapacityPlanner() {
   // US-RR-3: when an unassigned row is clicked we open the candidates
   // modal here instead of navigating away — the user stays in-context.
   const [openCandidatesFor, setOpenCandidatesFor] = useState(null);
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignToast, setAssignToast] = useState(null); // { ok, msg }
 
   // Small helper so every control mutates the URL, not component state.
   // Passing '' removes the key (keeps the URL tidy when a filter is cleared).
@@ -687,6 +689,25 @@ export default function CapacityPlanner() {
     <div style={s.page}>
       <h1 style={s.h1}>📅 Capacity Planner</h1>
       <p style={s.sub}>Vista semanal del equipo. Barras por contrato, utilización semana a semana, y solicitudes sin asignar.</p>
+
+      {assignToast && (
+        <div
+          role="status"
+          style={{
+            marginBottom: 10,
+            padding: '8px 12px',
+            borderRadius: 8,
+            fontSize: 13,
+            background: assignToast.ok ? '#e8f5ec' : '#fde8eb',
+            border: `1px solid ${assignToast.ok ? '#10b981' : '#ef4444'}`,
+            color: assignToast.ok ? '#065f46' : '#b00020',
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          }}
+        >
+          <span>{assignToast.msg}</span>
+          <button type="button" onClick={() => setAssignToast(null)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 16, color: 'inherit' }} aria-label="Cerrar">×</button>
+        </div>
+      )}
 
       {/* Metric cards */}
       <div style={s.metrics}>
@@ -806,17 +827,51 @@ export default function CapacityPlanner() {
         <CandidatesModal
           requestId={openCandidatesFor}
           onClose={() => setOpenCandidatesFor(null)}
-          onPick={(candidate, request) => {
-            // Hand the user off to the Assignments module with a prefill hint
-            // in the URL — that module will read it and open the create form
-            // with employee + request + hours prefilled.
-            const qs = new URLSearchParams({
-              new: '1',
-              request_id: request.id,
-              employee_id: candidate.employee_id,
-              weekly_hours: String(request.weekly_hours),
-            }).toString();
-            navigate(`/assignments?${qs}`);
+          onPick={async (candidate, request) => {
+            // Crear la asignación in-place: el usuario se queda en el planner
+            // y vemos el resultado refrescado. Los validadores del backend
+            // (overbooking, área, level, etc.) deciden si aceptar o rechazar.
+            // Si falla por validación dura → mostramos mensaje. Si la
+            // validación pide override (admin), abrimos el flujo manual con
+            // prefill para que el usuario pueda decidir conscientemente.
+            if (assignBusy) return;
+            setAssignBusy(true);
+            setAssignToast(null);
+            try {
+              await apiPost('/api/assignments', {
+                resource_request_id: request.id,
+                employee_id: candidate.employee_id,
+                contract_id: request.contract_id,
+                weekly_hours: request.weekly_hours,
+                start_date: request.start_date || new Date().toISOString().slice(0, 10),
+                end_date: request.end_date || null,
+                role_title: request.role_title,
+              });
+              setAssignToast({ ok: true, msg: `✓ ${candidate.full_name} asignado a ${request.role_title}` });
+              setOpenCandidatesFor(null);
+              await load();
+            } catch (e) {
+              const msg = e.message || 'Error al asignar';
+              // Si el backend pide override (overbooking u otra validación
+              // soft) o falla por algo no resoluble en un click, llevamos al
+              // usuario al formulario manual con prefill para que decida.
+              if (/override|reason|409|justific/i.test(msg)) {
+                const qs = new URLSearchParams({
+                  new: '1',
+                  request_id: request.id,
+                  employee_id: candidate.employee_id,
+                  weekly_hours: String(request.weekly_hours),
+                  contract_id: request.contract_id,
+                }).toString();
+                setAssignToast({ ok: false, msg: `${msg} — abriendo formulario manual…` });
+                setOpenCandidatesFor(null);
+                setTimeout(() => navigate(`/assignments?${qs}`), 800);
+              } else {
+                setAssignToast({ ok: false, msg });
+              }
+            } finally {
+              setAssignBusy(false);
+            }
           }}
         />
       )}

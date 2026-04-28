@@ -1,538 +1,705 @@
-# 03 — Modelo de Datos
+# Modelo de datos — DVPNYX Quoter
 
-Este documento es la fuente de verdad del esquema de PostgreSQL 16. Las migraciones en `server/database/migrate.js` deben implementar exactamente lo descrito aquí. Todas las tablas usan `CREATE TABLE IF NOT EXISTS` para idempotencia.
+> **Estado:** Mayo 2026. Refleja el schema real en `server/database/migrate.js` después de la rama `chore/ai-readiness-foundations`.
+> **Fuente de verdad:** el SQL del migrate. Si este documento se desfasa, el código gana.
 
-## Convenciones
-
-- **IDs:** `UUID DEFAULT uuid_generate_v4() PRIMARY KEY`, salvo tablas de lookup muy simples donde `SERIAL` es aceptable.
-- **Timestamps:** `TIMESTAMPTZ NOT NULL DEFAULT NOW()` para `created_at`. `updated_at` se actualiza por trigger o por aplicación.
-- **Soft delete:** `deleted_at TIMESTAMPTZ NULL`.
-- **Foreign keys:** `ON DELETE RESTRICT` por defecto. `ON DELETE CASCADE` sólo donde se explicite.
-- **Unique con soft delete:** UNIQUE constraints usan índices parciales `WHERE deleted_at IS NULL` cuando aplica.
-- **Extensions requeridas:** `CREATE EXTENSION IF NOT EXISTS "uuid-ossp";`
+Este documento describe **todo** lo que vive en la base de datos: tablas, columnas, constraints, índices, relaciones, decisiones de diseño y deudas conocidas.
 
 ---
 
-## Tablas existentes (V1) — evolución
+## Índice
 
-### users
-
-```sql
--- Existe. Añadir columnas:
-ALTER TABLE users ADD COLUMN IF NOT EXISTS function VARCHAR(50) NULL;
-ALTER TABLE users ADD COLUMN IF NOT EXISTS squad_id UUID NULL REFERENCES squads(id);
-ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
-
--- Validar role CHECK:
--- Antes: ('superadmin','admin','preventa')
--- Ahora: ('superadmin','admin','lead','member','viewer')
--- Para no perder data: migrar 'preventa' → 'member' con function='preventa'.
-
--- Validar function CHECK (nullable):
--- ('comercial','preventa','capacity_manager','delivery_manager',
---  'project_manager','fte_tecnico','people','finance','pmo','admin')
-```
-
-### parameters
-
-Mantener sin cambios estructurales. Se mantienen las categorías existentes: `level, geo, bilingual, tools, stack, modality, margin, project`.
-
-### quotations
-
-```sql
-ALTER TABLE quotations ADD COLUMN IF NOT EXISTS client_id UUID NULL REFERENCES clients(id);
-ALTER TABLE quotations ADD COLUMN IF NOT EXISTS opportunity_id UUID NULL REFERENCES opportunities(id);
-ALTER TABLE quotations ADD COLUMN IF NOT EXISTS squad_id UUID NULL REFERENCES squads(id);
-ALTER TABLE quotations ADD COLUMN IF NOT EXISTS currency VARCHAR(3) NOT NULL DEFAULT 'USD';
-ALTER TABLE quotations ADD COLUMN IF NOT EXISTS parameters_snapshot JSONB NULL;
-ALTER TABLE quotations ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ NULL;
-ALTER TABLE quotations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
-
--- Post-migración data:
--- 1. Crear un client "Legacy — " por cada client_name distinto y linkar
--- 2. Crear una opportunity por cada quotation sin opp (1:1 para no perder data)
--- 3. Asignar squad_id = squad default
-```
-
-### quotation_lines, quotation_phases, quotation_epics, quotation_milestones
-
-Mantener sin cambios estructurales. Agregar `deleted_at` a quotation_milestones.
-
-### audit_log
-
-Se mantiene como tabla legacy para V1. En V2 la auditoría nueva va a la tabla `events` (abajo). Se puede dejar de escribir en `audit_log` gradualmente — V2 escribe sólo en `events`.
+1. [Convenciones generales](#1-convenciones-generales)
+2. [Diagrama de relaciones](#2-diagrama-de-relaciones)
+3. [Tablas core](#3-tablas-core)
+4. [Comercial: clients → opportunities → quotations](#4-comercial-clients--opportunities--quotations)
+5. [Cotizador (legacy V1)](#5-cotizador-legacy-v1)
+6. [Delivery: contracts → resource_requests → assignments](#6-delivery-contracts--resource_requests--assignments)
+7. [Time tracking (dos modelos coexisten)](#7-time-tracking-dos-modelos-coexisten)
+8. [Finanzas: revenue + exchange rates](#8-finanzas-revenue--exchange-rates)
+9. [Personas: areas, skills, employees](#9-personas-areas-skills-employees)
+10. [Auditoría: events + audit_log](#10-auditoría-events--audit_log)
+11. [Notificaciones](#11-notificaciones)
+12. [Capa AI-readiness](#12-capa-ai-readiness)
+13. [Vistas materializadas + funciones](#13-vistas-materializadas--funciones)
+14. [Pares de entidades duplicadas (tech debt activo)](#14-pares-de-entidades-duplicadas-tech-debt-activo)
+15. [Glosario de columnas comunes](#15-glosario-de-columnas-comunes)
 
 ---
 
-## Tablas nuevas en V2
+## 1. Convenciones generales
 
-### squads
+Toda tabla V2 sigue estas reglas:
 
-```sql
-CREATE TABLE IF NOT EXISTS squads (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  name VARCHAR(100) NOT NULL,
-  description TEXT NULL,
-  active BOOLEAN NOT NULL DEFAULT true,
-  deleted_at TIMESTAMPTZ NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+| Aspecto | Regla |
+|---|---|
+| PK | `UUID` con `DEFAULT uuid_generate_v4()` salvo lookups (`areas`, `skills`, `parameters` que usan `SERIAL`) |
+| Soft delete | `deleted_at TIMESTAMPTZ NULL`. Todo SELECT de producción incluye `WHERE deleted_at IS NULL` |
+| Timestamps | `TIMESTAMPTZ NOT NULL DEFAULT NOW()` para `created_at` y `updated_at` |
+| Autoría | `created_by UUID NOT NULL REFERENCES users(id)` (nullable sólo en lookups y notifications) |
+| Estados | `VARCHAR(20)` con `CHECK (status IN (...))`. **No** usamos tipos `ENUM` de Postgres para no bloquear migraciones |
+| Indexes en FKs | Índices parciales (`WHERE deleted_at IS NULL`) en columnas de lookup frecuente |
+| JSONB | Para shapes que evolucionan. Validar con `utils/json_schema.js :: SCHEMAS` |
+| Naming | `snake_case` en DB. API responses pueden mezclar pero documentamos como snake en specs |
 
-CREATE UNIQUE INDEX IF NOT EXISTS squads_name_unique
-  ON squads(LOWER(name)) WHERE deleted_at IS NULL;
-```
+**Tablas legacy V1** (`users`, `parameters`, `quotations`, `quotation_*`, `audit_log`) usan `TIMESTAMP` sin TZ y `SERIAL` para PKs auxiliares. Es deuda conocida — ver [§14](#14-pares-de-entidades-duplicadas-tech-debt-activo).
 
-### clients
-
-```sql
-CREATE TABLE IF NOT EXISTS clients (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  name VARCHAR(200) NOT NULL,
-  legal_name VARCHAR(200) NULL,
-  country VARCHAR(100) NULL,
-  industry VARCHAR(100) NULL,
-  tier VARCHAR(50) NULL CHECK (tier IN ('enterprise','mid_market','smb') OR tier IS NULL),
-  preferred_currency VARCHAR(3) NOT NULL DEFAULT 'USD',
-  notes TEXT NULL,
-  tags TEXT[] NULL,
-  external_crm_id VARCHAR(100) NULL,   -- hook Giitic
-  active BOOLEAN NOT NULL DEFAULT true,
-  deleted_at TIMESTAMPTZ NULL,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS clients_name_unique
-  ON clients(LOWER(name)) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS clients_country_idx ON clients(country) WHERE deleted_at IS NULL;
-```
-
-### opportunities
-
-```sql
-CREATE TABLE IF NOT EXISTS opportunities (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  client_id UUID NOT NULL REFERENCES clients(id),
-  name VARCHAR(200) NOT NULL,
-  description TEXT NULL,
-  account_owner_id UUID NOT NULL REFERENCES users(id),  -- comercial dueño
-  presales_lead_id UUID NULL REFERENCES users(id),       -- preventa líder
-  squad_id UUID NOT NULL REFERENCES squads(id),
-  status VARCHAR(30) NOT NULL DEFAULT 'open'
-    CHECK (status IN ('open','qualified','proposal','negotiation','won','lost','cancelled')),
-  outcome VARCHAR(20) NULL
-    CHECK (outcome IN ('won','lost','cancelled','abandoned') OR outcome IS NULL),
-  outcome_reason VARCHAR(50) NULL
-    CHECK (outcome_reason IN ('price','timing','competition','technical_fit','client_internal','other') OR outcome_reason IS NULL),
-  outcome_notes TEXT NULL,
-  expected_close_date DATE NULL,
-  closed_at TIMESTAMPTZ NULL,
-  winning_quotation_id UUID NULL REFERENCES quotations(id),
-  tags TEXT[] NULL,
-  external_crm_id VARCHAR(100) NULL,  -- hook Giitic
-  deleted_at TIMESTAMPTZ NULL,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS opportunities_client_idx ON opportunities(client_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS opportunities_owner_idx ON opportunities(account_owner_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS opportunities_status_idx ON opportunities(status) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS opportunities_squad_idx ON opportunities(squad_id) WHERE deleted_at IS NULL;
-```
-
-### areas
-
-```sql
-CREATE TABLE IF NOT EXISTS areas (
-  id SERIAL PRIMARY KEY,
-  key VARCHAR(50) NOT NULL UNIQUE,  -- 'development', 'infra_security', etc
-  name VARCHAR(100) NOT NULL,
-  description TEXT NULL,
-  sort_order INT NOT NULL DEFAULT 0,
-  active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Seed:
-INSERT INTO areas (key, name, sort_order) VALUES
-  ('development','Desarrollo',1),
-  ('infra_security','Infra & Seguridad',2),
-  ('testing','Testing',3),
-  ('product_management','Product Management',4),
-  ('project_management','Project Management',5),
-  ('data_ai','Data & AI',6),
-  ('ux_ui','UX/UI',7),
-  ('functional_analysis','Análisis Funcional',8),
-  ('devops_sre','DevOps/SRE',9)
-ON CONFLICT (key) DO NOTHING;
-```
-
-### skills
-
-```sql
-CREATE TABLE IF NOT EXISTS skills (
-  id SERIAL PRIMARY KEY,
-  name VARCHAR(100) NOT NULL,
-  category VARCHAR(50) NULL,  -- 'language', 'framework', 'cloud', 'tool', 'methodology', 'soft'
-  description TEXT NULL,
-  active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS skills_name_unique ON skills(LOWER(name));
-
--- Seed inicial (~50 skills comunes):
--- languages: JavaScript, TypeScript, Python, Java, Go, Rust, C#, Ruby, PHP, Swift, Kotlin
--- frameworks: React, Angular, Vue, Node.js, Express, NestJS, Django, Flask, Spring, Rails, Next.js
--- cloud: AWS, Azure, GCP, Kubernetes, Docker, Terraform
--- data: PostgreSQL, MySQL, MongoDB, Redis, Snowflake, Databricks, Spark, Airflow
--- ai: TensorFlow, PyTorch, LangChain, OpenAI API
--- tools: Git, Jira, Figma, Postman
--- methodology: Scrum, Kanban, SAFe, PMP, Prince2
--- soft: Leadership, Communication, Negotiation
-```
-
-### employees
-
-```sql
-CREATE TABLE IF NOT EXISTS employees (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  user_id UUID NULL UNIQUE REFERENCES users(id),  -- un empleado puede no ser usuario del sistema
-  first_name VARCHAR(100) NOT NULL,
-  last_name VARCHAR(100) NOT NULL,
-  personal_email VARCHAR(200) NULL,
-  corporate_email VARCHAR(200) NULL,
-  country VARCHAR(100) NOT NULL,
-  city VARCHAR(100) NULL,
-  area_id INT NOT NULL REFERENCES areas(id),
-  level VARCHAR(5) NOT NULL CHECK (level IN ('L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11')),
-  seniority_label VARCHAR(50) NULL,  -- 'Junior','Semi Senior','Senior','Lead','Principal'
-  employment_type VARCHAR(20) NOT NULL DEFAULT 'fulltime'
-    CHECK (employment_type IN ('fulltime','parttime','contractor')),
-  weekly_capacity_hours NUMERIC(5,2) NOT NULL DEFAULT 40.00,
-  languages JSONB NOT NULL DEFAULT '[]'::jsonb,
-    -- Ejemplo: [{"language":"es","level":"native"},{"language":"en","level":"c1"}]
-  start_date DATE NOT NULL,
-  end_date DATE NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'active'
-    CHECK (status IN ('active','on_leave','bench','terminated')),
-  squad_id UUID NULL REFERENCES squads(id),
-  manager_user_id UUID NULL REFERENCES users(id),  -- CM o Head, típicamente
-  notes TEXT NULL,
-  tags TEXT[] NULL,
-  -- HOOKS PARA COSTOS (no usar en V2, activar en versión futura):
-  company_monthly_cost NUMERIC(14,2) NULL,
-  hourly_cost NUMERIC(10,2) NULL,
-  cost_currency VARCHAR(3) NULL DEFAULT 'USD',
-  cost_updated_at TIMESTAMPTZ NULL,
-  cost_updated_by UUID NULL REFERENCES users(id),
-  --
-  deleted_at TIMESTAMPTZ NULL,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS employees_area_idx ON employees(area_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS employees_status_idx ON employees(status) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS employees_level_idx ON employees(level) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS employees_country_idx ON employees(country) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS employees_user_idx ON employees(user_id) WHERE deleted_at IS NULL;
-CREATE UNIQUE INDEX IF NOT EXISTS employees_corporate_email_unique
-  ON employees(LOWER(corporate_email)) WHERE deleted_at IS NULL AND corporate_email IS NOT NULL;
-```
-
-### employee_skills
-
-```sql
-CREATE TABLE IF NOT EXISTS employee_skills (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
-  skill_id INT NOT NULL REFERENCES skills(id),
-  proficiency VARCHAR(20) NOT NULL DEFAULT 'intermediate'
-    CHECK (proficiency IN ('beginner','intermediate','advanced','expert')),
-  years_experience NUMERIC(4,1) NULL,
-  notes VARCHAR(200) NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS employee_skill_unique
-  ON employee_skills(employee_id, skill_id);
-```
-
-### contracts
-
-```sql
-CREATE TABLE IF NOT EXISTS contracts (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  name VARCHAR(200) NOT NULL,
-  client_id UUID NOT NULL REFERENCES clients(id),
-  opportunity_id UUID NULL REFERENCES opportunities(id),
-  winning_quotation_id UUID NULL REFERENCES quotations(id),
-  type VARCHAR(20) NOT NULL CHECK (type IN ('capacity','project','resell')),
-  status VARCHAR(20) NOT NULL DEFAULT 'planned'
-    CHECK (status IN ('planned','active','paused','completed','cancelled')),
-  start_date DATE NOT NULL,
-  end_date DATE NULL,
-  account_owner_id UUID NOT NULL REFERENCES users(id),
-  delivery_manager_id UUID NULL REFERENCES users(id),  -- DM (para proyectos)
-  capacity_manager_id UUID NULL REFERENCES users(id),  -- CM (para capacity)
-  squad_id UUID NOT NULL REFERENCES squads(id),
-  notes TEXT NULL,
-  tags TEXT[] NULL,
-  metadata JSONB NULL,
-  deleted_at TIMESTAMPTZ NULL,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS contracts_client_idx ON contracts(client_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS contracts_status_idx ON contracts(status) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS contracts_type_idx ON contracts(type) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS contracts_squad_idx ON contracts(squad_id) WHERE deleted_at IS NULL;
-```
-
-### resource_requests
-
-```sql
-CREATE TABLE IF NOT EXISTS resource_requests (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  contract_id UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
-  role_title VARCHAR(150) NOT NULL,
-  area_id INT NOT NULL REFERENCES areas(id),
-  level VARCHAR(5) NOT NULL CHECK (level IN ('L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11')),
-  country VARCHAR(100) NULL,                 -- país preferido, nullable si no aplica
-  language_requirements JSONB NULL,          -- [{"language":"en","min_level":"b2"}]
-  required_skills INT[] NULL,                 -- array de skill_id
-  nice_to_have_skills INT[] NULL,             -- array de skill_id
-  weekly_hours NUMERIC(5,2) NOT NULL DEFAULT 40.00,
-  start_date DATE NOT NULL,
-  end_date DATE NULL,
-  quantity INT NOT NULL DEFAULT 1,           -- cuántas personas se necesitan con este perfil
-  priority VARCHAR(20) NOT NULL DEFAULT 'medium' CHECK (priority IN ('low','medium','high','critical')),
-  status VARCHAR(20) NOT NULL DEFAULT 'open'
-    CHECK (status IN ('open','partially_filled','filled','cancelled')),
-  notes TEXT NULL,
-  deleted_at TIMESTAMPTZ NULL,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS resource_requests_contract_idx ON resource_requests(contract_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS resource_requests_status_idx ON resource_requests(status) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS resource_requests_area_level_idx ON resource_requests(area_id, level) WHERE deleted_at IS NULL;
-```
-
-### assignments
-
-```sql
-CREATE TABLE IF NOT EXISTS assignments (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  resource_request_id UUID NOT NULL REFERENCES resource_requests(id),
-  employee_id UUID NOT NULL REFERENCES employees(id),
-  contract_id UUID NOT NULL REFERENCES contracts(id),  -- desnormalizado para queries rápidas
-  weekly_hours NUMERIC(5,2) NOT NULL CHECK (weekly_hours > 0 AND weekly_hours <= 80),
-  start_date DATE NOT NULL,
-  end_date DATE NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'planned'
-    CHECK (status IN ('planned','active','ended','cancelled')),
-  role_title VARCHAR(150) NULL,  -- opcional override del role title de la request
-  notes TEXT NULL,
-  -- APROBACIÓN (reservado para V3, no se usa en V2):
-  approval_required BOOLEAN NOT NULL DEFAULT false,
-  approved_at TIMESTAMPTZ NULL,
-  approved_by UUID NULL REFERENCES users(id),
-  --
-  deleted_at TIMESTAMPTZ NULL,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS assignments_employee_idx ON assignments(employee_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS assignments_contract_idx ON assignments(contract_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS assignments_request_idx ON assignments(resource_request_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS assignments_status_idx ON assignments(status) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS assignments_dates_idx ON assignments(start_date, end_date) WHERE deleted_at IS NULL;
-```
-
-**Regla de negocio:** un empleado no puede tener asignaciones activas que sumen más de su `weekly_capacity_hours`. La validación se hace en aplicación (ver módulo 04).
-
-### time_entries
-
-```sql
-CREATE TABLE IF NOT EXISTS time_entries (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  employee_id UUID NOT NULL REFERENCES employees(id),
-  assignment_id UUID NOT NULL REFERENCES assignments(id),
-  work_date DATE NOT NULL,
-  hours NUMERIC(5,2) NOT NULL CHECK (hours > 0 AND hours <= 24),
-  description TEXT NULL,
-  -- APROBACIÓN (reservado para V3, no se usa en V2):
-  status VARCHAR(20) NOT NULL DEFAULT 'submitted'
-    CHECK (status IN ('draft','submitted','approved','rejected')),
-  approved_at TIMESTAMPTZ NULL,
-  approved_by UUID NULL REFERENCES users(id),
-  rejection_reason TEXT NULL,
-  --
-  deleted_at TIMESTAMPTZ NULL,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS time_entries_employee_date_idx
-  ON time_entries(employee_id, work_date) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS time_entries_assignment_idx
-  ON time_entries(assignment_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS time_entries_date_idx
-  ON time_entries(work_date) WHERE deleted_at IS NULL;
-```
-
-**Regla de negocio:** la suma de `hours` para un `(employee_id, work_date)` no puede exceder 24. Validar en aplicación.
-
-### events (event log estructurado — reemplaza audit_log progresivamente)
-
-```sql
-CREATE TABLE IF NOT EXISTS events (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  event_type VARCHAR(100) NOT NULL,
-    -- Ej: 'quotation.created', 'employee.updated', 'assignment.created', 'time_entry.submitted'
-  entity_type VARCHAR(50) NOT NULL,
-    -- Ej: 'quotation', 'employee', 'assignment'
-  entity_id UUID NOT NULL,
-  actor_user_id UUID NULL REFERENCES users(id),  -- nullable para eventos de sistema
-  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-    -- before, after, cambios, metadata relevante
-  ip_address INET NULL,
-  user_agent VARCHAR(500) NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS events_entity_idx ON events(entity_type, entity_id);
-CREATE INDEX IF NOT EXISTS events_actor_idx ON events(actor_user_id);
-CREATE INDEX IF NOT EXISTS events_type_idx ON events(event_type);
-CREATE INDEX IF NOT EXISTS events_date_idx ON events(created_at);
-```
-
-**Reglas:**
-- Toda mutación (create, update, delete, status change) de entidades principales escribe un evento.
-- Entidades principales: quotation, opportunity, client, employee, assignment, contract, resource_request, time_entry, user.
-- Para `update` el payload debe incluir `{before: {...}, after: {...}, changed_fields: [...]}`.
-
-### notifications
-
-```sql
-CREATE TABLE IF NOT EXISTS notifications (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users(id),
-  type VARCHAR(50) NOT NULL,
-    -- 'assignment.created', 'request.pending', 'time_entry.reminder', etc
-  title VARCHAR(200) NOT NULL,
-  body TEXT NULL,
-  link VARCHAR(500) NULL,  -- ruta interna a la que llevar al usuario al hacer click
-  entity_type VARCHAR(50) NULL,
-  entity_id UUID NULL,
-  read_at TIMESTAMPTZ NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS notifications_user_unread_idx
-  ON notifications(user_id) WHERE read_at IS NULL;
-```
-
-### quotation_allocations (extraer matriz del JSONB metadata)
-
-```sql
-CREATE TABLE IF NOT EXISTS quotation_allocations (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-  quotation_id UUID NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
-  line_sort_order INT NOT NULL,   -- referencia al perfil en quotation_lines
-  phase_id UUID NOT NULL REFERENCES quotation_phases(id) ON DELETE CASCADE,
-  weekly_hours NUMERIC(5,2) NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS quotation_allocations_unique
-  ON quotation_allocations(quotation_id, line_sort_order, phase_id);
-CREATE INDEX IF NOT EXISTS quotation_allocations_quotation_idx
-  ON quotation_allocations(quotation_id);
-```
-
-Durante migración: leer `quotations.metadata->'allocation'` y popular esta tabla.
+**Extensiones:**
+- `uuid-ossp` (siempre): generación UUIDs.
+- `vector` (opcional): si está disponible se crean columnas de embeddings; si no, se loguea warning y el resto migra.
 
 ---
 
-## Restricciones de Integridad de Negocio (a validar en aplicación)
+## 2. Diagrama de relaciones
 
-1. **Asignación sin overbooking:** para un empleado activo, la suma de `weekly_hours` de sus asignaciones activas (`status IN ('planned','active')`, fechas vigentes al día de hoy) no debe superar `weekly_capacity_hours`. Si una nueva asignación violaría esto, devolver 409 con mensaje claro.
+```mermaid
+erDiagram
+  users ||--o{ employees : "may link"
+  users ||--o{ audit_log : "emits"
+  users ||--o{ events : "actor"
+  users ||--o{ notifications : "targets"
+  users ||--o{ ai_interactions : "triggered"
 
-2. **Time entry dentro de ventana retroactiva:** por default 30 días hacia atrás. Configurable vía parámetro `time_tracking.max_retroactive_days`. Rechazar entries fuera de esa ventana con 400.
+  squads ||--o{ contracts : "owns"
+  squads ||--o{ opportunities : "owns"
+  squads ||--o{ employees : "groups"
 
-3. **Time entry no futuro:** `work_date <= CURRENT_DATE`. 400 si lo viola.
+  clients ||--o{ opportunities : "has"
+  clients ||--o{ contracts : "has"
+  opportunities ||--o{ quotations : "spawns"
+  opportunities ||--o| contracts : "wins → contract"
 
-4. **Time entry contra asignación válida:** la fecha del entry debe caer dentro de las fechas de la asignación. 400 si lo viola.
+  quotations ||--o{ quotation_lines : "has"
+  quotations ||--o{ quotation_phases : "has"
+  quotations ||--o{ quotation_epics : "has"
+  quotations ||--o{ quotation_milestones : "has"
+  quotations ||--o{ quotation_allocations : "has"
 
-5. **Suma horas/día:** la suma de `hours` del mismo `(employee_id, work_date)` no puede exceder 24. 409 si lo viola.
+  contracts ||--o{ resource_requests : "needs"
+  resource_requests ||--o{ assignments : "fulfilled by"
+  employees ||--o{ assignments : "is on"
+  contracts ||--o{ assignments : "staffs"
 
-6. **Contract sin asignaciones activas no bloquea eliminación:** pero si tiene asignaciones activas, devolver 409.
+  assignments ||--o{ time_entries : "logs hours"
+  assignments ||--o{ weekly_time_allocations : "logs %"
+  employees  ||--o{ time_entries : "books"
+  employees  ||--o{ weekly_time_allocations : "books"
 
-7. **Empleado con asignaciones activas no se elimina:** 409 sugerir cambiar status a `terminated`.
+  contracts ||--o{ revenue_periods : "monthly recognition"
 
-8. **Oportunidad ganada requiere winning_quotation_id:** al marcar `outcome='won'`, se debe especificar cuál cotización ganó. 400 si no se pasa.
+  areas  ||--o{ employees : "groups"
+  areas  ||--o{ resource_requests : "scope"
+  skills ||--o{ employee_skills : "owned by"
+  employees ||--o{ employee_skills : "has"
+  employees }o--o{ users : "manager_user_id"
 
-9. **Winning quotation pertenece a la oportunidad:** validar que `winning_quotation_id` apunte a una cotización cuyo `opportunity_id` sea el de la oportunidad.
-
----
-
-## Parámetros nuevos para V2
-
-Agregar al seed:
-
-```sql
--- Categoría 'time_tracking':
-INSERT INTO parameters (category, key, value, label, note, sort_order) VALUES
-  ('time_tracking','max_retroactive_days',30,'Días retroactivos máx','Ventana máxima para registrar horas hacia atrás',1),
-  ('time_tracking','daily_reminder_hour',17,'Hora recordatorio','Hora (24h) en la que se genera el recordatorio diario',2),
-  ('time_tracking','weekly_digest_day',5,'Día digest semanal','Día de la semana (1=lun) para el digest de compliance',3)
-ON CONFLICT (category, key) DO NOTHING;
-
--- Categoría 'utilization':
-INSERT INTO parameters (category, key, value, label, note, sort_order) VALUES
-  ('utilization','bench_threshold',0.50,'Umbral bench','Utilización ≤ este valor = empleado en bench',1),
-  ('utilization','overallocation_threshold',1.00,'Umbral sobrecarga','Utilización > este valor = sobrecargado',2)
-ON CONFLICT (category, key) DO NOTHING;
+  ai_prompt_templates ||--o{ ai_interactions : "version"
+  employees ||--o{ delivery_facts : "denormalized rollup"
 ```
 
 ---
 
-## Resumen de relaciones
+## 3. Tablas core
 
-```
-clients
-  ↓
-opportunities ──→ quotations ──→ quotation_lines
-                       ↓              ↓
-                       │         quotation_allocations
-                       ↓              ↓
-                    contracts ←─ quotation_phases, epics, milestones
-                       ↓
-                  resource_requests
-                       ↓
-                  assignments ←─ employees ← employee_skills ← skills
-                       ↓              ↑
-                   time_entries       │
-                                      areas
+### `users` (V1, alterada en V2)
 
-users ←─ squads
-  ↑
-events (polymorphic)
-  ↑
-notifications
+Identidad de login. Distinto de `employees` por diseño: un empleado puede no tener cuenta de login (contractor sin acceso al sistema), y un usuario puede no ser empleado (admin externo, CEO).
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `email` | VARCHAR(255) UNIQUE NOT NULL | |
+| `password_hash` | VARCHAR(255) NOT NULL | bcrypt cost 12 |
+| `name` | VARCHAR(255) NOT NULL | |
+| `role` | VARCHAR(20) | CHECK: `superadmin` \| `admin` \| `lead` \| `member` \| `viewer` \| `preventa` (legacy) |
+| `function` | VARCHAR(50) NULL | CHECK: `comercial` \| `preventa` \| `capacity_manager` \| `delivery_manager` \| `project_manager` \| `fte_tecnico` \| `people` \| `finance` \| `pmo` \| `admin` |
+| `squad_id` | UUID NULL → squads | |
+| `active` | BOOLEAN DEFAULT true | |
+| `must_change_password` | BOOLEAN DEFAULT true | |
+| `preferences` | JSONB DEFAULT '{}' | UI prefs: `scheme`, `accentHue`, `density`. Validar con `SCHEMAS.userPreferences` |
+| `deleted_at` | TIMESTAMPTZ NULL | |
+| `created_at`, `updated_at` | TIMESTAMP | **V1 legacy: sin TZ** |
+
+**Roles:**
+- `superadmin`: bypass total
+- `admin`: CRUD en todas las entidades operativas
+- `lead`: líder de equipo. Visibilidad de sus reportes directos vía `employees.manager_user_id = users.id`
+- `member`: usuario estándar
+- `viewer`: solo lectura
+- `preventa`: legacy. Middleware `auth.js` reescribe a `member` + `function='preventa'` durante grace period
+
+### `squads`
+
+Agrupación organizacional. Hoy "ocultos" del UI (squad por defecto `DVPNYX Global` se autocrea). Decisión pendiente: dropear o exponer.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `name` | VARCHAR(100) NOT NULL | UNIQUE (case-insensitive, partial WHERE deleted_at IS NULL) |
+| `description` | TEXT NULL | |
+| `active` | BOOLEAN DEFAULT true | |
+| `deleted_at` | TIMESTAMPTZ NULL | |
+
+### `parameters`
+
+Catálogo de parámetros operativos. Categorías: `time_tracking`, `reports`, `utilization`, y otros del cotizador (cost rates, country deltas).
+
+| Columna | Tipo |
+|---|---|
+| `id` SERIAL PK | |
+| `category`, `key` | parte 1 y 2 de la PK lógica |
+| `value` NUMERIC | |
+| `label`, `note`, `sort_order`, `updated_at`, `updated_by` | |
+
+UNIQUE: `(category, key)`.
+
+---
+
+## 4. Comercial: clients → opportunities → quotations
+
+### `clients`
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `name` | VARCHAR(200) NOT NULL | UNIQUE (lower, partial) |
+| `legal_name`, `country`, `industry` | | |
+| `tier` | VARCHAR(50) NULL | CHECK: `enterprise` \| `mid_market` \| `smb` |
+| `preferred_currency` | VARCHAR(3) DEFAULT 'USD' | |
+| `notes`, `tags TEXT[]`, `external_crm_id` | | |
+| `slug` | VARCHAR(120) NULL | UNIQUE partial. URL-friendly + LLM-friendly |
+| `active` | BOOLEAN DEFAULT true | |
+| `deleted_at`, `created_by`, `created_at`, `updated_at` | | |
+
+### `opportunities`
+
+Pipeline de venta. Estados drive Kanban (CRM-MVP-00.1).
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `client_id` | UUID NOT NULL → clients | |
+| `name`, `description` | | |
+| `account_owner_id` | UUID NOT NULL → users | |
+| `presales_lead_id` | UUID NULL → users | |
+| `squad_id` | UUID NOT NULL → squads | |
+| `status` | VARCHAR(30) DEFAULT 'open' | CHECK: `open` \| `qualified` \| `proposal` \| `negotiation` \| `won` \| `lost` \| `cancelled` |
+| `outcome` | VARCHAR(20) NULL | |
+| `outcome_reason` | VARCHAR(50) NULL | CHECK: `price` \| `timing` \| `competition` \| `technical_fit` \| `client_internal` \| `other` |
+| `outcome_notes` | TEXT NULL | |
+| `expected_close_date`, `closed_at` | | |
+| `winning_quotation_id` | UUID NULL → quotations | seteada al ganar |
+| `booking_amount_usd` | NUMERIC(18,2) DEFAULT 0 | CRM-MVP |
+| `probability` | NUMERIC(5,2) DEFAULT 5 | recalculada por trigger según status |
+| `weighted_amount_usd` | NUMERIC(18,2) | trigger: `booking × probability / 100` |
+| `last_stage_change_at` | TIMESTAMPTZ DEFAULT NOW() | |
+| `next_step`, `next_step_due_date` | | |
+| `tags`, `external_crm_id`, `slug` | | |
+| `description_embedding` | vector(1536) NULL | si pgvector |
+| `deleted_at`, `created_by`, `created_at`, `updated_at` | | |
+
+**Trigger `opp_pipeline_recalc`** (BEFORE INSERT OR UPDATE):
+- Recalcula `probability` cuando `status` cambia (5/20/50/75/100/0/0).
+- Recalcula `weighted_amount_usd = booking × probability / 100`.
+- Setea `last_stage_change_at = NOW()` cuando `status` cambia.
+
+### `quotations` (V1, alterada en V2)
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `type` | VARCHAR(20) | CHECK: `staff_aug` \| `fixed_scope` |
+| `version`, `parent_id` | INT, UUID NULL → quotations | versionado lineal |
+| `status` | VARCHAR(20) DEFAULT 'draft' | CHECK: `draft` \| `sent` \| `approved` \| `rejected` \| `expired` |
+| `project_name`, `client_name` | VARCHAR | `client_name` es legacy denormalizado; `client_id` es el FK real |
+| `commercial_name`, `preventa_name` | | denormalizados |
+| `validity_days`, `discount_pct` | INT, NUMERIC | |
+| `notes`, `metadata JSONB` | | |
+| `client_id` | UUID NULL → clients | V2 add |
+| `opportunity_id` | UUID NULL → opportunities | V2 add |
+| `squad_id` | UUID NULL → squads | V2 add |
+| `currency` | VARCHAR(3) DEFAULT 'USD' | V2 add |
+| `parameters_snapshot` | JSONB NULL | snapshot de params al cotizar |
+| `sent_at` | TIMESTAMPTZ NULL | |
+| `summary_embedding` | vector(1536) NULL | si pgvector |
+| `deleted_at`, `created_by`, `created_at`, `updated_at` | | `*_at` siguen siendo TIMESTAMP V1 |
+
+---
+
+## 5. Cotizador (legacy V1)
+
+5 tablas hijas de `quotations`. Todas con `ON DELETE CASCADE`.
+
+### `quotation_lines`
+
+Recursos cotizados. En staff_aug es la lista completa; en fixed_scope, los recursos asignables a phases.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `quotation_id` | UUID NOT NULL → quotations CASCADE | |
+| `sort_order` | INT | |
+| `specialty` | VARCHAR(100) | mapeo heurístico a `areas.key` (ver `SPECIALTY_TO_AREA_KEY` en `routes/contracts.js`) |
+| `role_title` | VARCHAR(255) | |
+| `level` | INT 1..11 | **legacy INT**. V2 usa VARCHAR `L1..L11` |
+| `country`, `bilingual`, `tools`, `stack`, `modality`, `phase` | | |
+| `quantity` | INT DEFAULT 1 | CHECK: `>= 1` |
+| `duration_months` | INT DEFAULT 6 | CHECK: `0..120` |
+| `hours_per_week` | NUMERIC | CHECK: `0..168` |
+| `cost_hour`, `rate_hour`, `rate_month`, `total` | NUMERIC | |
+
+### `quotation_phases`
+
+Fases de un proyecto fixed_scope. `id`, `quotation_id`, `sort_order`, `name`, `weeks INT`, `description`.
+
+### `quotation_epics`
+
+Épicas/módulos del proyecto.
+
+| Columna | Tipo |
+|---|---|
+| `id`, `quotation_id`, `sort_order`, `name`, `priority` | |
+| `hours_by_profile` JSONB | `{ "frontend": 80, "backend": 120 }` |
+| `total_hours` NUMERIC | |
+
+### `quotation_milestones`
+
+Hitos de pago para fixed_scope.
+
+| Columna | Tipo |
+|---|---|
+| `id`, `quotation_id`, `sort_order`, `name`, `phase` | |
+| `percentage`, `amount`, `expected_date` | |
+| `deleted_at` (V2 add) | |
+
+### `quotation_allocations`
+
+Distribución semanal de horas por (línea, fase). Promovido de JSONB a tabla en V2 (EX-4).
+
+| Columna | Tipo |
+|---|---|
+| `id`, `quotation_id`, `line_sort_order`, `phase_id`, `weekly_hours`, `created_at` | |
+
+UNIQUE: `(quotation_id, line_sort_order, phase_id)`.
+
+---
+
+## 6. Delivery: contracts → resource_requests → assignments
+
+### `contracts`
+
+Contrato firmado con un cliente. Distinto de quotation: la quotation es propuesta, el contract es ejecución.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `name` | VARCHAR(200) NOT NULL | |
+| `client_id` | UUID NOT NULL → clients | |
+| `opportunity_id` | UUID NULL → opportunities | |
+| `winning_quotation_id` | UUID NULL → quotations | base para kick-off |
+| `type` | VARCHAR(20) | CHECK: `capacity` \| `project` \| `resell` |
+| `contract_subtype` | VARCHAR(50) NULL | CHECK: 6 valores válidos. Coherencia con `type` validada en `routes/contracts.js` vía `utils/contract_subtype.js`. NULL para `resell`. **Obligatorio** al crear/editar capacity y project (excepción: legacy edits que no tocan type). Ver [SPEC subtipo-contrato](#contract_subtype-subtypes-spec) abajo |
+| `status` | VARCHAR(20) DEFAULT 'planned' | CHECK: `planned` \| `active` \| `paused` \| `completed` \| `cancelled` |
+| `start_date`, `end_date` | DATE | CHECK: `end >= start` |
+| `account_owner_id` | UUID NOT NULL → users | |
+| `delivery_manager_id` | UUID NULL → users | quien hace kick-off |
+| `capacity_manager_id` | UUID NULL → users | |
+| `squad_id` | UUID NOT NULL → squads | auto-resuelto si vacío |
+| `notes`, `tags TEXT[]` | | |
+| `metadata` | JSONB NULL | claves conocidas: `kick_off_date`, `kicked_off_at`, `kicked_off_by`, `kick_off_seeded_count`. Validar con `SCHEMAS.contractMetadata` |
+| `total_value_usd` | NUMERIC(18,2) DEFAULT 0 | RR-MVP. Hoy editable libre |
+| `original_currency` | VARCHAR(3) DEFAULT 'USD' | |
+| `slug` | VARCHAR(160) NULL | UNIQUE partial |
+| `context_embedding` | vector(1536) NULL | si pgvector |
+| `deleted_at`, `created_by`, `created_at`, `updated_at` | | |
+
+**Endpoint singular:** `POST /api/contracts/:id/kick-off` lee la winning_quotation y crea `resource_requests` automáticamente.
+
+#### contract_subtype (subtypes spec)
+
+Catálogo del campo `contract_subtype` (Abril 2026). Helper:
+[`server/utils/contract_subtype.js`](../../../server/utils/contract_subtype.js) ·
+[`client/src/utils/contractSubtype.js`](../../../client/src/utils/contractSubtype.js).
+
+| `type` | Subtipos válidos (valor interno → etiqueta visible) |
+|---|---|
+| `capacity` | `staff_augmentation` → "Staff Augmentation" · `mission_driven_squad` → "Mission-driven squad" · `managed_service` → "Servicio administrado / Soporte" · `time_and_materials` → "Tiempo y Materiales" |
+| `project`  | `fixed_scope` → "Alcance fijo / POC" · `hour_pool` → "Bolsa de horas" |
+| `resell`   | (sin subtipos — siempre `NULL`) |
+
+**Reglas de coherencia (server):**
+- `type='capacity'` o `type='project'` + `contract_subtype=NULL` en POST → `400 code:'subtype_required'`
+- `type='resell'` + `contract_subtype` no-null → `400 code:'subtype_not_allowed_for_resell'`
+- subtype no en la lista del type → `400 code:'subtype_invalid_for_type'`
+- En PUT: si el caller cambia el `type`, el subtype se requiere (no se hereda del type viejo)
+- En PUT: contratos legacy con `subtype=NULL` pueden editar OTROS campos sin forzar subtype, salvo que el caller cambie type o pase subtype explícito.
+
+**CHECK constraint en DB** valida los 6 valores válidos a nivel de schema; la coherencia con `type` queda en código (depende de otra columna).
+
+### `resource_requests`
+
+Necesidad de recursos para un contrato. Un row puede tener `quantity > 1`.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `contract_id` | UUID NOT NULL → contracts CASCADE | |
+| `role_title` | VARCHAR(150) NOT NULL | |
+| `area_id` | INT NOT NULL → areas | |
+| `level` | VARCHAR(5) NOT NULL | CHECK: `L1`..`L11` |
+| `country` | VARCHAR(100) NULL | |
+| `language_requirements` | JSONB NULL | array de `{language, level}`. Validar con `SCHEMAS.resourceRequestLanguageRequirements` |
+| `required_skills`, `nice_to_have_skills` | INT[] | FKs a `skills.id` |
+| `weekly_hours` | NUMERIC(5,2) DEFAULT 40 | CHECK: `0 < h <= 80` |
+| `start_date`, `end_date` | DATE | CHECK: `end >= start` |
+| `quantity` | INT DEFAULT 1 | CHECK: `>= 1` |
+| `priority` | VARCHAR(20) DEFAULT 'medium' | CHECK: `low` \| `medium` \| `high` \| `critical` |
+| `status` | VARCHAR(20) DEFAULT 'open' | CHECK: `open` \| `partially_filled` \| `filled` \| `cancelled`. Computado por código: `computeStatus(stored, active_assignments_count, quantity)` |
+| `notes` | TEXT | |
+| `requirements_embedding` | vector(1536) NULL | si pgvector |
+| `deleted_at`, `created_by`, `created_at`, `updated_at` | | |
+
+### `assignments`
+
+Empleado asignado a un resource_request. **El plan**.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `resource_request_id` | UUID NOT NULL → resource_requests | |
+| `employee_id` | UUID NOT NULL → employees | |
+| `contract_id` | UUID NOT NULL → contracts | redundante con request.contract_id; chequeado por código |
+| `weekly_hours` | NUMERIC(5,2) | CHECK: `0 < h <= 80` |
+| `start_date`, `end_date` | DATE | CHECK: `end >= start` |
+| `status` | VARCHAR(20) DEFAULT 'planned' | CHECK: `planned` \| `active` \| `ended` \| `cancelled` |
+| `role_title`, `notes` | | |
+| `approval_required`, `approved_at`, `approved_by` | | aspirational, no enforced |
+| `override_reason` | TEXT NULL | justificación cuando admin bypassea validación |
+| `override_checks` | JSONB NULL | snapshot de validaciones falladas — para que la IA aprenda |
+| `override_author_id`, `override_at` | | |
+| `deleted_at`, `created_by`, `created_at`, `updated_at` | | |
+
+**Validación al crear** (en `routes/assignments.js`):
+1. `runAllChecks()` desde `utils/assignment_validation.js` → área match, level gap, capacity, overlap.
+2. Overbooking si suma supera `weekly_capacity_hours × 1.10` → 409 salvo override.
+3. Status del empleado: `terminated` rechaza; `bench`/`on_leave` warn.
+
+---
+
+## 7. Time tracking (dos modelos coexisten)
+
+### `time_entries` (modelo daily)
+
+Una row = horas trabajadas por empleado en un día contra una asignación.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id`, `employee_id`, `assignment_id` | | |
+| `work_date` | DATE | |
+| `hours` | NUMERIC(5,2) | CHECK: `0 < h <= 24` |
+| `description`, `status` | | CHECK: `draft` \| `submitted` \| `approved` \| `rejected` |
+| `approved_at`, `approved_by`, `rejection_reason` | | |
+| `deleted_at`, `created_by`, `created_at`, `updated_at` | | |
+
+UI: `/time/me` (matriz semanal).
+
+### `weekly_time_allocations` (modelo weekly %)
+
+Una row = % de la semana del empleado dedicado a una asignación. Bench se calcula `100 - SUM(pct)`, no se persiste.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id`, `employee_id`, `assignment_id` | | |
+| `week_start_date` | DATE | siempre lunes (normalizado por `mondayOf` en `utils/sanitize.js`) |
+| `pct` | NUMERIC(5,2) | CHECK: `0..100` |
+| `notes`, `created_by`, `updated_by`, `created_at`, `updated_at` | | |
+
+UNIQUE: `(employee_id, week_start_date, assignment_id)`.
+
+UI: `/time/team`.
+
+> **Tech debt activo:** estos dos modelos coexisten por decisión de no-bloqueo. Eng team consolida según [`DECISIONS.md :: time-tracking-model`](../../DECISIONS.md).
+
+---
+
+## 8. Finanzas: revenue + exchange rates
+
+### `revenue_periods`
+
+Reconocimiento mensual de ingresos por contrato.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `contract_id` | UUID NOT NULL → contracts CASCADE | parte 1 PK |
+| `yyyymm` | CHAR(6) | parte 2 PK. CHECK: `^[0-9]{6}$` |
+| `projected_usd` | NUMERIC(18,2) | si type='project': se usa `projected_pct × contracts.total_value_usd` |
+| `projected_pct` | NUMERIC(7,4) NULL | 0..1, sólo para type='project' |
+| `real_usd`, `real_pct` | | NULL hasta cerrar período |
+| `status` | VARCHAR(20) DEFAULT 'open' | `open` \| `closed` |
+| `notes`, `closed_at`, `closed_by`, `created_by`, `updated_by`, `created_at`, `updated_at` | | |
+
+PK compuesta: `(contract_id, yyyymm)`.
+
+> **Inmutabilidad pendiente:** rows con `status='closed'` deberían ser inmutables (NIIF 15). Hoy depende del código no permitir UPDATE a closed — sin trigger DB.
+
+### `exchange_rates`
+
+Tasas mensuales tipo "USD<currency>". Convención: `usd_rate = N` ⟹ `1 USD = N <currency>`.
+
+| Columna | Tipo |
+|---|---|
+| `yyyymm`, `currency`, `usd_rate NUMERIC(18,8)` | PK = `(yyyymm, currency)` |
+| `notes`, `updated_by`, `updated_at` | |
+
+USD propio NO vive aquí — código asume rate=1.0 implícito.
+
+**Conversión A → B en período Y:**
 ```
+amount_in_USD = amount_in_A / usd_rate(Y, A)   (o = amount_in_A si A=USD)
+amount_in_B   = amount_in_USD × usd_rate(Y, B) (o = amount_in_USD si B=USD)
+```
+
+Si no hay rate del período, fallback al último disponible (LATERAL JOIN en query).
+
+---
+
+## 9. Personas: areas, skills, employees
+
+### `areas`
+
+| Columna | Tipo |
+|---|---|
+| `id SERIAL PK`, `key VARCHAR(50) UNIQUE`, `name VARCHAR(100)` | |
+| `description`, `narrative TEXT` | enriquecimiento RAG |
+| `narrative_embedding vector(1536)` | si pgvector |
+| `sort_order`, `active`, `created_at` | |
+
+Seeds: 9 áreas DVPNYX (`development`, `infra_security`, `testing`, `product_management`, `project_management`, `data_ai`, `ux_ui`, `functional_analysis`, `devops_sre`).
+
+### `skills`
+
+| Columna | Tipo |
+|---|---|
+| `id SERIAL PK`, `name VARCHAR(100) UNIQUE` (case-insensitive), `category VARCHAR(50)` | |
+| `description`, `narrative` | |
+| `name_embedding vector(1536)` | si pgvector |
+| `active`, `created_at` | |
+
+Seeds: ~60 skills en 8 categorías (language, framework, cloud, data, ai, tool, methodology, soft).
+
+### `employees`
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `user_id` | UUID NULL UNIQUE → users | NULL si no tiene cuenta de login |
+| `first_name`, `last_name` | VARCHAR | |
+| `personal_email`, `corporate_email` | VARCHAR | corporate UNIQUE (lower, partial) |
+| `country`, `city` | VARCHAR | |
+| `area_id` | INT NOT NULL → areas | |
+| `level` | VARCHAR(5) | CHECK: `L1`..`L11` |
+| `seniority_label` | VARCHAR(50) | |
+| `employment_type` | VARCHAR(20) DEFAULT 'fulltime' | CHECK: `fulltime` \| `parttime` \| `contractor` |
+| `weekly_capacity_hours` | NUMERIC(5,2) DEFAULT 40 | CHECK: `0..80` |
+| `languages` | JSONB DEFAULT '[]' | |
+| `start_date` | DATE NOT NULL | |
+| `end_date` | DATE NULL | terminación |
+| `status` | VARCHAR(20) DEFAULT 'active' | CHECK: `active` \| `on_leave` \| `bench` \| `terminated` |
+| `squad_id` | UUID NULL → squads | |
+| `manager_user_id` | UUID NULL → users | líder directo (rol `lead` lo usa para scoping) |
+| `notes`, `tags TEXT[]` | | |
+| `company_monthly_cost`, `hourly_cost`, `cost_currency`, `cost_updated_at`, `cost_updated_by` | | reservados para finanzas (V2 los deja NULL) |
+| `slug` | VARCHAR(160) NULL | UNIQUE partial |
+| `skill_profile_embedding` | vector(1536) NULL | si pgvector |
+| `deleted_at`, `created_by`, `created_at`, `updated_at` | | |
+
+### `employee_skills`
+
+Tabla puente con proficiency.
+
+| Columna | Tipo |
+|---|---|
+| `id`, `employee_id`, `skill_id`, `proficiency` (CHECK: `beginner` \| `intermediate` \| `advanced` \| `expert`) | |
+| `years_experience NUMERIC(4,1)`, `notes`, `created_at` | |
+
+UNIQUE: `(employee_id, skill_id)`. ON DELETE CASCADE desde employee.
+
+---
+
+## 10. Auditoría: events + audit_log
+
+### `events` (V2, target)
+
+Append-only. Estructurada. Indexada por entidad/actor/tipo/fecha.
+
+| Columna | Tipo |
+|---|---|
+| `id`, `event_type` | snake.case: `contract.created`, `assignment.overbooked`, `contract.kicked_off` |
+| `entity_type`, `entity_id`, `actor_user_id` | |
+| `payload JSONB`, `ip_address INET`, `user_agent` | |
+| `created_at` | |
+
+Emite vía `utils/events.js :: emitEvent(pool, ...)`.
+
+### `audit_log` (V1, legacy)
+
+| Columna | Tipo |
+|---|---|
+| `id SERIAL`, `user_id`, `action`, `entity`, `entity_id`, `details JSONB`, `ip_address`, `created_at` | |
+
+> **Tech debt activo:** `events` debe reemplazar `audit_log` gradualmente. Hoy ambos se escriben en flows distintos. **No agregar features nuevos a `audit_log`.**
+
+---
+
+## 11. Notificaciones
+
+### `notifications`
+
+In-app, asíncronas, leídas con `read_at IS NULL`.
+
+| Columna | Tipo |
+|---|---|
+| `id UUID`, `user_id`, `type`, `title`, `body`, `link` | |
+| `entity_type`, `entity_id` | |
+| `read_at`, `created_at` | |
+
+Index: `notifications(user_id) WHERE read_at IS NULL`.
+
+---
+
+## 12. Capa AI-readiness
+
+Agregada en Mayo 2026. Aditiva, no rompe nada existente.
+
+### `ai_interactions`
+
+Log estructurado de cada llamada a un agente.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `agent_name`, `agent_version` | VARCHAR | ej. `claude-sonnet-4.5`, `20251015` |
+| `prompt_template`, `prompt_template_version` | VARCHAR, INT | FK lógica a `ai_prompt_templates` |
+| `user_id` | UUID NULL → users | quien disparó |
+| `entity_type`, `entity_id` | | sobre qué entidad opera |
+| `input_payload` | JSONB | prompt + contexto (REDACTED — sin PII directa) |
+| `output_payload` | JSONB | respuesta |
+| `confidence` | NUMERIC(4,3) NULL | CHECK: `0..1` |
+| `human_decision` | VARCHAR(20) NULL | CHECK: `accepted` \| `rejected` \| `modified` \| `ignored` \| `pending`. NULL = no decidido |
+| `human_feedback` | TEXT | |
+| `cost_usd`, `input_tokens`, `output_tokens`, `latency_ms` | | observabilidad |
+| `error` | TEXT NULL | si la llamada falló |
+| `created_at`, `decided_at` | | |
+
+Indexes: `user_id`, `(entity_type, entity_id)`, `(prompt_template, version)`, `created_at DESC`.
+
+**Cómo se usa:** `utils/ai_logger.js :: run({ pool, agent, template, userId, entity, input, call })`. Ver [`AI_INTEGRATION_GUIDE.md`](../../AI_INTEGRATION_GUIDE.md).
+
+### `ai_prompt_templates`
+
+Versionado de prompts.
+
+| Columna | Tipo |
+|---|---|
+| `id UUID`, `name`, `version INT` | UNIQUE `(name, version)` |
+| `description`, `body TEXT`, `output_schema JSONB` | |
+| `active BOOLEAN`, `created_by`, `created_at` | |
+
+Index: activos por nombre — `WHERE active = true`.
+
+### `delivery_facts`
+
+Tabla denormalizada por (fact_date, employee_id) para forecasting.
+
+| Columna | Tipo |
+|---|---|
+| `fact_date DATE`, `employee_id UUID` | PK compuesta |
+| `capacity_hours`, `planned_hours`, `planned_pct`, `actual_pct`, `bench_pct` | NUMERIC |
+| `utilization`, `is_overbooked` | NUMERIC, BOOLEAN |
+| `area_id`, `area_name`, `squad_id`, `level`, `country` | snapshot dimensional |
+| `refreshed_at` | |
+
+Refresca con `SELECT refresh_delivery_facts('2026-04-01'::date, '2026-04-30'::date)`.
+
+### Embeddings (pgvector)
+
+Columnas `vector(1536)` agregadas si pgvector disponible:
+
+| Tabla | Columna |
+|---|---|
+| `skills` | `name_embedding` |
+| `areas` | `narrative_embedding` |
+| `employees` | `skill_profile_embedding` |
+| `resource_requests` | `requirements_embedding` |
+| `opportunities` | `description_embedding` |
+| `contracts` | `context_embedding` |
+| `quotations` | `summary_embedding` |
+
+Indexes HNSW con `vector_cosine_ops`.
+
+Si la extensión `vector` no está instalada en la imagen postgres, el migrate emite warning pero el resto del schema migra normalmente.
+
+---
+
+## 13. Vistas materializadas + funciones
+
+### `mv_plan_vs_real_weekly`
+
+Pre-calcula plan-vs-real semanal por (employee, week, assignment).
+
+```sql
+SELECT employee_id, week_start_date, assignment_id, contract_id, contract_name,
+       role_title, planned_hours, planned_pct, actual_pct, diff_pct, notes, updated_at
+FROM mv_plan_vs_real_weekly;
+
+-- Refrescar (no se hace automático)
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_plan_vs_real_weekly;
+```
+
+UNIQUE INDEX en `(employee_id, week_start_date, assignment_id)` permite `REFRESH CONCURRENTLY` (sin lock de lectura).
+
+### Función `refresh_delivery_facts(p_from DATE, p_to DATE) → INT`
+
+PL/pgSQL. Idempotente: borra+inserta el rango. Devuelve número de rows insertados. Pensada para cron job nocturno (no ejecutado por DDL).
+
+```sql
+SELECT refresh_delivery_facts(CURRENT_DATE - 30, CURRENT_DATE);
+```
+
+---
+
+## 14. Pares de entidades duplicadas (tech debt activo)
+
+| Par | Por qué | Plan |
+|---|---|---|
+| `audit_log` (V1) ↔ `events` (V2) | Migración gradual nunca completada | Cuando se toque audit, mover writes restantes a `events` y dejar `audit_log` read-only |
+| `time_entries` (daily hours) ↔ `weekly_time_allocations` (weekly %) | Dos modelos de time tracking que coexisten por decisión de no-bloqueo | Eng team consolida (decisión producto + migración data) |
+| `quotations.client_name VARCHAR` ↔ `quotations.client_id UUID` | El nombre quedó como denormalizado legacy | Cuando se toque cotizador, derivar nombre del FK |
+| `quotation_lines.level INT` ↔ `employees.level VARCHAR L1..L11` | Legacy V1 vs spec V2. Mapeado por `utils/level.js` | Si se reescribe quotation lines, unificar a VARCHAR |
+| `users` (login) ↔ `employees` (PII operacional) | Por **diseño**: empleado puede no tener login | NO consolidar — mantener separados |
+
+---
+
+## 15. Glosario de columnas comunes
+
+| Columna | Significado |
+|---|---|
+| `id UUID` | Primary key generada por `uuid_generate_v4()` (extension `uuid-ossp`) |
+| `created_at`, `updated_at` | TIMESTAMPTZ. V1 usa TIMESTAMP sin TZ |
+| `created_by`, `updated_by` | UUID → users(id). NULL sólo en lookups |
+| `deleted_at` | TIMESTAMPTZ NULL. Soft delete. **Siempre** filtrar `WHERE deleted_at IS NULL` |
+| `status` | VARCHAR con CHECK constraint específico. Lifecycle propio por entidad |
+| `metadata`, `payload`, `*_snapshot` | JSONB libre. Validar contra `SCHEMAS` de `utils/json_schema.js` |
+| `tags` | TEXT[] para tags libres |
+| `slug` | VARCHAR URL-friendly. UNIQUE partial. Generado con `utils/slug.js` |
+| `*_embedding` | vector(1536). NULL si pgvector no disponible o no se ha generado |
+| `external_*_id` | ID en sistema externo (CRM, contabilidad). Free-form, no FK |
+
+---
+
+## Cambios recientes a este documento
+
+- **2026-05**: Reescrito completo. Capa AI-readiness, materialized view, slugs, embeddings, CHECK constraints adicionales.
+- **2026-04**: V2 schema documentado, weekly_time_allocations agregado.
+
+> **Mantenimiento:** cualquier cambio en `migrate.js` debe reflejarse aquí en el mismo PR. Regla #1 de gobierno técnico.

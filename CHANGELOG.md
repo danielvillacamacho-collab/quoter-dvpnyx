@@ -15,6 +15,207 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ## [Unreleased] — entregas en curso
 
+---
+
+## Phase 15 — Subtipo de contrato (2026-04-28)
+
+### feat(contracts): contract_subtype field con catálogo controlado
+
+Respuesta a `SPEC_subtipo-contrato.docx` (operaciones, prioridad ALTA).
+Bloqueaba reportería por modelo de trabajo y era prerequisito del módulo
+de billing.
+
+**Schema (idempotente, aditivo):**
+- Nueva columna `contracts.contract_subtype VARCHAR(50) NULL`.
+- CHECK constraint con los 6 valores válidos a nivel DB.
+- Index parcial `WHERE deleted_at IS NULL AND contract_subtype IS NOT NULL`.
+- COMMENT ON COLUMN para documentar la regla type↔subtype.
+
+**Catálogo (`utils/contract_subtype.js` server + `utils/contractSubtype.js` client):**
+- `capacity` → 4 subtipos: `staff_augmentation`, `mission_driven_squad`,
+  `managed_service`, `time_and_materials`.
+- `project` → 2 subtipos: `fixed_scope`, `hour_pool`.
+- `resell` → siempre NULL.
+- Helper `validateContractSubtype(type, subtype, opts)` con códigos de
+  error consistentes (`subtype_required` / `subtype_invalid_for_type` /
+  `subtype_not_allowed_for_resell` / `subtype_unknown`).
+
+**Server (`routes/contracts.js`):**
+- POST acepta y valida (obligatorio para capacity/project).
+- PUT diferencia el caso legacy (subtype=NULL existente, no se fuerza si
+  el usuario no toca type) del caso "type cambió" (requiere subtype nuevo).
+- GET acepta `?subtype=` (incluyendo `none` para filtrar legacy sin subtipo).
+- `from-quotation` acepta subtype opcional (DM lo completa después si no
+  viene en body — la spec dice que el FORM lo requiere, pero el atajo API
+  permite NULL inicial).
+- CSV export incluye columna Subtipo.
+- Eventos `contract.created` y `contract.created_from_quotation` incluyen
+  `contract_subtype` en el payload.
+
+**Cliente (`modules/Contracts.js` + `ContractDetail.js`):**
+- Dropdown Subtipo aparece debajo de Tipo, dependiente del valor de Tipo.
+- Reset al cambiar tipo (con preservación inteligente: si el subtipo
+  actual es válido para el nuevo tipo, no se borra).
+- Validación: `<select required>` + chequeo manual con mensaje
+  "Debes seleccionar un subtipo para continuar" debajo del campo.
+- Excepción legacy: editar contratos pre-spec sin tocar el type permite
+  guardar otros campos.
+- Lista: nueva columna Subtipo (muestra etiqueta o "Sin especificar").
+- Filtro de Subtipo en la lista (auto-restringido al tipo filtrado;
+  incluye "Sin especificar" para legacy).
+- ContractDetail: campo Subtipo en sección Resumen + banner amarillo si
+  el contrato tiene type que requiere subtype y está vacío.
+- CSV download incluye subtype filter.
+
+**Tests:**
+- Server: 36 nuevos en `routes/contracts.test.js` + `utils/contract_subtype.test.js` cubriendo todos los códigos de error, todos los caminos PUT (legacy, type-changed, subtype-changed-only), filtro GET, from-quotation con/sin/inválido subtype.
+- Client: 4 nuevos cubriendo dropdown dependiente, reset al cambiar tipo, ocultarse en resell, y atributo `required` sobre el select.
+- Total: 638 → **674 server**, 327 → **331 client**.
+
+**Criterios de aceptación de la spec:** todos cubiertos.
+
+---
+
+## Phase 14 — Documentación integral refresh (2026-05)
+
+### docs: refresh completo del set de documentación
+
+Pase comprehensivo cuando el proyecto entró a estado "ready for handoff" tras la capa AI-readiness.
+
+- **`docs/specs/v2/03_data_model.md`**: reescrito completo. 28 tablas, capa AI, vistas materializadas, glosario, deudas activas marcadas explícitamente.
+- **`docs/CONVENTIONS.md`** (NUEVO): patrones de código actuales para server (rutas, helpers obligatorios, transacciones, eventos, tests) y client (módulos, DS tokens, fetch, naming).
+- **`docs/AI_INTEGRATION_GUIDE.md`** (NUEVO): cómo conectar agentes IA end-to-end. Patrón `ai_logger.run()`, feedback loop, versionado de prompts, embeddings con pgvector, casos de uso priorizados, observabilidad/costos, seguridad/PII, antipatrones.
+- **`docs/MODULES_OVERVIEW.md`** (NUEVO): mapa módulo por módulo (qué hace, dónde vive, endpoints, deuda activa).
+- **`docs/API_REFERENCE.md`** (NUEVO): catálogo de los ~85 endpoints con shape, filtros, permisos y errores esperados.
+- **`docs/ROADMAP.md`** (NUEVO): qué está vivo / con caveat / no implementado / decisiones diferidas.
+- **`docs/DECISIONS.md`** (NUEVO): ADR-style. 14 decisiones técnicas documentadas (TIME-MODEL, AUDIT-DUAL, SQUAD-HIDDEN, PG-VECTOR-OPTIONAL, AI-LOGGER-MANDATORY, etc.).
+- **`docs/RUNBOOKS_INDEX.md`** (NUEVO): índice de runbooks ops.
+- **`README.md`**, **`HANDOFF.md`**, **`ARCHITECTURE.md`**, **`docs/PROJECT_STATE_HANDOFF.md`**, **`docs/ONBOARDING_DEV.md`**, **`docs/MANUAL_DE_USUARIO.md`**, **`CONTRIBUTING.md`**: refrescados con stats actuales (638 tests server, 28 tablas, AI layer, kick-off flow, plan-vs-real, manager role).
+
+---
+
+## Phase 13 — AI-readiness foundations (2026-05)
+
+### feat(ai-readiness): fundaciones técnicas para integrar agentes IA
+
+Cambios aditivos. NINGUNO altera comportamiento existente. El sistema sigue funcionando idéntico hoy, pero ahora tiene la capa para conectar agentes con observabilidad, feedback loop y semantic search.
+
+**Schema (idempotente):**
+- `ai_interactions`: log estructurado de cada llamada a un agente (modelo+versión, prompt template+versión, input/output JSONB redacted, decisión humana, costo USD, tokens, latencia, error).
+- `ai_prompt_templates`: prompts versionados (UNIQUE name+version) para reproducibilidad y A/B testing.
+- `delivery_facts`: tabla denormalizada por (fact_date, employee_id) con dimensiones snapshotted.
+- pgvector best-effort: try/catch al CREATE EXTENSION. Si la imagen postgres no la tiene, se loguea warning y el resto migra normal.
+- 7 columnas `vector(1536)` con HNSW indexes (skills, areas, employees, resource_requests, opportunities, contracts, quotations).
+- Slugs URL-friendly + LLM-friendly en clients/opportunities/contracts/employees con UNIQUE partial.
+- Narrative TEXT en areas y skills para RAG.
+- 8 CHECK constraints adicionales (capacity bounds, hours bounds, date order, quantity).
+- COMMENT ON TABLE/COLUMN para 7 tablas + JSONB críticos.
+- Materialized view `mv_plan_vs_real_weekly` con UNIQUE INDEX para REFRESH CONCURRENTLY.
+- Función plpgsql `refresh_delivery_facts(from, to)` idempotente.
+
+**Helpers nuevos (`server/utils/`):**
+- `ai_logger.js`: `run({ pool, agent, template, userId, entity, input, call })` ejecuta una llamada al modelo y registra TODO en ai_interactions (incluso si la llamada falla). `recordDecision()` registra accepted/rejected/modified/ignored cuando el humano decide. Tolerante a fallos: si el log a DB se cae, no rompe la llamada al agente.
+- `level.js`: helper bidireccional INT (legacy de quotation_lines) ↔ VARCHAR L1..L11 (V2). `levelDistance()` para validation engines.
+- `slug.js`: `slugify()` (NFD + diacríticos + truncate por palabra) y `uniqueSlug()` (resuelve colisiones con sufijos numéricos).
+- `json_schema.js`: validador liviano para shapes JSONB sin agregar dependencia (no ajv). SCHEMAS predefinidos: contractMetadata, userPreferences, resourceRequestLanguageRequirements.
+
+**Ruta nueva:**
+- `GET /api/ai-interactions` (admin): listado paginado con filtros agent_name, prompt_template, user_id, entity_type/id, human_decision (incluyendo 'pending'), rango de fecha.
+- `GET /api/ai-interactions/:id` (admin): detalle con payloads completos.
+- `POST /api/ai-interactions/:id/decision`: registra decisión humana. Dueño O admin pueden modificarla.
+
+**Tests:** 64 nuevos. Total server: 638/638 verde.
+
+---
+
+## Phase 12.5 — Cleanup técnico (2026-05)
+
+### chore(cleanup): deuda técnica, manejo de errores, hardening de pagination
+
+Pasada de limpieza basada en auditoría completa de develop. Sin cambios funcionales.
+
+**Helpers nuevos:**
+- `utils/sanitize.js`: `parsePagination`, `parseFiniteInt/Number`, `isValidUUID`, `isValidISODate` (rechaza fechas calendarialmente inválidas como 2026-02-30), `mondayOf` (movido desde time_allocations.js).
+- `utils/http.js`: `serverError(res, where, err)` — logea con stack y responde 500 uniforme. `safeRollback(conn, where)` — reemplaza `ROLLBACK.catch(()=>{})` que enmascaraba errores.
+
+**Pagination hardening (8 rutas):**
+- LIMIT/OFFSET ahora pasan por $N parameterizado en vez de template literal en assignments, clients, contracts, employees, opportunities, quotations, resource_requests, time_entries.
+
+**Error handling (40+ endpoints):**
+- 23 catches one-liner que NO logueaban: ahora todos van por `serverError()` con identificador legible.
+- 11 ROLLBACK silenciosos ahora usan `safeRollback` que LOGEA el fallo de rollback sin re-lanzar.
+- `health.js`: log warn cuando la DB probe falla.
+
+**Input validation:**
+- `bulk_import`: validar `entity` contra whitelist ANTES de `setHeader` (cierra una vía menor de filename injection).
+- `quotations`: filtro de "ver sólo mis drafts" para preventa ahora acepta tanto `role==='preventa'` (legacy) como `function==='preventa'` (post-normalization).
+
+**Código muerto:**
+- `_stubs.js`: tenía 13 stubs; 11 ya tenían ruta real. Quedan sólo 2 (squads, events).
+
+**Cliente:**
+- `AuthContext.updatePreferences`: rollback ahora captura `previousPrefs` ANTES del try (evita stale closure que revertía a estado equivocado en concurrencia).
+
+**Tests:** +9 nuevos. Total: 574 → 638 server tests.
+
+---
+
+## Phase 12.4 — Contract kick-off (2026-04-30)
+
+### feat(contract-kickoff): siembra solicitudes desde cotización ganadora
+
+Cierra el flujo: oportunidad ganada → contrato → DM → kick-off → recursos auto-generados.
+
+- **`POST /api/contracts/:id/kick-off`**: nuevo endpoint. Toma `kick_off_date`, lee quotation_lines de winning_quotation y crea resource_requests con defaults: role_title de la línea (o specialty+level si vacío), level mapeado INT→L1..L11, country, quantity, weekly_hours = hours_per_week, start_date = kick_off, end_date = kick_off + meses×30.
+- **Mapeo specialty → area_id** heurístico (desarrollo→development, qa→testing, ux→ux_ui, etc.) con fallback a Desarrollo. Editable después.
+- **Permisos**: admin, o DM/account_owner/capacity_manager del contrato. Lead que es DM puede invocar sin ser admin global.
+- **Idempotencia**: 409 con `code:'already_seeded'` si el contrato ya tiene RRs; `?force=1` soft-deletea las anteriores y resembra. Las assignments existentes se preservan.
+- **Metadata persisted**: `metadata.kick_off_date`, `kicked_off_at`, `kicked_off_by` en JSONB sin migración. Emite `contract.kicked_off` event.
+- **GET /api/contracts/:id** ahora joinea users para nombres legibles del account_owner / delivery_manager / capacity_manager.
+
+**UI (ContractDetail):**
+- Admin ve picker de delivery_manager con admins+leads disponibles.
+- Cuando hay winning_quotation y eres admin/DM/owner: panel de kick-off con date picker y botón "🚀 Iniciar kick-off". Si ya hay RRs, ofrece "🔄 Resembrar desde cotización".
+- Banner amarillo recordatorio si hay quotation pero no hay DM.
+
+**Tests:** 7 nuevos cubren 400/403/201/409 y caminos admin/DM-lead/stranger/no-quotation/completed.
+
+---
+
+## Phase 12.3 — Planning loop closure (2026-04-29)
+
+### feat(planning-loop): cierra el ciclo cotización→contrato→plan→real
+
+Cuatro features que cierran el flujo de capacity planning end-to-end:
+
+1. **Plan vs Real (semanal)**. Nuevo `GET /api/reports/plan-vs-real` que compara `assignments.weekly_hours / weekly_capacity_hours` (planeado %) contra `weekly_time_allocations.pct` (real %). Status por línea: `on_plan` / `over` / `under` / `missing` / `unplanned` / `no_data`, con tolerancia ±10pp. UI en Reports.js con tabla agrupada por empleado, sub-totales semanales con bench, CSV export.
+
+2. **Conversión cotización→contrato de un click**. Nuevo `POST /api/contracts/from-quotation/:id` con defaults sensatos (project_name → name, staff_aug→capacity, fixed_scope→project, client de la quotation o de su opportunity). El bloque "ganada" del detalle de oportunidad ahora ofrece el botón directamente.
+
+3. **Rol manager (lead)**. Aprovecha `employees.manager_user_id` que ya estaba en el schema. `resolveEmployee` y la GET de /time-allocations reconocen `role='lead'` y devuelven picker con sus reportes directos. Plan-vs-real auto-scoping: lead → forzado a `manager_user_id=caller`, member → forzado a su employee. EmployeeDetail (admin-only) tiene un selector de líder directo.
+
+4. **Asignar desde el planner sin salir**. CandidatesModal.onPick ahora hace POST /api/assignments inline; se queda en el planner, refresca data, muestra toast verde. Si el backend pide override (overbooking), cae al formulario manual con prefill.
+
+---
+
+## Phase 12.2 — TimeTeam fixes (2026-04-27 / 2026-04-28)
+
+- `fix(time-team)`: admin sin employee row puede elegir empleado en vez de 500.
+- `fix(time-allocations)`: 500 'Error interno' en /time/team por columna inexistente `employees.name` (la tabla tiene first_name + last_name).
+- `fix(time-team)`: null-safe render + global ErrorBoundary. La pantalla en blanco era causada por accesos no defensivos (`data.employee.name`, `data.active_assignments.X`) que en React 18 sin boundary desmontan TODA la app ante un throw — sidebar y header incluidos.
+
+---
+
+## Phase 12.1 — Time-MVP-00.1 (2026-04-27)
+
+### feat(time-team): registro semanal por % de asignación
+
+- Nueva tabla `weekly_time_allocations` con UNIQUE (employee_id, week_start_date, assignment_id).
+- Endpoints `GET /api/time-allocations` y `PUT /bulk` con bench auto-calculado.
+- UI `/time/team` con selector de semana, tabla de asignaciones activas, input % por fila, total + bench visual.
+
+---
+
 ### feat(capacity-editor): editor unificado de capacity + margen editable + export xlsx/pdf (2026-04-22)
 
 Respuesta al pedido de preventa (`spec_capacity_editor.docx`, specs 3 y 4). Mirror exacto del flujo que se entregó para el cotizador de proyectos.

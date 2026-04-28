@@ -41,6 +41,8 @@ const ICONS = {
   '/quotation/new/fixed_scope': FileText,
   '/clients':                 Building2,
   '/opportunities':           Briefcase,
+  '/pipeline':                LayoutGrid,
+  '/revenue':                 BarChart3,
   '/contracts':               FileCheck2,
   '/resource-requests':       ClipboardList,
   '/assignments':             CalendarDays,
@@ -53,6 +55,7 @@ const ICONS = {
   '/reports':                 BarChart3,
   '/wiki':                    BookOpen,
   '/admin/params':            Settings,
+  '/admin/exchange-rates':    BarChart3,
   '/admin/users':             UserCog,
   '/admin/bulk-import':       Upload,
   '/preferencias':            Palette,
@@ -72,6 +75,7 @@ export function buildGroups(isAdmin) {
         { path: '/quotation/new/fixed_scope', label: 'Nuevo Proyecto' },
         { path: '/clients',                  label: 'Clientes' },
         { path: '/opportunities',            label: 'Oportunidades' },
+        { path: '/pipeline',                 label: 'Pipeline' },
       ],
     },
     {
@@ -94,7 +98,12 @@ export function buildGroups(isAdmin) {
     {
       title: 'Time Tracking', items: [
         { path: '/time/me',   label: 'Mis horas' },
-        { path: '/time/team', label: 'Horas del equipo' },
+        { path: '/time/team', label: 'Tiempo semanal' },
+      ],
+    },
+    {
+      title: 'Finanzas', items: [
+        { path: '/revenue', label: 'Reconocimiento' },
       ],
     },
     {
@@ -108,9 +117,10 @@ export function buildGroups(isAdmin) {
   if (isAdmin) {
     groups.push({
       title: 'Configuración', items: [
-        { path: '/admin/params',      label: 'Parámetros'    },
-        { path: '/admin/users',       label: 'Usuarios'      },
-        { path: '/admin/bulk-import', label: 'Carga masiva'  },
+        { path: '/admin/params',         label: 'Parámetros'      },
+        { path: '/admin/exchange-rates', label: 'Tasas de cambio' },
+        { path: '/admin/users',          label: 'Usuarios'        },
+        { path: '/admin/bulk-import',    label: 'Carga masiva'    },
       ],
     });
   }

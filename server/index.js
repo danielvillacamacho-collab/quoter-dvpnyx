@@ -29,6 +29,9 @@ app.use('/api/employees',         require('./routes/employees'));    // ✅ Spri
 app.use('/api/skills',            require('./routes/skills'));       // ✅ Sprint 3 EA-2
 app.use('/api/areas',             require('./routes/areas'));        // ✅ Sprint 3 EA-1
 app.use('/api/contracts',         require('./routes/contracts'));    // ✅ Sprint 4 EK-1/EK-2
+app.use('/api/revenue',           require('./routes/revenue'));      // ✅ RR-MVP-00.1 (placeholder, eng team to refactor)
+app.use('/api/admin/exchange-rates', require('./routes/exchange_rates')); // ✅ RR-MVP-00.6 (placeholder)
+app.use('/api/time-allocations',  require('./routes/time_allocations')); // ✅ Time-MVP-00.1 (placeholder, weekly %)
 app.use('/api/resource-requests', require('./routes/resource_requests')); // ✅ Sprint 4 ER-1/ER-2
 app.use('/api/assignments',       require('./routes/assignments'));  // ✅ Sprint 4 EN-1/EN-2/EN-5
 app.use('/api/capacity',          require('./routes/capacity'));     // ✅ Sprint 6 US-BK-1 (planner)
@@ -40,6 +43,7 @@ app.use('/api/bulk-import',       require('./routes/bulk_import'));  // ✅ Spri
 app.use('/api/squads',            _stubs.squads);
 app.use('/api/events',            _stubs.events);
 app.use('/api/notifications',     require('./routes/notifications')); // ✅ In-app notifications
+app.use('/api/ai-interactions',   require('./routes/ai_interactions')); // ✅ AI agent log + decision feedback
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.

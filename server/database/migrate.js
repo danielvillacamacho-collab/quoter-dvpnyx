@@ -512,6 +512,544 @@ const V2_ALTERS = `
   CREATE INDEX IF NOT EXISTS idx_quotations_client      ON quotations(client_id)      WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_quotations_opportunity ON quotations(opportunity_id) WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS idx_quotations_squad       ON quotations(squad_id)       WHERE deleted_at IS NULL;
+
+  -- ==================================================================
+  -- CRM-MVP-00.1 (Abril 27 2026) — Pipeline Kanban sobre opportunities
+  -- ==================================================================
+  -- Decisión (Daniel + CPO interim): construir CRM evolutivo sobre el
+  -- stack actual sin entrar en migración fundacional (TS, monorepo, RLS,
+  -- multi-tenant, Zod). Estas columnas son aditivas, los 7 valores de
+  -- status legacy se mantienen y se mapean a stages del pipeline en
+  -- código (server/utils/pipeline.js + client/src/utils/pipeline.js).
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS booking_amount_usd  NUMERIC(18,2) NOT NULL DEFAULT 0;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS probability         NUMERIC(5,2)  NOT NULL DEFAULT 5;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS weighted_amount_usd NUMERIC(18,2) NOT NULL DEFAULT 0;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS last_stage_change_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS next_step           TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS next_step_due_date  DATE NULL;
+
+  -- Trigger: cuando cambia status o booking_amount_usd, recalcular
+  -- probability + weighted + last_stage_change_at. Probability mapping
+  -- está hardcoded acá (mismos valores que en utils/pipeline.js).
+  CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    IF TG_OP = 'INSERT' OR NEW.status IS DISTINCT FROM OLD.status THEN
+      NEW.probability := CASE NEW.status
+        WHEN 'open'        THEN 5
+        WHEN 'qualified'   THEN 20
+        WHEN 'proposal'    THEN 50
+        WHEN 'negotiation' THEN 75
+        WHEN 'won'         THEN 100
+        WHEN 'lost'        THEN 0
+        WHEN 'cancelled'   THEN 0
+        ELSE 5
+      END;
+      IF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        NEW.last_stage_change_at := NOW();
+      END IF;
+    END IF;
+    NEW.weighted_amount_usd := COALESCE(NEW.booking_amount_usd, 0) * COALESCE(NEW.probability, 0) / 100.0;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  DROP TRIGGER IF EXISTS trg_opp_pipeline_recalc ON opportunities;
+  CREATE TRIGGER trg_opp_pipeline_recalc
+    BEFORE INSERT OR UPDATE ON opportunities
+    FOR EACH ROW
+    EXECUTE FUNCTION opp_pipeline_recalc();
+
+  -- Backfill probability + weighted para opportunities pre-CRM-MVP.
+  -- last_stage_change_at queda en updated_at (mejor aproximación disponible).
+  UPDATE opportunities SET
+    probability = CASE status
+      WHEN 'open'        THEN 5
+      WHEN 'qualified'   THEN 20
+      WHEN 'proposal'    THEN 50
+      WHEN 'negotiation' THEN 75
+      WHEN 'won'         THEN 100
+      ELSE 0
+    END,
+    last_stage_change_at = COALESCE(closed_at, updated_at, created_at, NOW())
+  WHERE probability = 5 AND status <> 'open';
+
+  -- Recalc weighted (en caso de que booking_amount_usd haya quedado en 0
+  -- el weighted también, lo que es correcto; este UPDATE solo es defensivo).
+  UPDATE opportunities SET weighted_amount_usd = COALESCE(booking_amount_usd, 0) * COALESCE(probability, 0) / 100.0
+    WHERE weighted_amount_usd = 0 AND booking_amount_usd > 0;
+
+  CREATE INDEX IF NOT EXISTS idx_opportunities_status_close ON opportunities(status, expected_close_date) WHERE deleted_at IS NULL;
+
+  -- ==================================================================
+  -- RR-MVP-00.1 (Abril 27 2026) — Revenue recognition mínimo
+  -- ==================================================================
+  -- Decisión CTO+CPO: trabajo funcional placeholder. Reemplaza el Excel
+  -- mensual de revenue para que DMs/CFO puedan operar sin esa hoja.
+  -- TODO eng team: este módulo está intencionalmente simple. Cuando entren
+  -- a refactorizar, ver SPEC-RR-00 para el modelo NIIF 15-friendly real
+  -- (immutability triggers, plan_frozen_at, service_period_history append-
+  -- only, multi-currency, atomic worker async, 4 motores polimórficos).
+  -- Aquí sólo: 1 columna en contracts + 1 tabla revenue_periods + 1
+  -- motor monthly_projection plano. Sin triggers DB. Sin multi-currency.
+  ALTER TABLE contracts ADD COLUMN IF NOT EXISTS total_value_usd  NUMERIC(18,2) NOT NULL DEFAULT 0;
+  ALTER TABLE contracts ADD COLUMN IF NOT EXISTS original_currency VARCHAR(3)  NOT NULL DEFAULT 'USD';
+
+  CREATE TABLE IF NOT EXISTS revenue_periods (
+    contract_id    UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+    yyyymm         CHAR(6) NOT NULL CHECK (yyyymm ~ '^[0-9]{6}$'),
+    projected_usd  NUMERIC(18,2) NOT NULL DEFAULT 0,
+    -- projected_pct: porcentaje de avance del proyecto (0..1) para
+    -- contratos type='project'. Para los demás tipos queda NULL y se
+    -- ignora — esos llevan el monto USD directo en projected_usd. El
+    -- valor visible PROY = projected_pct * contracts.total_value_usd.
+    projected_pct  NUMERIC(7,4) NULL CHECK (projected_pct IS NULL OR (projected_pct >= 0 AND projected_pct <= 1)),
+    real_usd       NUMERIC(18,2) NULL,
+    status         VARCHAR(20) NOT NULL DEFAULT 'open'
+                   CHECK (status IN ('open','closed')),
+    notes          TEXT NULL,
+    closed_at      TIMESTAMPTZ NULL,
+    closed_by      UUID NULL REFERENCES users(id),
+    created_by     UUID NULL REFERENCES users(id),
+    updated_by     UUID NULL REFERENCES users(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (contract_id, yyyymm)
+  );
+  ALTER TABLE revenue_periods ADD COLUMN IF NOT EXISTS projected_pct NUMERIC(7,4) NULL;
+  -- RR-MVP-00.5: para contratos type='project' el REAL también se captura
+  -- en % (0..1) y real_usd se deriva de real_pct × contracts.total_value_usd.
+  -- Para los demás tipos queda NULL (real_usd se ingresa directo).
+  ALTER TABLE revenue_periods ADD COLUMN IF NOT EXISTS real_pct NUMERIC(7,4) NULL;
+  CREATE INDEX IF NOT EXISTS idx_revenue_periods_yyyymm ON revenue_periods(yyyymm);
+  CREATE INDEX IF NOT EXISTS idx_revenue_periods_status ON revenue_periods(status);
+
+  -- RR-MVP-00.6 (Abril 2026): tasas de cambio mensuales tipo "USDCOP".
+  -- Convención: usd_rate = N tal que 1 USD = N <currency>. USD propio NO
+  -- vive en esta tabla — código asume rate=1.0 implícito.
+  -- Para convertir A → B usando rates del mes Y:
+  --     amount_in_USD = amount_in_A / usd_rate(Y, A)   (o = amount_in_A si A=USD)
+  --     amount_in_B   = amount_in_USD × usd_rate(Y, B) (o = amount_in_USD si B=USD)
+  -- Si no hay rate para el período, fallback al último rate disponible para
+  -- esa moneda (LATERAL JOIN en query). El admin gestiona estos rates desde
+  -- /admin/exchange-rates (mismo formato que el Excel).
+  CREATE TABLE IF NOT EXISTS exchange_rates (
+    yyyymm     CHAR(6) NOT NULL CHECK (yyyymm ~ '^[0-9]{6}$'),
+    currency   VARCHAR(3) NOT NULL,
+    usd_rate   NUMERIC(18,8) NOT NULL CHECK (usd_rate > 0),
+    notes      TEXT NULL,
+    updated_by UUID NULL REFERENCES users(id),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (yyyymm, currency)
+  );
+  CREATE INDEX IF NOT EXISTS idx_exchange_rates_currency ON exchange_rates(currency, yyyymm);
+
+  -- ==================================================================
+  -- Time-MVP-00.1 (Abril 2026) — Weekly time allocations en %.
+  -- ==================================================================
+  -- Cada empleado registra cuánto % de su semana dedicó a cada
+  -- asignación activa. Bench se calcula como 100 - SUM(pct) (no se
+  -- persiste). Coexiste con time_entries (horas diarias) — modelos
+  -- distintos, eng team va a consolidar.
+  CREATE TABLE IF NOT EXISTS weekly_time_allocations (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id     UUID NOT NULL REFERENCES employees(id),
+    week_start_date DATE NOT NULL,
+    assignment_id   UUID NOT NULL REFERENCES assignments(id),
+    pct             NUMERIC(5,2) NOT NULL CHECK (pct >= 0 AND pct <= 100),
+    notes           TEXT NULL,
+    created_by      UUID NOT NULL REFERENCES users(id),
+    updated_by      UUID NOT NULL REFERENCES users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (employee_id, week_start_date, assignment_id)
+  );
+  CREATE INDEX IF NOT EXISTS wta_employee_week_idx ON weekly_time_allocations(employee_id, week_start_date);
+  CREATE INDEX IF NOT EXISTS wta_assignment_idx ON weekly_time_allocations(assignment_id);
+
+  -- ==================================================================
+  -- SUBTYPE-CONTRATO (Abril 2026) — clasificación dentro del Tipo.
+  -- ==================================================================
+  -- Operaciones necesita distinguir el modelo de trabajo dentro de cada
+  -- type ('capacity' / 'project'). Hoy esa distinción vive en notes con
+  -- valores inconsistentes ("T&M", "Tiempo y materiales", "TyM"). Sin
+  -- estructura no se puede filtrar/reportar y bloquea Módulo 3 (billing).
+  --
+  -- Aditivo: NULL en contratos existentes (mostrar "Sin especificar"
+  -- en UI). Validación enforced server-side y UI.
+  --
+  -- Mapeo válido:
+  --   capacity → staff_augmentation | mission_driven_squad | managed_service | time_and_materials
+  --   project  → fixed_scope | hour_pool
+  --   resell   → NULL siempre (sin subtipos por ahora)
+  ALTER TABLE contracts ADD COLUMN IF NOT EXISTS contract_subtype VARCHAR(50) NULL;
+
+  -- CHECK constraint con los 6 valores válidos (NULL siempre permitido).
+  -- La coherencia subtype↔type se valida en el server (depende de otra columna,
+  -- expresable con CHECK pero más legible en código).
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'contracts'::regclass AND conname = 'contracts_subtype_check'
+    ) THEN
+      ALTER TABLE contracts ADD CONSTRAINT contracts_subtype_check
+        CHECK (
+          contract_subtype IS NULL OR contract_subtype IN (
+            'staff_augmentation','mission_driven_squad','managed_service','time_and_materials',
+            'fixed_scope','hour_pool'
+          )
+        );
+    END IF;
+  END $$;
+
+  CREATE INDEX IF NOT EXISTS contracts_subtype_idx
+    ON contracts(contract_subtype) WHERE deleted_at IS NULL AND contract_subtype IS NOT NULL;
+
+  COMMENT ON COLUMN contracts.contract_subtype IS
+    'Clasificación dentro del type. capacity → staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project → fixed_scope|hour_pool. resell → NULL. Coherencia type↔subtype validada en server/routes/contracts.js.';
+`;
+
+/* ==================================================================
+ * AI-READINESS LAYER (Mayo 2026)
+ * ==================================================================
+ *
+ * Cambios aditivos. NINGUNO altera comportamiento existente.
+ *
+ * 1) ai_interactions: log estructurado de cada llamada a un agente IA
+ *    (modelo, prompt template, input redacted, output, decisión humana,
+ *    costo, latencia). Sin esta tabla, cualquier agente que conectemos
+ *    es ciego.
+ *
+ * 2) ai_prompt_templates: versionado de prompts. Reproducibilidad +
+ *    A/B testing.
+ *
+ * 3) delivery_facts: tabla denormalizada por (fact_date, employee_id)
+ *    con métricas planas para forecasting y reportes pesados. Refresca
+ *    nocturno via función `refresh_delivery_facts(date_from, date_to)`.
+ *
+ * 4) Embeddings (pgvector): columnas vector(1536) en skills, employees,
+ *    resource_requests, opportunities, contracts, quotations.
+ *    Activadas SOLO si la extensión vector está disponible. Sin
+ *    pgvector, las columnas no se crean — el resto sigue funcionando.
+ *
+ * 5) Slugs: identificadores URL-friendly en clients, opportunities,
+ *    contracts, employees. Más legibles para LLMs y humanos que UUID.
+ *
+ * 6) Narrative fields: campos descriptivos enriquecidos en areas y
+ *    skills para que RAG tenga contexto real, no sólo el nombre.
+ *
+ * 7) CHECK constraints adicionales: weekly_capacity_hours <= 80,
+ *    hours_per_week en quotation_lines, etc. Antes la validación
+ *    vivía sólo en código.
+ */
+const AI_READINESS_SQL = `
+  -- 1) AI interactions log
+  CREATE TABLE IF NOT EXISTS ai_interactions (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    agent_name        VARCHAR(100) NOT NULL,
+    agent_version     VARCHAR(50)  NOT NULL,
+    prompt_template   VARCHAR(100) NOT NULL,
+    prompt_template_version INT    NOT NULL DEFAULT 1,
+    user_id           UUID NULL REFERENCES users(id),
+    entity_type       VARCHAR(50) NULL,
+    entity_id         UUID NULL,
+    input_payload     JSONB NOT NULL,
+    output_payload    JSONB NOT NULL,
+    confidence        NUMERIC(4,3) NULL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+    human_decision    VARCHAR(20) NULL CHECK (
+      human_decision IS NULL OR human_decision IN ('accepted','rejected','modified','ignored','pending')
+    ),
+    human_feedback    TEXT NULL,
+    cost_usd          NUMERIC(10,6) NULL,
+    input_tokens      INT NULL,
+    output_tokens     INT NULL,
+    latency_ms        INT NULL,
+    error             TEXT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    decided_at        TIMESTAMPTZ NULL
+  );
+  CREATE INDEX IF NOT EXISTS ai_int_user_idx     ON ai_interactions(user_id);
+  CREATE INDEX IF NOT EXISTS ai_int_entity_idx   ON ai_interactions(entity_type, entity_id);
+  CREATE INDEX IF NOT EXISTS ai_int_template_idx ON ai_interactions(prompt_template, prompt_template_version);
+  CREATE INDEX IF NOT EXISTS ai_int_created_idx  ON ai_interactions(created_at DESC);
+
+  -- 2) Prompt templates versioned
+  CREATE TABLE IF NOT EXISTS ai_prompt_templates (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name        VARCHAR(100) NOT NULL,
+    version     INT NOT NULL,
+    description TEXT NULL,
+    body        TEXT NOT NULL,
+    output_schema JSONB NULL,
+    active      BOOLEAN NOT NULL DEFAULT true,
+    created_by  UUID NULL REFERENCES users(id),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (name, version)
+  );
+  CREATE INDEX IF NOT EXISTS ai_prompts_active_idx ON ai_prompt_templates(name) WHERE active = true;
+
+  -- 3) Delivery facts (denormalized, daily granularity)
+  CREATE TABLE IF NOT EXISTS delivery_facts (
+    fact_date         DATE NOT NULL,
+    employee_id       UUID NOT NULL REFERENCES employees(id),
+    capacity_hours    NUMERIC(5,2) NOT NULL,
+    planned_hours     NUMERIC(6,2) NOT NULL DEFAULT 0,
+    planned_pct       NUMERIC(5,2) NOT NULL DEFAULT 0,
+    actual_pct        NUMERIC(5,2) NULL,
+    bench_pct         NUMERIC(5,2) NULL,
+    utilization       NUMERIC(5,4) NULL,
+    is_overbooked     BOOLEAN NOT NULL DEFAULT false,
+    -- dimensiones snapshotted (datos desnormalizados para que el reporte
+    -- no requiera join — escala mejor para forecasting ML).
+    area_id           INT NULL,
+    area_name         VARCHAR(100) NULL,
+    squad_id          UUID NULL,
+    level             VARCHAR(5) NULL,
+    country           VARCHAR(100) NULL,
+    refreshed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (fact_date, employee_id)
+  );
+  CREATE INDEX IF NOT EXISTS delivery_facts_date_idx ON delivery_facts(fact_date);
+  CREATE INDEX IF NOT EXISTS delivery_facts_emp_idx  ON delivery_facts(employee_id);
+  CREATE INDEX IF NOT EXISTS delivery_facts_area_idx ON delivery_facts(area_id, fact_date);
+
+  -- 5) Slugs en entidades clave (URL-friendly + legible para LLMs)
+  ALTER TABLE clients       ADD COLUMN IF NOT EXISTS slug VARCHAR(120) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS slug VARCHAR(160) NULL;
+  ALTER TABLE contracts     ADD COLUMN IF NOT EXISTS slug VARCHAR(160) NULL;
+  ALTER TABLE employees     ADD COLUMN IF NOT EXISTS slug VARCHAR(160) NULL;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS clients_slug_unique       ON clients(slug)       WHERE slug IS NOT NULL AND deleted_at IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS opportunities_slug_unique ON opportunities(slug) WHERE slug IS NOT NULL AND deleted_at IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS contracts_slug_unique     ON contracts(slug)     WHERE slug IS NOT NULL AND deleted_at IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS employees_slug_unique     ON employees(slug)     WHERE slug IS NOT NULL AND deleted_at IS NULL;
+
+  -- 6) Narrative descriptions enriquecidas para RAG
+  ALTER TABLE areas  ADD COLUMN IF NOT EXISTS narrative TEXT NULL;
+  ALTER TABLE skills ADD COLUMN IF NOT EXISTS narrative TEXT NULL;
+
+  -- 7) CHECK constraints adicionales (sanity bounds)
+  -- employees.weekly_capacity_hours razonable (0..80)
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'employees_capacity_bounds_check') THEN
+      ALTER TABLE employees ADD CONSTRAINT employees_capacity_bounds_check
+        CHECK (weekly_capacity_hours >= 0 AND weekly_capacity_hours <= 80);
+    END IF;
+  END $$;
+  -- quotation_lines.hours_per_week razonable (0..168)
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'quotation_lines_hpw_bounds_check') THEN
+      ALTER TABLE quotation_lines ADD CONSTRAINT quotation_lines_hpw_bounds_check
+        CHECK (hours_per_week IS NULL OR (hours_per_week >= 0 AND hours_per_week <= 168));
+    END IF;
+  END $$;
+  -- quotation_lines.duration_months razonable (0..120, 10 años)
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'quotation_lines_duration_bounds_check') THEN
+      ALTER TABLE quotation_lines ADD CONSTRAINT quotation_lines_duration_bounds_check
+        CHECK (duration_months IS NULL OR (duration_months >= 0 AND duration_months <= 120));
+    END IF;
+  END $$;
+  -- quotation_lines.quantity razonable (>=1)
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'quotation_lines_quantity_check') THEN
+      ALTER TABLE quotation_lines ADD CONSTRAINT quotation_lines_quantity_check
+        CHECK (quantity IS NULL OR quantity >= 1);
+    END IF;
+  END $$;
+  -- resource_requests.quantity razonable (>=1)
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'resource_requests_quantity_check') THEN
+      ALTER TABLE resource_requests ADD CONSTRAINT resource_requests_quantity_check
+        CHECK (quantity >= 1);
+    END IF;
+  END $$;
+  -- resource_requests.weekly_hours bounds
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'resource_requests_hours_check') THEN
+      ALTER TABLE resource_requests ADD CONSTRAINT resource_requests_hours_check
+        CHECK (weekly_hours > 0 AND weekly_hours <= 80);
+    END IF;
+  END $$;
+  -- date sanity: end >= start cuando ambos están
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'assignments_date_order_check') THEN
+      ALTER TABLE assignments ADD CONSTRAINT assignments_date_order_check
+        CHECK (end_date IS NULL OR end_date >= start_date);
+    END IF;
+  END $$;
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contracts_date_order_check') THEN
+      ALTER TABLE contracts ADD CONSTRAINT contracts_date_order_check
+        CHECK (end_date IS NULL OR end_date >= start_date);
+    END IF;
+  END $$;
+  DO $$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'resource_requests_date_order_check') THEN
+      ALTER TABLE resource_requests ADD CONSTRAINT resource_requests_date_order_check
+        CHECK (end_date IS NULL OR end_date >= start_date);
+    END IF;
+  END $$;
+
+  -- 8) Materialized view: plan-vs-real semanal por (employee, week, assignment).
+  -- Refrescar con: REFRESH MATERIALIZED VIEW CONCURRENTLY mv_plan_vs_real_weekly;
+  -- Necesita un UNIQUE INDEX para REFRESH CONCURRENTLY.
+  DROP MATERIALIZED VIEW IF EXISTS mv_plan_vs_real_weekly;
+  CREATE MATERIALIZED VIEW mv_plan_vs_real_weekly AS
+    SELECT
+      a.employee_id,
+      e.weekly_capacity_hours,
+      date_trunc('week', wta.week_start_date)::date AS week_start_date,
+      a.id AS assignment_id,
+      a.contract_id,
+      c.name AS contract_name,
+      a.role_title,
+      a.weekly_hours AS planned_hours,
+      CASE WHEN e.weekly_capacity_hours > 0
+           THEN ROUND((a.weekly_hours / e.weekly_capacity_hours) * 100.0, 1)
+           ELSE 0 END AS planned_pct,
+      ROUND(wta.pct, 1) AS actual_pct,
+      ROUND(wta.pct - CASE WHEN e.weekly_capacity_hours > 0
+                           THEN (a.weekly_hours / e.weekly_capacity_hours) * 100.0
+                           ELSE 0 END, 1) AS diff_pct,
+      wta.notes,
+      wta.updated_at
+    FROM weekly_time_allocations wta
+    JOIN assignments a ON a.id = wta.assignment_id
+    JOIN employees   e ON e.id = a.employee_id
+    LEFT JOIN contracts c ON c.id = a.contract_id
+    WHERE a.deleted_at IS NULL
+      AND e.deleted_at IS NULL
+  WITH NO DATA;
+  CREATE UNIQUE INDEX IF NOT EXISTS mv_pvr_weekly_pk
+    ON mv_plan_vs_real_weekly (employee_id, week_start_date, assignment_id);
+
+  -- 9) Function para refrescar delivery_facts en una ventana de fechas.
+  -- Idempotente: borra+inserta el rango. Llamar via cron job nocturno
+  -- (no se ejecuta automáticamente desde DDL).
+  CREATE OR REPLACE FUNCTION refresh_delivery_facts(p_from DATE, p_to DATE)
+  RETURNS INT AS $$
+  DECLARE
+    v_count INT;
+  BEGIN
+    DELETE FROM delivery_facts WHERE fact_date BETWEEN p_from AND p_to;
+
+    -- Por cada (día, empleado), calcular planned_hours sumando assignments
+    -- activos cuyo rango cubre el día. Capacidad y demás dimensiones se
+    -- snapshottean del estado actual del empleado.
+    INSERT INTO delivery_facts
+      (fact_date, employee_id, capacity_hours, planned_hours, planned_pct,
+       area_id, area_name, squad_id, level, country, refreshed_at)
+    SELECT
+      d.day,
+      e.id,
+      e.weekly_capacity_hours,
+      COALESCE(SUM(a.weekly_hours) FILTER (
+        WHERE a.deleted_at IS NULL
+          AND a.status IN ('planned','active')
+          AND a.start_date <= d.day
+          AND (a.end_date IS NULL OR a.end_date >= d.day)
+      ), 0) AS planned_hours,
+      CASE WHEN e.weekly_capacity_hours > 0 THEN
+        ROUND(
+          (COALESCE(SUM(a.weekly_hours) FILTER (
+            WHERE a.deleted_at IS NULL
+              AND a.status IN ('planned','active')
+              AND a.start_date <= d.day
+              AND (a.end_date IS NULL OR a.end_date >= d.day)
+          ), 0) / e.weekly_capacity_hours) * 100.0,
+          1
+        )
+      ELSE 0 END AS planned_pct,
+      e.area_id,
+      ar.name AS area_name,
+      e.squad_id,
+      e.level,
+      e.country,
+      NOW()
+    FROM generate_series(p_from, p_to, interval '1 day') AS d(day)
+    CROSS JOIN employees e
+    LEFT JOIN areas ar ON ar.id = e.area_id
+    LEFT JOIN assignments a ON a.employee_id = e.id
+    WHERE e.deleted_at IS NULL
+      AND e.status IN ('active','on_leave','bench')
+    GROUP BY d.day, e.id, e.weekly_capacity_hours, e.area_id, ar.name, e.squad_id, e.level, e.country;
+
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    -- Calcular utilization derivado en el mismo paso (ya tenemos los datos).
+    UPDATE delivery_facts
+       SET utilization = CASE WHEN capacity_hours > 0 THEN planned_hours / capacity_hours ELSE 0 END,
+           is_overbooked = (capacity_hours > 0 AND planned_hours > capacity_hours * 1.10)
+     WHERE fact_date BETWEEN p_from AND p_to;
+
+    RETURN v_count;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  -- 10) Documentación a nivel de DB (COMMENT ON). Sólo lo más útil — un
+  -- agente que abre la DB ahora puede leer la intención de cada tabla.
+  COMMENT ON TABLE  ai_interactions       IS 'Log estructurado de cada llamada a un agente IA (modelo, prompt, input/output, decisión humana, costo).';
+  COMMENT ON TABLE  ai_prompt_templates   IS 'Versiones de prompts. ai_interactions referencia (name, version) para reproducibilidad y A/B testing.';
+  COMMENT ON TABLE  delivery_facts        IS 'Tabla denormalizada por (fact_date, employee_id) para forecasting y reportes pesados. Refrescar con SELECT refresh_delivery_facts(from, to).';
+  COMMENT ON TABLE  events                IS 'Audit log estructurado V2. Append-only. Reemplaza audit_log gradualmente.';
+  COMMENT ON TABLE  weekly_time_allocations IS 'Time tracking por % semanal (Time-MVP-00.1). Coexiste con time_entries (horas diarias). Eng team consolidará.';
+  COMMENT ON TABLE  time_entries          IS 'Time tracking por horas diarias (V2 ET-*). Coexiste con weekly_time_allocations.';
+  COMMENT ON TABLE  audit_log             IS 'Audit log V1 legacy. Para escrituras nuevas usar events. No agregar features nuevos aquí.';
+
+  COMMENT ON COLUMN employees.user_id     IS 'NULL si el empleado no tiene cuenta de login. La distinción User vs Employee es por diseño.';
+  COMMENT ON COLUMN employees.slug        IS 'URL-friendly identifier, generado por server/utils/slug.js. Útil para LLMs y URLs legibles.';
+  COMMENT ON COLUMN contracts.metadata    IS 'JSONB libre. Convención: kick_off_date, kicked_off_at, kicked_off_by se persisten aquí. Validación pendiente.';
+  COMMENT ON COLUMN assignments.override_reason IS 'Justificación del admin cuando bypassea una validación. Capturado para que la IA aprenda de overrides.';
+  COMMENT ON COLUMN ai_interactions.input_payload  IS 'Prompt + contexto (REDACTED — sin PII directa). JSON.';
+  COMMENT ON COLUMN ai_interactions.output_payload IS 'Respuesta del modelo. JSON.';
+  COMMENT ON COLUMN ai_interactions.human_decision IS 'Si el humano aceptó/rechazó/modificó la sugerencia. Pending hasta que el usuario decida. Esencial para feedback loop.';
+`;
+
+/* ==================================================================
+ * pgvector — extensión opcional. Si está disponible, agregamos columnas
+ * de embedding. Si no, las saltamos sin romper el resto del schema.
+ * ================================================================== */
+const PGVECTOR_SQL = `
+  ALTER TABLE skills            ADD COLUMN IF NOT EXISTS name_embedding         vector(1536);
+  ALTER TABLE areas             ADD COLUMN IF NOT EXISTS narrative_embedding    vector(1536);
+  ALTER TABLE employees         ADD COLUMN IF NOT EXISTS skill_profile_embedding vector(1536);
+  ALTER TABLE resource_requests ADD COLUMN IF NOT EXISTS requirements_embedding  vector(1536);
+  ALTER TABLE opportunities     ADD COLUMN IF NOT EXISTS description_embedding   vector(1536);
+  ALTER TABLE contracts         ADD COLUMN IF NOT EXISTS context_embedding       vector(1536);
+  ALTER TABLE quotations        ADD COLUMN IF NOT EXISTS summary_embedding       vector(1536);
+
+  -- HNSW indexes para búsqueda semántica O(log n).
+  -- Sólo se crean si la columna existe Y tiene datos NO NULL en al menos
+  -- una row (postgres permite el index vacío, pero para ahorrar I/O en
+  -- entornos donde nadie ha generado embeddings todavía, los marcamos
+  -- como índices "lazy" — se construyen instantly porque están vacíos).
+  CREATE INDEX IF NOT EXISTS skills_name_embed_idx
+    ON skills USING hnsw (name_embedding vector_cosine_ops);
+  CREATE INDEX IF NOT EXISTS employees_skill_profile_embed_idx
+    ON employees USING hnsw (skill_profile_embedding vector_cosine_ops)
+    WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS resource_requests_req_embed_idx
+    ON resource_requests USING hnsw (requirements_embedding vector_cosine_ops)
+    WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS opportunities_desc_embed_idx
+    ON opportunities USING hnsw (description_embedding vector_cosine_ops)
+    WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS contracts_context_embed_idx
+    ON contracts USING hnsw (context_embedding vector_cosine_ops)
+    WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS quotations_summary_embed_idx
+    ON quotations USING hnsw (summary_embedding vector_cosine_ops)
+    WHERE deleted_at IS NULL;
 `;
 
 /* ==================================================================
@@ -582,18 +1120,65 @@ const V2_SEEDS_SQL = `
   ON CONFLICT (category, key) DO NOTHING;
 `;
 
+/**
+ * Intenta crear la extensión pgvector. Si no está disponible (no instalada
+ * en la imagen postgres, o falta privilegio), captura el error y devuelve
+ * false. El schema base sigue funcionando sin pgvector — sólo se pierde
+ * la capa de embeddings hasta que alguien instale la extensión.
+ *
+ * Importante: esto se ejecuta FUERA de la transacción principal porque
+ * CREATE EXTENSION puede requerir lock que no convive bien con BEGIN
+ * abierto en algunas configuraciones (RDS).
+ */
+async function ensurePgVector(client) {
+  try {
+    await client.query('CREATE EXTENSION IF NOT EXISTS vector');
+    const { rows } = await client.query(
+      `SELECT 1 FROM pg_extension WHERE extname = 'vector'`
+    );
+    return rows.length > 0;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[migrate] pgvector NO disponible (',
+      err && err.message ? err.message : err,
+      '). Schema continuará sin columnas de embeddings.'
+    );
+    return false;
+  }
+}
+
 const migrate = async () => {
   let client;
   try {
     client = await pool.connect();
+
+    // pgvector primero (fuera de transacción) — best effort.
+    const hasPgVector = await ensurePgVector(client);
+
     await client.query('BEGIN');
     await client.query(V1_SCHEMA);
     await client.query(V2_NEW_TABLES);
     await client.query(V2_ALTERS);
+    await client.query(AI_READINESS_SQL);
     await client.query(V2_SEEDS_SQL);
     await client.query('COMMIT');
+
+    // Embeddings se aplican fuera de la transacción principal: si fallan
+    // no debe abortar el resto de la migración.
+    if (hasPgVector) {
+      try {
+        await client.query(PGVECTOR_SQL);
+        // eslint-disable-next-line no-console
+        console.log('[migrate] pgvector columns + HNSW indexes ready.');
+      } catch (vecErr) {
+        // eslint-disable-next-line no-console
+        console.warn('[migrate] pgvector schema failed:', vecErr.message);
+      }
+    }
+
     // eslint-disable-next-line no-console
-    console.log('Migration completed successfully (V1 + V2 DDL).');
+    console.log(`Migration completed successfully (V1 + V2 + AI-readiness${hasPgVector ? ' + pgvector' : ''}).`);
   } catch (err) {
     if (client) await client.query('ROLLBACK');
     // eslint-disable-next-line no-console

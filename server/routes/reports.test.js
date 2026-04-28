@@ -191,3 +191,68 @@ describe('GET /api/reports/my-dashboard (ED-1)', () => {
     expect(res.body.week_hours.capacity).toBe(40);
   });
 });
+
+describe('GET /api/reports/plan-vs-real (EI-8)', () => {
+  it('rechaza no-admin sin employee con empty rows (scope a sí mismo, no encuentra nada)', async () => {
+    mockCurrentUser = { id: 'u-stranger', role: 'member' };
+    queryQueue.push({ rows: [] }); // no employees visibles
+    const res = await client.call('GET', '/api/reports/plan-vs-real?week_start=2026-04-27');
+    expect(res.status).toBe(200);
+    expect(res.body.rows).toEqual([]);
+  });
+
+  it('admin: retorna shape completa con plan, real y diff por línea', async () => {
+    mockCurrentUser = { id: 'u-admin', role: 'admin' };
+    queryQueue.push({ rows: [
+      { employee_id: 'e1', employee_name: 'Ana G', weekly_capacity_hours: 40, level: 'L4', area_name: 'Desarrollo' },
+    ]});
+    queryQueue.push({ rows: [
+      { id: 'a1', employee_id: 'e1', contract_id: 'c1', role_title: 'Senior Dev', weekly_hours: 20, contract_name: 'Bancolombia', start_date: '2026-01-01', end_date: '2026-12-31', status: 'active' },
+    ]});
+    queryQueue.push({ rows: [
+      { employee_id: 'e1', assignment_id: 'a1', pct: '60', notes: null, contract_name: 'Bancolombia', role_title: 'Senior Dev' },
+    ]});
+    const res = await client.call('GET', '/api/reports/plan-vs-real?week_start=2026-04-27');
+    expect(res.status).toBe(200);
+    expect(res.body.rows).toHaveLength(1);
+    const row = res.body.rows[0];
+    // 20h / 40h = 50% planned. real = 60. Diff = +10 → on_plan (≤±10pp).
+    expect(row.lines[0].planned_pct).toBe(50);
+    expect(row.lines[0].actual_pct).toBe(60);
+    expect(row.lines[0].diff_pct).toBe(10);
+    expect(row.lines[0].status).toBe('on_plan');
+  });
+
+  it('lead: el server fuerza filtro por manager_user_id (no admin override)', async () => {
+    mockCurrentUser = { id: 'u-lead', role: 'lead' };
+    queryQueue.push({ rows: [] }); // empty es OK para verificar shape
+    const res = await client.call('GET', '/api/reports/plan-vs-real?week_start=2026-04-27&manager_id=otro-lead');
+    expect(res.status).toBe(200);
+    // Verificar que la query incluyó el manager_user_id forzado al caller (u-lead),
+    // ignorando el manager_id del query string.
+    const empQuery = issuedQueries.find((q) => q.sql && q.sql.includes('FROM employees e'));
+    expect(empQuery).toBeTruthy();
+    expect(empQuery.params).toContain('u-lead');
+    expect(empQuery.params).not.toContain('otro-lead');
+  });
+
+  it('detecta sobre-uso (real > plan + 10pp) y sub-uso (real < plan - 10pp)', async () => {
+    mockCurrentUser = { id: 'u-admin', role: 'admin' };
+    queryQueue.push({ rows: [
+      { employee_id: 'e1', employee_name: 'Ana', weekly_capacity_hours: 40, level: 'L4', area_name: 'Desarrollo' },
+    ]});
+    queryQueue.push({ rows: [
+      { id: 'a-over',  employee_id: 'e1', contract_id: 'c1', role_title: 'X', weekly_hours: 8, contract_name: 'X', start_date: '2026-01-01', end_date: '2026-12-31', status: 'active' },
+      { id: 'a-under', employee_id: 'e1', contract_id: 'c2', role_title: 'Y', weekly_hours: 32, contract_name: 'Y', start_date: '2026-01-01', end_date: '2026-12-31', status: 'active' },
+    ]});
+    queryQueue.push({ rows: [
+      { employee_id: 'e1', assignment_id: 'a-over', pct: '60', notes: null, contract_name: 'X', role_title: 'X' },   // plan 20%, real 60% → over
+      { employee_id: 'e1', assignment_id: 'a-under', pct: '40', notes: null, contract_name: 'Y', role_title: 'Y' },  // plan 80%, real 40% → under
+    ]});
+    const res = await client.call('GET', '/api/reports/plan-vs-real?week_start=2026-04-27');
+    expect(res.status).toBe(200);
+    const lines = res.body.rows[0].lines;
+    expect(lines.find((l) => l.assignment_id === 'a-over').status).toBe('over');
+    expect(lines.find((l) => l.assignment_id === 'a-under').status).toBe('under');
+  });
+});

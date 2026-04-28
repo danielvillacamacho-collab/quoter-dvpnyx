@@ -25,6 +25,8 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { parsePagination } = require('../utils/sanitize');
+const { serverError } = require('../utils/http');
 const { rankCandidates } = require('../utils/candidate_matcher');
 
 router.use(auth);
@@ -51,13 +53,11 @@ function computeStatus(stored, activeAssignments, quantity) {
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '25', 10), 1), 100);
-    const offset = (page - 1) * limit;
+    const { page, limit, offset } = parsePagination(req.query);
 
     const wheres = ['rr.deleted_at IS NULL'];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
+    const filterParams = [];
+    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
 
     if (req.query.contract_id) wheres.push(`rr.contract_id = ${add(req.query.contract_id)}`);
     if (req.query.area_id)     wheres.push(`rr.area_id = ${add(req.query.area_id)}`);
@@ -70,8 +70,10 @@ router.get('/', async (req, res) => {
     }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const limitIdx = filterParams.length + 1;
+    const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM resource_requests rr ${where}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM resource_requests rr ${where}`, filterParams),
       pool.query(
         `SELECT rr.*,
            c.name AS contract_name,
@@ -84,8 +86,8 @@ router.get('/', async (req, res) => {
            ORDER BY
              CASE rr.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
              rr.created_at DESC
-           LIMIT ${limit} OFFSET ${offset}`,
-        params
+           LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        [...filterParams, limit, offset]
       ),
     ]);
     const data = rowsRes.rows.map((r) => ({
@@ -128,7 +130,7 @@ router.get('/:id', async (req, res) => {
       status: computeStatus(r.status, r.active_assignments_count, r.quantity),
       stored_status: r.status,
     });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /resource-requests/:id', err); }
 });
 
 /* -------- CANDIDATES (US-RR-2) --------
@@ -400,7 +402,7 @@ router.post('/:id/cancel', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: { role_title: rows[0].role_title }, req,
     });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /resource-requests/:id/cancel', err); }
 });
 
 /* -------- SOFT DELETE (admin+) -------- */
@@ -427,7 +429,7 @@ router.delete('/:id', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: { role_title: rows[0].role_title }, req,
     });
     res.json({ message: 'Solicitud eliminada' });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'DELETE /resource-requests/:id', err); }
 });
 
 module.exports = router;

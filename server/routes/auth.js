@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
+const { serverError } = require('../utils/http');
 
 router.post('/login', async (req, res) => {
   try {
@@ -20,7 +21,7 @@ router.post('/login', async (req, res) => {
     await pool.query(`INSERT INTO audit_log (user_id, action, details, ip_address) VALUES ($1, 'login', '{}', $2)`,
       [user.id, req.ip]);
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null, must_change_password: user.must_change_password } });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /auth/login', err); }
 });
 
 router.post('/change-password', auth, async (req, res) => {
@@ -36,7 +37,7 @@ router.post('/change-password', auth, async (req, res) => {
     const hash = await bcrypt.hash(new_password, 12);
     await pool.query('UPDATE users SET password_hash=$1, must_change_password=false, updated_at=NOW() WHERE id=$2', [hash, req.user.id]);
     res.json({ message: 'Contraseña actualizada' });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /auth/change-password', err); }
 });
 
 router.get('/me', auth, async (req, res) => {
@@ -52,7 +53,7 @@ router.get('/me', auth, async (req, res) => {
     const row = rows[0];
     row.preferences = row.preferences || {};
     res.json(row);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /auth/me', err); }
 });
 
 /**
@@ -93,10 +94,7 @@ router.put('/me/preferences', auth, async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
     res.json({ preferences: rows[0].preferences || {} });
-  } catch (err) {
-    console.error('PUT /me/preferences failed:', err);
-    res.status(500).json({ error: 'Error interno' });
-  }
+  } catch (err) { serverError(res, 'PUT /auth/me/preferences', err); }
 });
 
 module.exports = router;

@@ -15,8 +15,13 @@ import StatusBadge from './shell/StatusBadge';
 import NotificationsDrawer from './shell/NotificationsDrawer';
 import { apiGet } from './utils/apiV2';
 import ComingSoon from './shell/ComingSoon';
+import ErrorBoundary from './shell/ErrorBoundary';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
+import PipelineKanban from './modules/PipelineKanban';
+import Revenue from './modules/Revenue';
+import RevenuePlanEditor from './modules/RevenuePlanEditor';
+import ExchangeRates from './modules/ExchangeRates';
 import Areas from './modules/Areas';
 import Skills from './modules/Skills';
 import Employees from './modules/Employees';
@@ -25,6 +30,7 @@ import ResourceRequests from './modules/ResourceRequests';
 import Assignments from './modules/Assignments';
 import CapacityPlanner from './modules/CapacityPlanner';
 import TimeMe from './modules/TimeMe';
+import TimeTeam from './modules/TimeTeam';
 import Reports from './modules/Reports';
 import DashboardMe from './modules/DashboardMe';
 import ClientDetail from './modules/ClientDetail';
@@ -147,18 +153,23 @@ function Layout() {
           onClose={() => setNotifOpen(false)}
           onUpdateUnread={setUnread}
         />
+        <ErrorBoundary>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
           <Route path="/quotation/:id" element={<QuotationRouter />} />
           <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
+          {isAdmin && <Route path="/admin/exchange-rates" element={<ExchangeRates />} />}
           {isAdmin && <Route path="/admin/users" element={<Users />} />}
           {isAdmin && <Route path="/admin/bulk-import" element={<BulkImport />} />}
           {/* V2 modules — placeholders until they ship in later sprints */}
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/opportunities" element={<Opportunities />} />
+          <Route path="/pipeline" element={<PipelineKanban />} />
+          <Route path="/revenue" element={<Revenue />} />
+          <Route path="/revenue/plan/:contract_id" element={<RevenuePlanEditor />} />
           <Route path="/opportunities/:id" element={<OpportunityDetail />} />
           <Route path="/employees" element={<Employees />} />
           <Route path="/employees/:id" element={<EmployeeDetail />} />
@@ -169,7 +180,7 @@ function Layout() {
           <Route path="/capacity/planner" element={<CapacityPlanner />} />
           <Route path="/time" element={<TimeMe />} />
           <Route path="/time/me" element={<TimeMe />} />
-          <Route path="/time/team" element={<ComingSoon />} />
+          <Route path="/time/team" element={<TimeTeam />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:type" element={<Reports />} />
           <Route path="/dashboard/me" element={<DashboardMe />} />
@@ -177,6 +188,7 @@ function Layout() {
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           <Route path="/preferencias" element={<Preferencias />} />
         </Routes>
+        </ErrorBoundary>
         <Footer />
       </div>
     </div>

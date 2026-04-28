@@ -68,7 +68,12 @@ export function AuthProvider({ children }) {
    * backend returns (sanitized/coerced values).
    */
   const updatePreferences = async (patch) => {
-    const optimistic = { ...(user?.preferences || {}), ...patch };
+    // Capturamos los prefs PREVIOS al inicio del closure — no usamos
+    // `user?.preferences` en el catch (eso lee la variable user
+    // potencialmente actualizada de forma concurrente y revierte a un
+    // estado equivocado).
+    const previousPrefs = user?.preferences || {};
+    const optimistic = { ...previousPrefs, ...patch };
     setUser((prev) => (prev ? { ...prev, preferences: optimistic } : prev));
     applyPreferences(optimistic);
     try {
@@ -77,14 +82,18 @@ export function AuthProvider({ children }) {
       applyPreferences(preferences);
       return preferences;
     } catch (e) {
-      // roll back on failure so the UI reflects the real server state
-      setUser((prev) => (prev ? { ...prev, preferences: user?.preferences || {} } : prev));
-      applyPreferences(user?.preferences);
+      // Rollback al estado previo capturado al inicio.
+      setUser((prev) => (prev ? { ...prev, preferences: previousPrefs } : prev));
+      applyPreferences(previousPrefs);
       throw e;
     }
   };
 
-  const isAdmin      = user && ['admin', 'superadmin'].includes(user.role);
+  const isAdmin       = user && ['admin', 'superadmin'].includes(user.role);
+  const isLead        = user && user.role === 'lead';
+  // Cualquier líder o admin puede ver dashboards de equipo (ej. plan-vs-real,
+  // /time/team con picker de su equipo).
+  const isLeadOrAdmin = isAdmin || isLead;
 
   if (loading) {
     return (
@@ -95,7 +104,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthCtx.Provider value={{ user, params, doLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin }}>
+    <AuthCtx.Provider value={{ user, params, doLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin }}>
       {children}
     </AuthCtx.Provider>
   );

@@ -2,6 +2,8 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { emitEvent } = require('../utils/events');
+const { parsePagination } = require('../utils/sanitize');
+const { serverError } = require('../utils/http');
 const { recalcStaffAugLines, detectLineDrift } = require('../utils/calc');
 const quotationExport = require('../utils/quotation_export');
 
@@ -29,19 +31,22 @@ router.get('/', async (req, res) => {
     // caller passes ?page, ?limit or ?paginate=true we return the
     // paginated envelope; otherwise we return an array (capped at 500
     // for safety — still protects against runaway growth).
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '100', 10), 1), 200);
-    const offset = (page - 1) * limit;
+    const { page, limit, offset } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 200 });
     const paginated = req.query.page !== undefined
       || req.query.limit !== undefined
       || req.query.paginate === 'true';
 
     const wheres = [];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
+    const filterParams = [];
+    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
 
-    // preventa users only see their own drafts (privacy guard).
-    if (req.user.role === 'preventa') wheres.push(`q.created_by = ${add(req.user.id)}`);
+    // Preventa (role==='member' + function='preventa' tras normalización del
+    // middleware) sólo ve sus propios drafts. El check antiguo basado en
+    // `req.user.role === 'preventa'` queda como fallback histórico para
+    // tokens legacy todavía no rotados.
+    if (req.user.role === 'preventa' || req.user.function === 'preventa') {
+      wheres.push(`q.created_by = ${add(req.user.id)}`);
+    }
     if (req.query.client_id)      wheres.push(`q.client_id = ${add(req.query.client_id)}`);
     if (req.query.opportunity_id) wheres.push(`q.opportunity_id = ${add(req.query.opportunity_id)}`);
     if (req.query.status)         wheres.push(`q.status = ${add(req.query.status)}`);
@@ -55,21 +60,27 @@ router.get('/', async (req, res) => {
       ORDER BY q.updated_at DESC`;
 
     if (!paginated) {
-      // Legacy shape: flat array, no pagination metadata. Keep a hard
-      // safety cap at 500 so the query never melts even in legacy mode.
-      const { rows } = await pool.query(`${baseSql} LIMIT 500`, params);
+      // Legacy shape: flat array, no pagination metadata. Cap a 500 aunque
+      // el caller no pida paginación.
+      const { rows } = await pool.query(`${baseSql} LIMIT 500`, filterParams);
       return res.json(rows);
     }
 
+    const limitIdx = filterParams.length + 1;
+    const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM quotations q ${where}`, params),
-      pool.query(`${baseSql} LIMIT ${limit} OFFSET ${offset}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM quotations q ${where}`, filterParams),
+      pool.query(`${baseSql} LIMIT $${limitIdx} OFFSET $${offsetIdx}`, [...filterParams, limit, offset]),
     ]);
     res.json({
       data: rowsRes.rows,
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /quotations failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
 });
 
 router.get('/:id', async (req, res) => {
@@ -83,7 +94,7 @@ router.get('/:id', async (req, res) => {
     const { rows: epics } = await pool.query('SELECT * FROM quotation_epics WHERE quotation_id=$1 ORDER BY sort_order', [req.params.id]);
     const { rows: milestones } = await pool.query('SELECT * FROM quotation_milestones WHERE quotation_id=$1 ORDER BY sort_order', [req.params.id]);
     res.json({ ...quot, lines, phases, epics, milestones });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /quotations/:id', err); }
 });
 
 router.post('/', async (req, res) => {
@@ -388,7 +399,7 @@ router.post('/:id/duplicate', async (req, res) => {
     await pool.query(`INSERT INTO quotation_milestones (quotation_id, sort_order, name, phase, percentage, amount, expected_date) SELECT $1, sort_order, name, phase, percentage, amount, expected_date FROM quotation_milestones WHERE quotation_id=$2`, [newq.id, req.params.id]);
     await pool.query(`INSERT INTO quotation_epics (quotation_id, sort_order, name, priority, hours_by_profile, total_hours) SELECT $1, sort_order, name, priority, hours_by_profile, total_hours FROM quotation_epics WHERE quotation_id=$2`, [newq.id, req.params.id]);
     res.status(201).json(newq);
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /quotations/:id/duplicate', err); }
 });
 
 /**
@@ -557,7 +568,7 @@ router.delete('/:id', async (req, res) => {
       req,
     });
     res.json({ message: 'Eliminada' });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'DELETE /quotations/:id', err); }
 });
 
 module.exports = router;

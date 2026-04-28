@@ -3,6 +3,9 @@ import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import {
+  SUBTYPES_BY_TYPE, SUBTYPE_LABEL, formatSubtype, typeRequiresSubtype, subtypesFor,
+} from '../utils/contractSubtype';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -52,25 +55,54 @@ const TRANSITIONS = {
 
 const EMPTY = {
   name: '', client_id: '', opportunity_id: '', winning_quotation_id: '',
-  type: 'project', start_date: '', end_date: '',
+  type: 'project', contract_subtype: '', start_date: '', end_date: '',
   delivery_manager_id: '', notes: '',
 };
 
 function ContractForm({ initial, clients, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const [subtypeError, setSubtypeError] = useState('');
+
+  // Cuando el usuario cambia el TYPE, reseteamos el subtype (cumple SPEC:
+  // "el campo Subtipo se resetea a vacío y muestra las opciones del nuevo
+  // tipo"). Excepción: si estamos editando y el contrato ya venía con un
+  // subtype válido para el type actual, lo preservamos.
+  const set = (k, v) => {
+    setForm((f) => {
+      if (k === 'type') {
+        const validForNew = (SUBTYPES_BY_TYPE[v] || []).some((s) => s.value === f.contract_subtype);
+        return { ...f, type: v, contract_subtype: validForNew ? f.contract_subtype : '' };
+      }
+      return { ...f, [k]: v };
+    });
+    if (k === 'contract_subtype') setSubtypeError('');
+  };
 
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
+    setSubtypeError('');
     if (!form.name.trim()) return setErr('Nombre es requerido');
     if (!form.client_id) return setErr('Cliente es requerido');
     if (!form.type) return setErr('Tipo es requerido');
     if (!form.start_date) return setErr('Fecha de inicio es requerida');
+    // SPEC: subtype obligatorio cuando type es capacity/project. Excepción
+    // legacy: si estamos editando un contrato que YA estaba sin subtype y
+    // el usuario no cambió el type ni tocó el campo, dejamos pasar (otros
+    // campos editables siguen funcionando).
+    const editingWithoutSubtype =
+      initial?.id && !initial.contract_subtype && form.type === initial.type;
+    if (typeRequiresSubtype(form.type) && !form.contract_subtype && !editingWithoutSubtype) {
+      setSubtypeError('Debes seleccionar un subtipo para continuar');
+      return;
+    }
     try { await onSave(form); }
     catch (ex) { setErr(ex.message || 'Error guardando'); }
   };
+
+  const subtypeOptions = subtypesFor(form.type);
+  const showSubtype = typeRequiresSubtype(form.type);
 
   return (
     <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -96,6 +128,31 @@ function ContractForm({ initial, clients, onSave, onCancel, saving }) {
           </select>
         </div>
       </div>
+      {showSubtype && (
+        <div>
+          <label style={s.label}>Subtipo *</label>
+          <select
+            style={{
+              ...s.input,
+              borderColor: subtypeError ? 'var(--danger, #b00020)' : s.input.border,
+            }}
+            value={form.contract_subtype || ''}
+            onChange={(e) => set('contract_subtype', e.target.value)}
+            aria-label="Subtipo"
+            required
+          >
+            <option value="">Selecciona un subtipo</option>
+            {subtypeOptions.map((sub) => (
+              <option key={sub.value} value={sub.value}>{sub.label}</option>
+            ))}
+          </select>
+          {subtypeError && (
+            <div role="alert" style={{ color: 'var(--danger, #b00020)', fontSize: 12, marginTop: 4 }}>
+              {subtypeError}
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Fecha inicio *</label>
@@ -125,6 +182,7 @@ export default function Contracts() {
   const [clientFilter, setClientFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [subtypeFilter, setSubtypeFilter] = useState('');
   const [clients, setClients] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -139,6 +197,7 @@ export default function Contracts() {
     if (clientFilter) qs.set('client_id', clientFilter);
     if (statusFilter) qs.set('status', statusFilter);
     if (typeFilter) qs.set('type', typeFilter);
+    if (subtypeFilter) qs.set('subtype', subtypeFilter);
     try {
       const r = await apiGet(`/api/contracts?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -147,7 +206,7 @@ export default function Contracts() {
       // eslint-disable-next-line no-alert
       alert('Error cargando contratos: ' + e.message);
     }
-  }, [search, clientFilter, statusFilter, typeFilter]);
+  }, [search, clientFilter, statusFilter, typeFilter, subtypeFilter]);
 
   const loadClients = useCallback(async () => {
     try {
@@ -164,6 +223,9 @@ export default function Contracts() {
     try {
       const payload = {
         name: form.name, client_id: form.client_id, type: form.type,
+        // contract_subtype: empty string → null (resell) o sin tocar para
+        // legacy edits sin cambio de type; el server diferencia los casos.
+        contract_subtype: form.contract_subtype || null,
         start_date: form.start_date, end_date: form.end_date || null,
         notes: form.notes,
         opportunity_id: form.opportunity_id || null,
@@ -224,6 +286,7 @@ export default function Contracts() {
                 if (clientFilter)  qs.set('client_id', clientFilter);
                 if (statusFilter)  qs.set('status', statusFilter);
                 if (typeFilter)    qs.set('type', typeFilter);
+                if (subtypeFilter) qs.set('subtype', subtypeFilter);
                 await apiDownload(`/api/contracts/export.csv${qs.toString() ? `?${qs}` : ''}`, 'contratos.csv');
               } catch (e) {
                 // eslint-disable-next-line no-alert
@@ -255,9 +318,41 @@ export default function Contracts() {
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Tipo</label>
-            <select style={s.input} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} aria-label="Filtro por tipo">
+            <select
+              style={s.input}
+              value={typeFilter}
+              onChange={(e) => {
+                setTypeFilter(e.target.value);
+                // SPEC: si el subtipo filtrado no es válido para el nuevo
+                // tipo, lo limpiamos (evita filtros vacíos por inconsistencia).
+                if (subtypeFilter) {
+                  const validList = SUBTYPES_BY_TYPE[e.target.value] || Object.values(SUBTYPES_BY_TYPE).flat();
+                  if (!validList.some((sub) => sub.value === subtypeFilter)) {
+                    setSubtypeFilter('');
+                  }
+                }
+              }}
+              aria-label="Filtro por tipo"
+            >
               <option value="">Todos</option>
               {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
+          <div style={{ minWidth: 200 }}>
+            <label style={s.label}>Subtipo</label>
+            <select
+              style={s.input}
+              value={subtypeFilter}
+              onChange={(e) => setSubtypeFilter(e.target.value)}
+              aria-label="Filtro por subtipo"
+            >
+              <option value="">Todos</option>
+              {/* Si hay un type filtrado, mostrar sólo los subtipos de ese type;
+                  sin type, mostrar todos. 'none' permite filtrar contratos sin subtipo (legacy). */}
+              {(typeFilter ? subtypesFor(typeFilter) : Object.values(SUBTYPES_BY_TYPE).flat()).map((sub) => (
+                <option key={sub.value} value={sub.value}>{sub.label}</option>
+              ))}
+              <option value="none">— Sin especificar —</option>
             </select>
           </div>
           <div style={{ minWidth: 140 }}>
@@ -273,17 +368,17 @@ export default function Contracts() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
-                {['Nombre', 'Cliente', 'Tipo', 'Estado', 'Inicio', 'Solicitudes abiertas', 'Asig. activas', ''].map((h) => (
+                {['Nombre', 'Cliente', 'Tipo', 'Subtipo', 'Estado', 'Inicio', 'Solicitudes abiertas', 'Asig. activas', ''].map((h) => (
                   <th key={h} style={s.th}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {state.loading && (
-                <tr><td colSpan={8} style={{ ...s.td, textAlign: 'center', color: 'var(--text-light)' }}>Cargando…</td></tr>
+                <tr><td colSpan={9} style={{ ...s.td, textAlign: 'center', color: 'var(--text-light)' }}>Cargando…</td></tr>
               )}
               {!state.loading && state.data.length === 0 && (
-                <tr><td colSpan={8} style={{ ...s.td, textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>
+                <tr><td colSpan={9} style={{ ...s.td, textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>
                   No hay contratos que coincidan con los filtros.
                 </td></tr>
               )}
@@ -296,6 +391,9 @@ export default function Contracts() {
                     </td>
                     <td style={s.td}>{c.client_name || '—'}</td>
                     <td style={{ ...s.td, fontSize: 12 }}>{TYPE_LABEL[c.type] || c.type}</td>
+                    <td style={{ ...s.td, fontSize: 12, color: c.contract_subtype ? 'inherit' : 'var(--text-light)' }}>
+                      {formatSubtype(c.contract_subtype, { fallback: 'Sin especificar' })}
+                    </td>
                     <td style={s.td}>
                       <StatusBadge domain="contract" value={c.status} label={STATUS_LABEL[c.status]} />
                     </td>

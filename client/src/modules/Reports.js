@@ -37,6 +37,7 @@ const REPORTS = [
   { type: 'hiring-needs',     label: '🎯 Necesidades de contratación', description: 'Agregado por área, nivel y país.' },
   { type: 'coverage',         label: '🛡 Cobertura de contratos', description: 'Horas solicitadas vs. asignadas por contrato.' },
   { type: 'time-compliance',  label: '⏱ Cumplimiento time tracking', description: 'Horas registradas vs. esperadas por empleado.' },
+  { type: 'plan-vs-real',     label: '🎯 Plan vs Real (semanal)', description: '% planeado por asignación vs % real registrado por el empleado.' },
 ];
 
 function formatPct(v) {
@@ -141,6 +142,90 @@ const COLUMNS = {
   ],
 };
 
+/* Plan-vs-Real: tabla agrupada por empleado, una sub-fila por línea
+ * (asignación). Color en la columna Estado:
+ *   on_plan → verde, over → rojo, under → naranja, missing → gris,
+ *   unplanned → púrpura (registró tiempo en algo que no estaba planeado),
+ *   no_data → texto tenue (nadie registró tiempo aún).
+ */
+const STATUS_LABEL = {
+  on_plan: '✓ En plan',
+  over: '↑ Sobre-uso',
+  under: '↓ Sub-uso',
+  missing: '· Sin registro',
+  unplanned: '⚠ No planeado',
+  no_data: '— Sin data',
+};
+const STATUS_COLOR = {
+  on_plan: 'var(--success)',
+  over: 'var(--danger)',
+  under: 'var(--orange)',
+  missing: 'var(--text-light)',
+  unplanned: 'var(--purple-dark)',
+  no_data: 'var(--text-light)',
+};
+function PlanVsRealTable({ rows }) {
+  if (!rows || rows.length === 0) {
+    return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-light)' }}>Sin empleados visibles para esa semana.</div>;
+  }
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
+        <thead>
+          <tr>
+            {['Empleado', 'Contrato / Asignación', 'Rol', '% Plan', '% Real', 'Diff (pp)', 'Estado'].map((h) => (
+              <th key={h} style={s.th}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const lines = r.lines.length > 0
+              ? r.lines
+              : [{ assignment_id: '__empty__', contract_name: '— sin asignaciones —', role_title: '', planned_pct: 0, actual_pct: r.has_actual_data ? 0 : null, diff_pct: null, status: r.has_actual_data ? 'on_plan' : 'no_data' }];
+            return lines.map((l, idx) => (
+              <tr key={r.employee_id + '_' + l.assignment_id + '_' + idx}>
+                {idx === 0 && (
+                  <td rowSpan={lines.length + 1} style={{ ...s.td, verticalAlign: 'top', background: '#fafafa' }}>
+                    <div style={{ fontWeight: 700 }}>{r.employee_name}</div>
+                    <div style={{ fontSize: 11, color: 'var(--text-light)' }}>
+                      {r.area_name || '—'} · {r.level} · cap {r.capacity_hours}h/sem
+                    </div>
+                  </td>
+                )}
+                <td style={s.td}>{l.contract_name || '—'}</td>
+                <td style={s.td}>{l.role_title || '—'}</td>
+                <td style={{ ...s.td, textAlign: 'right' }}>{(l.planned_pct ?? 0).toFixed(0)}%</td>
+                <td style={{ ...s.td, textAlign: 'right' }}>{l.actual_pct == null ? '—' : `${l.actual_pct.toFixed(0)}%`}</td>
+                <td style={{ ...s.td, textAlign: 'right', color: l.diff_pct == null ? 'var(--text-light)' : (l.diff_pct > 0 ? 'var(--danger)' : (l.diff_pct < 0 ? 'var(--orange)' : 'var(--success)')), fontWeight: 600 }}>
+                  {l.diff_pct == null ? '—' : `${l.diff_pct > 0 ? '+' : ''}${l.diff_pct.toFixed(0)}`}
+                </td>
+                <td style={{ ...s.td, color: STATUS_COLOR[l.status] || 'inherit', fontWeight: 600, fontSize: 12 }}>
+                  {STATUS_LABEL[l.status] || l.status}
+                </td>
+              </tr>
+            )).concat([
+              <tr key={r.employee_id + '_total'} style={{ background: '#f5f3ff' }}>
+                <td style={{ ...s.td, fontWeight: 700 }}>Total semana</td>
+                <td style={s.td}>—</td>
+                <td style={{ ...s.td, textAlign: 'right', fontWeight: 700 }}>{(r.weekly_total_planned_pct ?? 0).toFixed(0)}%</td>
+                <td style={{ ...s.td, textAlign: 'right', fontWeight: 700 }}>
+                  {r.weekly_total_actual_pct == null ? '—' : `${r.weekly_total_actual_pct.toFixed(0)}%`}
+                  {r.bench_pct != null && r.bench_pct > 0 ? <span style={{ fontSize: 11, color: 'var(--text-light)', marginLeft: 6 }}>(bench {r.bench_pct.toFixed(0)}%)</span> : null}
+                </td>
+                <td style={s.td}>—</td>
+                <td style={{ ...s.td, fontSize: 12, color: 'var(--text-light)' }}>
+                  {r.has_actual_data ? '' : 'No registró tiempo esta semana'}
+                </td>
+              </tr>
+            ]);
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ReportTable({ type, data }) {
   const cols = COLUMNS[type] || [];
   return (
@@ -185,6 +270,16 @@ export default function Reports() {
   const [thresholdInput, setThresholdInput] = useState('0.3');
   const [fromInput, setFromInput] = useState(() => new Date(Date.now() - 28 * 86400000).toISOString().slice(0, 10));
   const [toInput, setToInput] = useState(() => new Date().toISOString().slice(0, 10));
+  // plan-vs-real semana actual (lunes).
+  const [weekInput, setWeekInput] = useState(() => {
+    const d = new Date();
+    const day = d.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diff);
+    return d.toISOString().slice(0, 10);
+  });
+  // plan-vs-real shape distinto: rows en lugar de data, con lines anidadas.
+  const [pvrRows, setPvrRows] = useState([]);
 
   const load = useCallback(async () => {
     if (!type) return;
@@ -193,16 +288,23 @@ export default function Reports() {
       const qs = new URLSearchParams();
       if (type === 'bench') qs.set('threshold', String(thresholdInput));
       if (type === 'time-compliance') { qs.set('from', fromInput); qs.set('to', toInput); }
+      if (type === 'plan-vs-real') qs.set('week_start', weekInput);
       const r = await apiGet(`/api/reports/${type}?${qs}`);
-      setData(r?.data || []);
-      setExtra({ threshold: r?.threshold, from: r?.from, to: r?.to });
+      if (type === 'plan-vs-real') {
+        setPvrRows(r?.rows || []);
+        setData([]);
+        setExtra({ week_start_date: r?.week_start_date, week_end_date: r?.week_end_date });
+      } else {
+        setData(r?.data || []);
+        setExtra({ threshold: r?.threshold, from: r?.from, to: r?.to });
+      }
     } catch (e) {
       setErr(e.message || 'Error');
       setData([]);
     } finally {
       setLoading(false);
     }
-  }, [type, thresholdInput, fromInput, toInput]);
+  }, [type, thresholdInput, fromInput, toInput, weekInput]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -268,7 +370,42 @@ export default function Reports() {
               </div>
             </>
           )}
-          <button type="button" style={s.btn('var(--teal-mid)')} onClick={() => downloadCSV(`${type}-${new Date().toISOString().slice(0, 10)}.csv`, data, cols)} aria-label="Exportar CSV">
+          {type === 'plan-vs-real' && (
+            <div>
+              <label style={s.label}>Semana (lunes)</label>
+              <input style={s.input} type="date" value={weekInput} onChange={(e) => setWeekInput(e.target.value)} aria-label="Semana" />
+            </div>
+          )}
+          <button type="button" style={s.btn('var(--teal-mid)')} onClick={() => {
+            if (type === 'plan-vs-real') {
+              const flat = [];
+              pvrRows.forEach((r) => {
+                if (r.lines.length === 0) {
+                  flat.push({ employee: r.employee_name, area: r.area_name, level: r.level, contract: '—', role: '—',
+                    planned_pct: r.weekly_total_planned_pct, actual_pct: r.weekly_total_actual_pct, diff_pct: '', status: r.has_actual_data ? '' : 'sin registro' });
+                } else {
+                  r.lines.forEach((l) => flat.push({
+                    employee: r.employee_name, area: r.area_name, level: r.level,
+                    contract: l.contract_name, role: l.role_title || '',
+                    planned_pct: l.planned_pct, actual_pct: l.actual_pct, diff_pct: l.diff_pct, status: l.status,
+                  }));
+                }
+              });
+              const cols2 = [
+                { label: 'Empleado',  get: (r) => r.employee },
+                { label: 'Área',      get: (r) => r.area || '' },
+                { label: 'Level',     get: (r) => r.level },
+                { label: 'Contrato',  get: (r) => r.contract },
+                { label: 'Rol',       get: (r) => r.role },
+                { label: '% Plan',    get: (r) => r.planned_pct },
+                { label: '% Real',    get: (r) => r.actual_pct ?? '' },
+                { label: 'Diff (pp)', get: (r) => r.diff_pct ?? '' },
+                { label: 'Estado',    get: (r) => r.status },
+              ];
+              return downloadCSV(`plan-vs-real-${weekInput}.csv`, flat, cols2);
+            }
+            return downloadCSV(`${type}-${new Date().toISOString().slice(0, 10)}.csv`, data, cols);
+          }} aria-label="Exportar CSV">
             ⬇ Exportar CSV
           </button>
         </div>
@@ -285,9 +422,16 @@ export default function Reports() {
             Rango: {extra.from} → {extra.to}
           </div>
         )}
+        {extra.week_start_date && extra.week_end_date && (
+          <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
+            Semana: {extra.week_start_date} → {extra.week_end_date}
+          </div>
+        )}
         {err && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
         {loading ? (
           <div style={{ color: 'var(--text-light)', fontSize: 13 }}>Cargando…</div>
+        ) : type === 'plan-vs-real' ? (
+          <PlanVsRealTable rows={pvrRows} />
         ) : (
           <ReportTable type={type} data={data} />
         )}
