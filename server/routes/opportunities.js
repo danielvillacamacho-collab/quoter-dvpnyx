@@ -32,6 +32,8 @@ const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { stringifyCsv } = require('../utils/csv');
+const { parsePagination } = require('../utils/sanitize');
+const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
 
@@ -67,13 +69,11 @@ const EDITABLE_FIELDS = [
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '25', 10), 1), 100);
-    const offset = (page - 1) * limit;
+    const { page, limit, offset } = parsePagination(req.query);
 
     const wheres = ['o.deleted_at IS NULL'];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
+    const filterParams = [];
+    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
 
     if (req.query.search) {
       const like = '%' + req.query.search + '%';
@@ -87,8 +87,10 @@ router.get('/', async (req, res) => {
     if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
 
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
+    const limitIdx = filterParams.length + 1;
+    const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM opportunities o ${where}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM opportunities o ${where}`, filterParams),
       pool.query(
         `SELECT o.*,
            c.name AS client_name,
@@ -97,8 +99,8 @@ router.get('/', async (req, res) => {
            LEFT JOIN clients c ON c.id = o.client_id
            ${where}
            ORDER BY o.created_at DESC
-           LIMIT ${limit} OFFSET ${offset}`,
-        params,
+           LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        [...filterParams, limit, offset],
       ),
     ]);
     const total = countRes.rows[0].total;
@@ -648,7 +650,7 @@ router.post('/:id/status', async (req, res) => {
     await connection.query('COMMIT');
     res.json({ ...after, warnings });
   } catch (err) {
-    await connection.query('ROLLBACK').catch(() => {});
+    await safeRollback(connection, 'opportunities');
     // eslint-disable-next-line no-console
     console.error('POST /opportunities/:id/status failed:', err);
     res.status(500).json({ error: 'Error interno' });

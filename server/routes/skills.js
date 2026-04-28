@@ -16,6 +16,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -68,7 +69,7 @@ router.get('/:id', async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Skill no encontrado' });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /skills/:id', err); }
 });
 
 /* -------- CREATE (admin+) -------- */
@@ -176,7 +177,7 @@ router.post('/:id/deactivate', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: { name: rows[0].name }, req,
     });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /skills/:id/deactivate', err); }
 });
 
 /* -------- ACTIVATE (admin+) -------- */
@@ -192,7 +193,7 @@ router.post('/:id/activate', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: { name: rows[0].name }, req,
     });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /skills/:id/activate', err); }
 });
 
 module.exports = router;

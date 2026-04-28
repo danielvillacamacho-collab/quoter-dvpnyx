@@ -20,6 +20,8 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { parsePagination } = require('../utils/sanitize');
+const { serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -98,13 +100,11 @@ async function sumDailyHours(conn, employeeId, workDate, ignoreId = null) {
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '100', 10), 1), 500);
-    const offset = (page - 1) * limit;
+    const { page, limit, offset } = parsePagination(req.query, { defaultLimit: 100, maxLimit: 500 });
 
     const wheres = ['te.deleted_at IS NULL'];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
+    const filterParams = [];
+    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
 
     if (req.query.employee_id)   wheres.push(`te.employee_id = ${add(req.query.employee_id)}`);
     if (req.query.assignment_id) wheres.push(`te.assignment_id = ${add(req.query.assignment_id)}`);
@@ -120,8 +120,10 @@ router.get('/', async (req, res) => {
     }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const limitIdx = filterParams.length + 1;
+    const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM time_entries te ${where}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM time_entries te ${where}`, filterParams),
       pool.query(
         `SELECT te.*,
            a.role_title AS assignment_role_title, a.contract_id AS assignment_contract_id,
@@ -131,8 +133,8 @@ router.get('/', async (req, res) => {
            LEFT JOIN contracts   c ON c.id = a.contract_id
            ${where}
            ORDER BY te.work_date DESC, te.created_at DESC
-           LIMIT ${limit} OFFSET ${offset}`,
-        params
+           LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        [...filterParams, limit, offset]
       ),
     ]);
     res.json({
@@ -328,7 +330,7 @@ router.delete('/:id', async (req, res) => {
       req,
     });
     res.json({ message: 'Time entry eliminado' });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'DELETE /time-entries/:id', err); }
   finally { conn.release(); }
 });
 

@@ -13,6 +13,7 @@
  */
 const router = require('express').Router();
 const pool = require('../database/pool');
+const { serverError } = require('../utils/http');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 
@@ -39,11 +40,7 @@ router.get('/', async (req, res) => {
       params
     );
     res.json({ data: rows });
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /areas failed:', err);
-    res.status(500).json({ error: 'Error interno' });
-  }
+  } catch (err) { serverError(res, 'GET /areas', err); }
 });
 
 /* -------- GET ONE -------- */
@@ -57,7 +54,7 @@ router.get('/:id', async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Área no encontrada' });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /areas/:id', err); }
 });
 
 /* -------- CREATE (admin+) -------- */
@@ -92,11 +89,7 @@ router.post('/', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: { key: area.key, name: area.name }, req,
     });
     res.status(201).json(area);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /areas failed:', err);
-    res.status(500).json({ error: 'Error interno' });
-  }
+  } catch (err) { serverError(res, 'POST /areas', err); }
 });
 
 /* -------- UPDATE (admin+) -------- */
@@ -142,11 +135,7 @@ router.put('/:id', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: buildUpdatePayload(before, after, EDITABLE_FIELDS), req,
     });
     res.json(after);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /areas/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
-  }
+  } catch (err) { serverError(res, 'PUT /areas/:id', err); }
 });
 
 /* -------- DEACTIVATE (admin+) --------
@@ -176,11 +165,7 @@ router.post('/:id/deactivate', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: { key: rows[0].key, name: rows[0].name }, req,
     });
     res.json(rows[0]);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /areas/:id/deactivate failed:', err);
-    res.status(500).json({ error: 'Error interno' });
-  }
+  } catch (err) { serverError(res, 'POST /areas/:id/deactivate', err); }
 });
 
 /* -------- ACTIVATE (admin+) -------- */
@@ -196,7 +181,7 @@ router.post('/:id/activate', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: { key: rows[0].key, name: rows[0].name }, req,
     });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /areas/:id/activate', err); }
 });
 
 module.exports = router;

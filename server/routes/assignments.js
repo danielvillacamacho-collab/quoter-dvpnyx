@@ -34,6 +34,8 @@ const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { notify, notifyMany } = require('../utils/notifications');
 const { runAllChecks } = require('../utils/assignment_validation');
 const { stringifyCsv } = require('../utils/csv');
+const { parsePagination } = require('../utils/sanitize');
+const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
 
@@ -223,13 +225,11 @@ router.get('/validate', async (req, res) => {
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '25', 10), 1), 100);
-    const offset = (page - 1) * limit;
+    const { page, limit, offset } = parsePagination(req.query);
 
     const wheres = ['a.deleted_at IS NULL'];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
+    const filterParams = [];
+    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
 
     if (req.query.employee_id)         wheres.push(`a.employee_id = ${add(req.query.employee_id)}`);
     if (req.query.contract_id)         wheres.push(`a.contract_id = ${add(req.query.contract_id)}`);
@@ -237,8 +237,10 @@ router.get('/', async (req, res) => {
     if (req.query.status)              wheres.push(`a.status = ${add(req.query.status)}`);
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const limitIdx = filterParams.length + 1;
+    const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM assignments a ${where}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM assignments a ${where}`, filterParams),
       pool.query(
         `SELECT a.*,
            e.first_name AS employee_first_name, e.last_name AS employee_last_name,
@@ -250,8 +252,8 @@ router.get('/', async (req, res) => {
            LEFT JOIN resource_requests rr ON rr.id = a.resource_request_id
            ${where}
            ORDER BY a.start_date DESC
-           LIMIT ${limit} OFFSET ${offset}`,
-        params
+           LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        [...filterParams, limit, offset]
       ),
     ]);
     res.json({
@@ -342,7 +344,7 @@ router.get('/:id', async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Asignación no encontrada' });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /assignments/:id', err); }
 });
 
 /* -------- CREATE (admin+) — EN-1 + EN-2 + US-VAL-4 --------
@@ -574,7 +576,7 @@ router.post('/', adminOnly, async (req, res) => {
     await conn.query('COMMIT');
     res.status(201).json({ ...asg, warnings, validation });
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
+    await safeRollback(conn, 'transaction');
     // eslint-disable-next-line no-console
     console.error('POST /assignments failed:', err);
     res.status(500).json({ error: 'Error interno' });
@@ -664,7 +666,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     await conn.query('COMMIT');
     res.json(after);
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
+    await safeRollback(conn, 'transaction');
     // eslint-disable-next-line no-console
     console.error('PUT /assignments/:id failed:', err);
     res.status(500).json({ error: 'Error interno' });

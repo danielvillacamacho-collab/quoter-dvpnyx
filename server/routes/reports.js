@@ -19,6 +19,7 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
+const { serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -106,7 +107,7 @@ router.get('/pending-requests', async (req, res) => {
           rr.created_at ASC`,
     );
     res.json({ data: rows });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /reports/pending-requests', err); }
 });
 
 /** EI-5 — Hiring needs: aggregate pending requests by (area, level, country). */
@@ -134,7 +135,7 @@ router.get('/hiring-needs', async (req, res) => {
         ORDER BY open_slots DESC, a.name, rr.level`
     );
     res.json({ data: rows });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /reports/hiring-needs', err); }
 });
 
 /** EI-6 — Coverage per contract. */
@@ -161,7 +162,7 @@ router.get('/coverage', async (req, res) => {
         ORDER BY coverage_pct ASC, c.name`
     );
     res.json({ data: rows });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /reports/coverage', err); }
 });
 
 /** EI-7 — Time tracking compliance per employee over a date range. */
@@ -195,7 +196,7 @@ router.get('/time-compliance', async (req, res) => {
       [from, to]
     );
     res.json({ data: rows, from, to });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /reports/time-compliance', err); }
 });
 
 /**

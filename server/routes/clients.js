@@ -13,6 +13,8 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { parsePagination } = require('../utils/sanitize');
+const { serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -30,13 +32,11 @@ function sanitizeTier(tier) {
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '25', 10), 1), 100);
-    const offset = (page - 1) * limit;
+    const { page, limit, offset } = parsePagination(req.query);
 
     const wheres = ['deleted_at IS NULL'];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
+    const filterParams = [];
+    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
 
     if (req.query.search)   wheres.push(`(LOWER(name) LIKE LOWER(${add('%' + req.query.search + '%')}) OR LOWER(legal_name) LIKE LOWER(${add('%' + req.query.search + '%')}))`);
     if (req.query.country)  wheres.push(`country = ${add(req.query.country)}`);
@@ -47,8 +47,10 @@ router.get('/', async (req, res) => {
     }
 
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
+    const limitIdx = filterParams.length + 1;
+    const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM clients ${where}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM clients ${where}`, filterParams),
       pool.query(
         `SELECT c.*,
            (SELECT COUNT(*)::int FROM opportunities o WHERE o.client_id=c.id AND o.deleted_at IS NULL) AS opportunities_count,
@@ -56,8 +58,8 @@ router.get('/', async (req, res) => {
            FROM clients c
            ${where}
            ORDER BY c.name ASC
-           LIMIT ${limit} OFFSET ${offset}`,
-        params,
+           LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        [...filterParams, limit, offset],
       ),
     ]);
     const total = countRes.rows[0].total;
@@ -234,7 +236,7 @@ router.post('/:id/deactivate', adminOnly, async (req, res) => {
       req,
     });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /clients/:id/deactivate', err); }
 });
 
 router.post('/:id/activate', adminOnly, async (req, res) => {
@@ -253,7 +255,7 @@ router.post('/:id/activate', adminOnly, async (req, res) => {
       req,
     });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'POST /clients/:id/activate', err); }
 });
 
 /* -------- SOFT DELETE (admin+) -------- */
@@ -284,7 +286,7 @@ router.delete('/:id', adminOnly, async (req, res) => {
       req,
     });
     res.json({ message: 'Cliente eliminado' });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'DELETE /clients/:id', err); }
 });
 
 module.exports = router;

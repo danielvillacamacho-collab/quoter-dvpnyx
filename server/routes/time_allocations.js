@@ -28,20 +28,13 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
+const { serverError, safeRollback } = require('../utils/http');
+const { mondayOf, isValidISODate, ISO_DATE_RE } = require('../utils/sanitize');
 
 router.use(auth);
 
-const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Normalize to Monday of the week containing `dateIso`. */
-function mondayOf(dateIso) {
-  const d = new Date(dateIso + 'T00:00:00Z');
-  if (isNaN(d.getTime())) return null;
-  const day = d.getUTCDay(); // 0=Sun..6=Sat
-  const diff = day === 0 ? -6 : 1 - day;
-  d.setUTCDate(d.getUTCDate() + diff);
-  return d.toISOString().slice(0, 10);
-}
+// `mondayOf` antes vivía aquí; ahora vive en utils/sanitize y se importa
+// arriba. Mantenemos el export _internal por compatibilidad con tests.
 
 // employees no tiene una columna `name` plana — tiene `first_name` y
 // `last_name`. Concatenamos en SQL para mantener una shape única en el resto
@@ -302,10 +295,8 @@ router.put('/bulk', async (req, res) => {
       warnings: sumPct < 99.9999 ? [{ code: 'bench', message: `${benchPct.toFixed(0)}% de la semana queda en bench.` }] : [],
     });
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
-    // eslint-disable-next-line no-console
-    console.error('PUT /time-allocations/bulk failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    await safeRollback(conn, 'PUT /time-allocations/bulk');
+    serverError(res, 'PUT /time-allocations/bulk', err);
   } finally {
     conn.release();
   }

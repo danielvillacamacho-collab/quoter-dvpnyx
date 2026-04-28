@@ -17,7 +17,13 @@ router.get('/', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
     db = 'up';
-  } catch (_) { /* leave 'down' */ }
+  } catch (err) {
+    // El endpoint sigue devolviendo 503 con db='down' — pero loggeamos el
+    // error para que las CloudWatch alarms / uptime monitors tengan
+    // contexto del fallo (antes se enmascaraba silenciosamente).
+    // eslint-disable-next-line no-console
+    console.warn('Health check DB probe failed:', err && err.message ? err.message : err);
+  }
   const ok = db === 'up';
   res.status(ok ? 200 : 503).json({ ok, version, git_sha, db });
 });

@@ -30,6 +30,7 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
+const { safeRollback } = require('../utils/http');
 
 router.use(auth);
 
@@ -396,7 +397,7 @@ router.put('/:contract_id/plan', async (req, res) => {
     await conn.query('COMMIT');
     res.json({ entries: upserted, warnings, contract: { id: contract_id, type: contract.type, total_value_usd: totalValue, original_currency: originalCurrency } });
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
+    await safeRollback(conn, 'revenue');
     // eslint-disable-next-line no-console
     console.error('PUT /revenue/:contract_id/plan failed:', err);
     res.status(500).json({ error: 'Error interno' });
@@ -519,7 +520,7 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
     await conn.query('COMMIT');
     res.json(row);
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
+    await safeRollback(conn, 'revenue');
     // eslint-disable-next-line no-console
     console.error('PUT /revenue/:contract_id/:yyyymm failed:', err);
     res.status(500).json({ error: 'Error interno' });
@@ -606,7 +607,7 @@ router.post('/:contract_id/:yyyymm/close', async (req, res) => {
     await conn.query('COMMIT');
     res.json(rows[0]);
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
+    await safeRollback(conn, 'revenue');
     // eslint-disable-next-line no-console
     console.error('POST /revenue/:contract_id/:yyyymm/close failed:', err);
     res.status(500).json({ error: 'Error interno' });
