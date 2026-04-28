@@ -2,8 +2,15 @@
 ### Guía para prueba piloto
 
 **Sistema:** quoter.doublevpartners.com
-**Fecha:** Abril 2026
+**Fecha:** Mayo 2026
 **Audiencia:** Practicante / Evaluadora del sistema
+
+> **Nuevos flujos disponibles desde Mayo 2026** (ver [§Flujos nuevos](#flujos-nuevos-mayo-2026) al final):
+> - Conversión cotización → contrato de un click
+> - Kick-off del contrato (auto-genera solicitudes desde la cotización)
+> - **Tiempo semanal** (`/time/team`) con bench automático
+> - **Plan vs Real** semanal (`/reports/plan-vs-real`) para líderes
+> - Asignación in-place desde Capacity Planner
 
 ---
 
@@ -674,4 +681,86 @@ El indicador de cumplimiento arriba del calendario muestra el % de días hábile
 
 ---
 
-*DVPNYX Cotizador v2.0 — quoter.doublevpartners.com — Abril 2026*
+## Flujos nuevos (Mayo 2026)
+
+### 1. Convertir una cotización ganada en contrato
+
+Antes había que copiar datos a mano. Ahora:
+
+1. Abre la **oportunidad** ganadora.
+2. Selecciona la cotización ganadora.
+3. Click en **🏆 Mover a Ganada** y elige la cotización.
+4. El sistema te pregunta: **"¿Crear un contrato desde esta cotización ahora?"**.
+5. Click en **Sí** → contrato `planned` creado, te lleva al detalle.
+6. Si dismisses el confirm, hay un botón en el banner verde "**📄 Crear contrato desde cotización ganadora**" para hacerlo después.
+
+### 2. Asignar Delivery Manager y hacer Kick-off
+
+Una vez creado el contrato:
+
+1. Si eres **admin**: en el detalle del contrato, sección "Delivery manager" con dropdown — selecciona quién va a liderar entrega.
+2. Si eres **delivery manager** (o admin/account_owner/capacity_manager): aparece un panel morado **"🚀 Kick-off del proyecto"**.
+3. Pon la **fecha de kick-off** y click en **Iniciar kick-off**.
+4. El sistema lee la cotización ganadora y crea automáticamente las **solicitudes de recursos** con:
+   - Rol, nivel, país, cantidad de cada línea
+   - Horas/sem = `hours_per_week` de la cotización
+   - Fecha inicio = kick-off
+   - Fecha fin = kick-off + duración (meses) × 30
+   - Área inferida del specialty
+5. Puedes **editar** cada solicitud después si la cotización tenía algo aproximado.
+6. Si necesitas regenerar todo: botón **🔄 Resembrar desde cotización** (borra las anteriores).
+
+### 3. Tiempo semanal por % (`/time/team`)
+
+Modelo nuevo paralelo al registro diario de horas (`/time/me`).
+
+1. Ve a **Tiempo semanal** en el sidebar.
+2. Selecciona la **semana** (siempre se ajusta al lunes).
+3. Verás tus **asignaciones activas** y un input de % por cada una.
+4. La **suma debe ser ≤ 100%**. Lo que falte para 100% se considera **bench** (tiempo no facturable).
+5. Si guardas con < 100%, el sistema te pregunta confirmación: "¿Confirmas que el resto va a bench?".
+6. Como **líder** o **admin**: si tu usuario no tiene fila en `employees`, ves un picker para elegir un empleado.
+7. Como **líder de equipo**: solo ves a tus reportes directos.
+
+### 4. Reporte Plan vs Real semanal
+
+Compara qué se planeó vs qué se registró.
+
+1. Ve a **Reportes** → **🎯 Plan vs Real (semanal)**.
+2. Selecciona la **semana** (lunes).
+3. Ves una tabla agrupada por empleado, con sub-líneas por contrato/asignación.
+4. Cada línea muestra: **% Plan**, **% Real**, **Diff (pp)** y **Estado**:
+   - ✓ **En plan** (diff ≤ ±10pp)
+   - ↑ **Sobre-uso** (real > plan + 10pp)
+   - ↓ **Sub-uso** (real < plan - 10pp)
+   - · **Sin registro** (asignado pero no registró tiempo)
+   - ⚠ **No planeado** (registró tiempo en una asignación que ya no está vigente)
+5. Sub-total por empleado con **bench %**.
+6. **Auto-scoping**:
+   - **Líder**: ves solo a tus reportes directos.
+   - **Member**: ves solo lo tuyo.
+   - **Admin**: ves a todos.
+7. **Exportar a CSV** disponible.
+
+### 5. Asignar empleados in-place desde Capacity Planner
+
+Antes había que ir a otra pantalla. Ahora:
+
+1. En **Capacity Planner**, las solicitudes sin asignar aparecen como barras rayadas.
+2. Click en una barra → modal de **candidatos sugeridos** (ranking por área + nivel + skills + disponibilidad).
+3. Click en **Asignar →** al lado de un candidato → asignación creada inline.
+4. Toast verde "✓ {Empleado} asignado a {Rol}" + planner refresca.
+5. Si hay overbooking u otra validación que requiere override, te lleva al formulario manual con prefill.
+
+### 6. Asignar líder directo a un empleado
+
+Para que la visibilidad de equipo funcione:
+
+1. Como **admin**, abre el detalle del empleado.
+2. Sección **"Líder directo"** con dropdown de admins + leads disponibles.
+3. Selecciona y guarda.
+4. Ese líder ahora ve al empleado en `/time/team` y `/reports/plan-vs-real`.
+
+---
+
+*DVPNYX Cotizador v2.0 — quoter.doublevpartners.com — Mayo 2026*

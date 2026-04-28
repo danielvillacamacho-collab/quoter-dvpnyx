@@ -5,13 +5,66 @@
 > la base actual. Es un snapshot del estado real (no del roadmap original
 > ni de specs aspiracionales).
 >
-> **Fecha del snapshot:** 2026-04-21 (refresh post-UI-refresh phases 7-12)
+> **Fecha del snapshot:** 2026-05 (refresh post AI-readiness foundations + cleanup técnico + planning loop closure)
 > **Rama base:** `develop` (al día con `main`)
 > **Repo:** https://github.com/danielvillacamacho-collab/quoter-dvpnyx
 >
-> **Complemento**: ver [`HANDOFF.md`](../HANDOFF.md) en la raíz del repo
-> como punto de entrada al equipo entrante, y [`ARCHITECTURE.md`](../ARCHITECTURE.md)
-> para diagramas técnicos.
+> **Complemento**:
+> - [`HANDOFF.md`](../HANDOFF.md) — punto de entrada del equipo entrante.
+> - [`ARCHITECTURE.md`](../ARCHITECTURE.md) — diagramas técnicos.
+> - [`docs/MODULES_OVERVIEW.md`](MODULES_OVERVIEW.md) — mapa módulo por módulo.
+> - [`docs/ROADMAP.md`](ROADMAP.md) — qué está vivo / qué falta.
+> - [`docs/DECISIONS.md`](DECISIONS.md) — decisiones técnicas (ADR).
+
+---
+
+## 0. Lo que cambió desde 2026-04-21 (previa snapshot)
+
+Si tenías esta documentación cargada de la versión anterior, lo importante es:
+
+### Nuevos features productivos
+
+- **Plan-vs-Real semanal** (`/reports/plan-vs-real`): compara `assignments.weekly_hours / weekly_capacity_hours` (planeado %) contra `weekly_time_allocations.pct` (real %) con tolerancia ±10pp. Auto-scoping por rol (lead → sus reportes; member → él mismo; admin → todos).
+- **Conversión cotización → contrato de un click** (`POST /api/contracts/from-quotation/:id`).
+- **Kick-off del contrato** (`POST /api/contracts/:id/kick-off`): el delivery_manager da una `kick_off_date` y el sistema lee la `winning_quotation` y crea `resource_requests` automáticos.
+- **Manager / lead role**: `employees.manager_user_id` (ya existía en schema) ahora se aprovecha. Rol `lead` ve su equipo en `/time/team` y `/reports/plan-vs-real`. EmployeeDetail (admin-only) tiene picker de líder directo.
+- **Asignación in-place desde Capacity Planner**: click en barra "Sin asignar" → modal de candidatos → `Asignar →` llama POST /api/assignments inline. Si overbooking, cae al form manual con prefill.
+- **`/time/team`** con admin/lead picker cuando el caller no tiene `employees` row, y null-safe rendering + ErrorBoundary global.
+
+### Cleanup técnico (sin cambios funcionales)
+
+- Helpers nuevos `utils/sanitize.js` (parsePagination, isValidUUID, …) y `utils/http.js` (serverError, safeRollback).
+- Pagination parameterizada en 8 rutas (LIMIT/OFFSET via $N).
+- Error logging estandarizado en 40+ endpoints (eran one-liner sin contexto).
+- ROLLBACK silenciosos `.catch(()=>{})` reemplazados por `safeRollback` con logging.
+- bulk_import: validación de `entity` antes de `setHeader` (filename injection).
+- AuthContext.updatePreferences: stale closure bug en rollback corregido.
+- _stubs.js: limpiado, sólo squads + events restantes (los demás eran redundantes).
+
+### Capa AI-readiness (mayo 2026)
+
+- 3 tablas nuevas: `ai_interactions`, `ai_prompt_templates`, `delivery_facts`.
+- pgvector best-effort: 7 columnas `*_embedding vector(1536)` con HNSW indexes (si la extensión está activa).
+- Helpers: `utils/ai_logger.js` (mandatory wrapper), `utils/level.js` (INT↔Lx), `utils/slug.js`, `utils/json_schema.js`.
+- Endpoints `GET /api/ai-interactions` (admin) + `POST /:id/decision` (feedback loop).
+- Materialized view `mv_plan_vs_real_weekly` + función plpgsql `refresh_delivery_facts()`.
+- 8 CHECK constraints adicionales (capacity bounds, hours bounds, date order, quantity).
+- COMMENT ON TABLE/COLUMN para 7 tablas + JSONB críticos.
+- Slugs URL-friendly + LLM-friendly en clients/opportunities/contracts/employees.
+- Narrative TEXT en areas y skills para RAG.
+
+### Tests
+
+- Server: 456 → **638 / 638** (+182 nuevos en cleanup + AI-readiness + planning-loop + kick-off).
+- Cliente: 318 → 325 (+7), 2 fallas TimeMe pre-existentes (no bloqueantes).
+- Build de producción cliente: limpio, sin warnings.
+
+### Documentación
+
+- 9 documentos nuevos en `docs/`: CONVENTIONS, MODULES_OVERVIEW, API_REFERENCE, AI_INTEGRATION_GUIDE, ROADMAP, DECISIONS, RUNBOOKS_INDEX.
+- Reescritos: README, HANDOFF, ARCHITECTURE, CHANGELOG, data_model.
+
+---
 
 ---
 
@@ -48,7 +101,8 @@ Modelo V2 (ya productivo):
 | Packaging | Docker multi-stage; `client/build` servido por el mismo Express en prod |
 | Reverse proxy | Traefik (TLS, Host rule por env) |
 | CI/CD | GitHub Actions → build + push a GHCR → SSH a EC2 → `docker compose pull` y restart |
-| Tests | Jest + React Testing Library (frontend), Jest + supertest en backend. Cobertura **amplia** — ~80% de módulos tienen test file paralelo |
+| Tests | Jest + supertest (backend, **638 tests**) · Jest + RTL (frontend, **325/327** — 2 fallas pre-existentes) |
+| AI-readiness | `ai_interactions` log + `ai_prompt_templates` versionados + embeddings `vector(1536)` con HNSW (pgvector opcional) + `delivery_facts` denormalizado + materialized view |
 
 ### Entornos
 - **Prod**: `quoter.doublevpartners.com` — rama `main`.

@@ -1,12 +1,11 @@
 # Entrega — DVPNYX Quoter + Capacity Planner
 
-**Para:** el equipo de ingeniería y producto que toma el proyecto.
-**De:** equipo saliente (Daniel Villa + agentes Claude).
-**Fecha de snapshot:** 2026-04-21
+**Para:** equipo de ingeniería y producto que toma el proyecto.
+**Fecha de snapshot:** 2026-05.
 **Rama base:** `develop` (al día con `main`).
 **Repo:** `git@github.com:danielvillacamacho-collab/quoter-dvpnyx.git`
 
-Este es el punto de entrada. Léelo completo (10 min) antes de abrir cualquier otro archivo. Todo lo demás está linkeado desde aquí.
+Este es el **punto de entrada**. Léelo completo (15 min) antes de abrir cualquier otro archivo. Todo lo demás está linkeado desde aquí.
 
 ---
 
@@ -16,8 +15,11 @@ SaaS interno de **DVP (Double V Partners)** que integra en un solo producto el c
 
 - **Comercial**: clientes → oportunidades → cotizaciones (staff augmentation y proyecto de alcance fijo).
 - **Delivery**: contratos → solicitudes de recursos → asignaciones → time tracking.
-- **Gente**: áreas, skills, empleados (con proficiency).
-- **Reportes**: pipeline, utilización, gap de skills, dashboards personales y ejecutivo.
+- **Plan-vs-Real**: comparación semanal de horas planeadas vs % real registrado.
+- **Personas**: áreas, skills, empleados (con proficiency y manager_user_id).
+- **Finanzas**: revenue mensual + tasas de cambio multi-currency.
+- **Reportes**: pipeline, utilización, gap, dashboards personales y ejecutivo.
+- **AI-readiness**: capa lista para integrar agentes (log, prompts versionados, embeddings).
 
 Producción: **`quoter.doublevpartners.com`** · Dev: **`dev.quoter.doublevpartners.com`**.
 
@@ -38,87 +40,113 @@ Usuarios seed (`server/database/seed.js`):
 - `admin@dvpnyx.com` / `admin123` — superadmin
 - `user@dvpnyx.com`  / `user123`  — member
 
-Pasos detallados, variables de entorno y troubleshooting: **[`docs/ONBOARDING_DEV.md`](docs/ONBOARDING_DEV.md)**.
+Pasos detallados, variables de entorno y troubleshooting: [`docs/ONBOARDING_DEV.md`](docs/ONBOARDING_DEV.md).
 
 ---
 
 ## 3. Lectura obligatoria (por orden)
 
 | # | Documento | Qué contiene | Tiempo |
-|---|-----------|--------------|--------|
-| 1 | Este archivo (`HANDOFF.md`) | Overview + orden de lectura | 10 min |
-| 2 | [`docs/PROJECT_STATE_HANDOFF.md`](docs/PROJECT_STATE_HANDOFF.md) | **Fuente de verdad del estado actual**: módulos vivos, decisiones recientes, tech debt, preguntas abiertas | 20 min |
-| 3 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Diagrama de componentes, flujo de request, modelo de datos | 15 min |
-| 4 | [`docs/specs/v2/01_vision_and_scope.md`](docs/specs/v2/01_vision_and_scope.md) | Visión de producto — ojo: las specs pueden estar desfasadas respecto al código, el código gana | 15 min |
-| 5 | [`docs/MANUAL_DE_USUARIO.md`](docs/MANUAL_DE_USUARIO.md) | Cómo se usa el producto end-to-end, vista funcional | 30 min |
-| 6 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Reglas del juego: ramas, commits, PRs, tests | 10 min |
-| 7 | [`CHANGELOG.md`](CHANGELOG.md) | Historial por fases (último: Phase 12 — RR-2 scoring) | 10 min |
+|---|---|---|---|
+| 1 | Este archivo | Overview + orden de lectura | 15 min |
+| 2 | [`docs/PROJECT_STATE_HANDOFF.md`](docs/PROJECT_STATE_HANDOFF.md) | **Fuente de verdad del estado actual**: módulos vivos, deudas, preguntas abiertas | 25 min |
+| 3 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Diagramas, flujos, capa AI-readiness, convenciones | 20 min |
+| 4 | [`docs/MODULES_OVERVIEW.md`](docs/MODULES_OVERVIEW.md) | Mapa módulo por módulo (qué hace, dónde vive) | 20 min |
+| 5 | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) | Patrones de código (server + client) | 15 min |
+| 6 | [`docs/specs/v2/03_data_model.md`](docs/specs/v2/03_data_model.md) | Schema completo (28 tablas) | referencia |
+| 7 | [`docs/MANUAL_DE_USUARIO.md`](docs/MANUAL_DE_USUARIO.md) | Vista funcional end-to-end | 30 min |
+| 8 | [`docs/AI_INTEGRATION_GUIDE.md`](docs/AI_INTEGRATION_GUIDE.md) | Cómo conectar agentes IA — leer antes de tocar IA | 25 min |
+| 9 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Qué está vivo, qué falta, qué se difiere | 15 min |
+| 10 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Decisiones técnicas (ADR-style) | referencia |
+| 11 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Branching, commits, PRs, tests | 10 min |
+| 12 | [`CHANGELOG.md`](CHANGELOG.md) | Historial por fases | referencia |
+| 13 | [`docs/API_REFERENCE.md`](docs/API_REFERENCE.md) | Catálogo de ~85 endpoints | referencia |
+| 14 | [`SECURITY.md`](SECURITY.md) | Modelo de amenazas, secretos | 10 min |
 
 Documentación complementaria (on demand):
-- [`docs/specs/v2/05_api_spec.md`](docs/specs/v2/05_api_spec.md) — API por endpoint.
-- [`docs/specs/v2/09_user_stories_backlog.md`](docs/specs/v2/09_user_stories_backlog.md) — backlog de historias.
-- [`docs/runbooks/`](docs/runbooks/) — deploy, rollback, DR, bulk import, migración V2.
-- [`SECURITY.md`](SECURITY.md) — reporte de vulnerabilidades, política de secretos.
+- [`docs/RUNBOOKS_INDEX.md`](docs/RUNBOOKS_INDEX.md) — deploy, rollback, DR, bulk import, V2 migration.
+- [`docs/specs/v2/`](docs/specs/v2/) — specs originales (pueden estar desfasadas; código gana).
 
 ---
 
 ## 4. Estado del sistema en 60 segundos
 
-✅ **En producción, con tests, y estable:**
-- Módulos V2 completos: clients, opportunities, employees, contracts, resource_requests, assignments, time_entries, quotations (staff aug + fixed scope), areas, skills, reports, dashboard, command palette, bulk import, notifications (backend + UI), preferencias de usuario.
-- **Capacity Planner** con timeline + validación de asignaciones + sugerencia de candidatos (US-RR-2).
-- **Design system** basado en tokens CSS (`--ds-*`, `--accent-hue`, `--density`) con dark mode + 6 presets de acento.
-- Fonts self-hosted (`@fontsource/*` — Inter, Montserrat, JetBrains Mono).
-- CI/CD activo (GitHub Actions → GHCR → EC2 vía Traefik).
+✅ **En producción, con tests (638), estable:**
 
-⚠️ **En stub (existe la tabla pero no la UI completa):**
-- `/api/squads` (squads ocultos deliberadamente de la UI; schema conserva la columna).
-- `/api/events` (emisión sí existe, consulta histórica todavía no).
+- Comercial: clients, opportunities (Kanban con probability auto), quotations (staff_aug + fixed_scope).
+- Conversión `quotation → contract` de un click.
+- **Kick-off del contrato**: lee winning_quotation, crea resource_requests automáticos.
+- Delivery: contracts, resource_requests, assignments con validation engine (overbooking, área, level, overlap).
+- Capacity Planner timeline + asignación in-place desde modal de candidatos.
+- Time tracking: `/time/me` (daily) + `/time/team` (% semanal con bench).
+- **Plan-vs-Real semanal** con auto-scoping por rol (lead, member, admin).
+- Reportes: utilization, bench, coverage, time-compliance, hiring-needs, plan-vs-real, my-dashboard.
+- Roles + permisos: superadmin/admin/lead/member/viewer. `lead` ve sus reportes directos vía `manager_user_id`.
+- Bulk import CSV con dry-run. Command Palette Cmd-K. Notifications drawer.
+- Design system OKLCH con dark mode + 6 presets de acento.
+- **AI-readiness layer (mayo 2026)**: `ai_interactions` log, prompt templates versionados, embeddings vector(1536) con HNSW (si pgvector activo), helpers `ai_logger`/`json_schema`/`level`/`slug`/`sanitize`, materialized view `mv_plan_vs_real_weekly`.
 
-❌ **No existe todavía** (espacio para las siguientes iteraciones):
+⚠️ **Con caveat (live pero limitado):**
+
+- **Squads ocultos** del UI; auto-provisión "DVPNYX Global". Decisión pendiente.
+- **Quotation editor dual**: Unified vs no-Unified coexisten.
+- **Time tracking duplicado**: `time_entries` (daily) + `weekly_time_allocations` (weekly). Decisión consolidación pendiente.
+- **Approvals aspirational** en `assignments` y `time_entries`: schemas existen, flow no.
+- **Revenue periods sin trigger de inmutabilidad** (placeholder explícito, ver SPEC-RR-00).
+- **pgvector best-effort**: si la imagen postgres no lo tiene, embeddings no se crean.
+
+❌ **No existe todavía** (siguiente iteración):
+
 - Billing / facturación / integración contable.
-- Flujos de aprobación (lead/finanzas) para asignaciones o time entries.
-- Integración CRM externa (solo hay `external_crm_id`).
-- Forecasting de capacidad y calendario de vacaciones.
+- Aprobación formal de assignments y time entries.
+- Forecasting de capacidad.
+- Calendario de vacaciones integrado con utilización.
+- Integración CRM externa.
 - Multi-tenant.
-- Observabilidad real (Datadog/Sentry) — hoy sólo `console.error`.
+- Observabilidad real (Datadog/Sentry).
+- Job nocturno populando embeddings.
+- Cron job `refresh_delivery_facts` automático.
 
-Detalle completo: **[`docs/PROJECT_STATE_HANDOFF.md §8`](docs/PROJECT_STATE_HANDOFF.md)**.
+Detalle completo: [`docs/ROADMAP.md`](docs/ROADMAP.md) y [`docs/PROJECT_STATE_HANDOFF.md §8`](docs/PROJECT_STATE_HANDOFF.md).
 
 ---
 
 ## 5. Salud del código al momento de la entrega
 
 | Métrica | Valor |
-|---------|-------|
-| Tests backend | **456 / 456** (Jest + supertest, 25 suites) |
-| Tests frontend | **318 / 318** (Jest + RTL, 32 suites) |
-| Warnings / errores de build | 0 |
-| Secretos en repo | 0 (verificado con `git grep`) |
+|---|---|
+| Tests backend | **638 / 638** (Jest + supertest, 36 suites) |
+| Tests frontend | 325 / 327 (2 TimeMe pre-existentes, no bloqueantes) |
+| Build de producción cliente | Limpio, sin warnings |
+| Secretos en repo | 0 (verificado) |
 | TODOs / FIXMEs huérfanos | 0 |
-| CI pipelines | 6 workflows activos (`develop-ci`, `deploy`, `deploy-dev`, `rollback`, `aws-infra`, `backup-nightly`) |
-| Versiones de Node | ≥ 20.x (probado en 20.18) |
-| Versiones de Postgres | 16 |
+| CI pipelines | 6 workflows activos |
+| Versiones soportadas | Node ≥ 20, Postgres 16 |
 
-Verifícalo tú:
+Verifícalo:
 ```bash
-cd server && npx jest          # 456 ✅
-cd client && CI=true npx react-scripts test --watchAll=false  # 318 ✅
+cd server && ./node_modules/.bin/jest          # 638 ✅
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js test --watchAll=false
+cd client && CI=true node node_modules/react-scripts/bin/react-scripts.js build
 ```
 
 ---
 
-## 6. Las 5 decisiones que más te ahorrarán tiempo
+## 6. Las 7 decisiones que más te ahorrarán tiempo
 
-1. **El código gana a la spec.** Las specs en `docs/specs/v2/` fueron escritas antes del build y en varios puntos están desfasadas. Cuando haya conflicto, confía en el código + `PROJECT_STATE_HANDOFF.md`.
+1. **El código gana a la spec.** Las specs en `docs/specs/v2/` fueron escritas antes del build y en varios puntos están desfasadas. Cuando haya conflicto, confía en el código + `PROJECT_STATE_HANDOFF.md`. Las decisiones formales viven en [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
-2. **`squad_id` sigue NOT NULL en `contracts` y `opportunities`**, pero los squads están ocultos de la UI. El backend auto-provisiona "DVPNYX Global" si la tabla está vacía. **Decidir en los próximos 90 días si se dropea o no.**
+2. **`squad_id` sigue NOT NULL** en `contracts` y `opportunities`, pero squads están ocultos del UI. Backend auto-provisiona "DVPNYX Global". Ver [`DECISIONS.md :: SQUAD-HIDDEN`](docs/DECISIONS.md#squad-hidden).
 
-3. **Modelo de cotizaciones dual-write**: existe el legacy (`quotation_lines`, `quotation_phases`, `quotation_epics`, `quotation_milestones`, `quotation_allocations`) y el V2 relacional (`quotation_allocations` es el puente). Ambos se escriben a la vez (EX-4). Cuando se toque cotizaciones, saber que **nada se ha migrado todavía**.
+3. **Modelo de cotizaciones dual-write**: legacy V1 + V2 relacional coexisten. Ambos editores (Unified vs no-Unified) viven en el código. Ver [`DECISIONS.md :: QUOTATION-DUAL`](docs/DECISIONS.md#quotation-dual).
 
-4. **Estilos**: ya no se usan clases legacy. Todo pasa por `client/src/theme.css` (tokens `--ds-*`). Para agregar una pantalla nueva, seguir `client/src/shell/tableStyles.js` y `shell/StatusBadge` / `shell/Avatar`.
+4. **Time tracking duplicado**: dos modelos paralelos (`time_entries` daily + `weekly_time_allocations` weekly). Decisión de producto pendiente. Ver [`DECISIONS.md :: TIME-MODEL`](docs/DECISIONS.md#time-model).
 
-5. **Preferencias de usuario** viven en `users.preferences JSONB`. Flip de tema / hue / densidad se aplica optimistamente a `:root` en `AuthContext.updatePreferences`. Para agregar una preferencia nueva: allowlist en `server/routes/auth.js :: sanitizePrefs` + control en `client/src/modules/Preferencias.js`.
+5. **Estilos siempre con tokens DS**: nada hardcodeado fuera de `client/src/theme.css` (`--ds-*`). Ver [`CONVENTIONS.md §9`](docs/CONVENTIONS.md#9-client-estilos--design-system).
+
+6. **Helpers obligatorios** en server: `parsePagination`, `serverError`, `safeRollback`, `emitEvent`, `ai_logger.run`. Cualquier ruta nueva los debe usar. Ver [`CONVENTIONS.md §3`](docs/CONVENTIONS.md#3-server-utilidades-obligatorias).
+
+7. **Antes de conectar IA**: leer [`AI_INTEGRATION_GUIDE.md`](docs/AI_INTEGRATION_GUIDE.md) completo. Toda llamada a un agente debe pasar por `utils/ai_logger.run()` — sin excepciones.
 
 ---
 
@@ -126,70 +154,78 @@ cd client && CI=true npx react-scripts test --watchAll=false  # 318 ✅
 
 ```
 dvpnyx-quoter/
-├── HANDOFF.md                  ← estás aquí
-├── ARCHITECTURE.md             ← diagramas + flujos
-├── CHANGELOG.md                ← historial por fases
-├── CONTRIBUTING.md             ← reglas del juego
-├── SECURITY.md                 ← vulnerabilidades + secretos
-├── LICENSE                     ← propiedad DVP
-├── README.md                   ← overview histórico (ver HANDOFF para lo actual)
-├── client/                     ← React 18 SPA
-│   └── src/
-│       ├── App.js              ← rutas + layout
-│       ├── AuthContext.js      ← JWT + preferencias
-│       ├── theme.css           ← DS tokens (SOURCE OF TRUTH para estilos)
-│       ├── modules/*.js        ← una pantalla por módulo
-│       ├── shell/*.js          ← sidebar, topbar, badges, avatars, tablas
-│       └── utils/{api,apiV2,calc}.js
-├── server/                     ← Express + pg
-│   ├── index.js                ← entry + mount de routes
-│   ├── database/
-│   │   ├── migrate.js          ← DDL idempotente (corre en cada deploy)
-│   │   ├── migrate_v2_data.js  ← seeds V2 (NO corre en dev)
-│   │   ├── seed.js             ← demo data
-│   │   └── pool.js
-│   ├── middleware/auth.js      ← JWT + adminOnly
-│   ├── routes/*.js             ← una ruta por entidad
-│   └── utils/{events,calc,capacity_planner,candidate_matcher,…}.js
+├── HANDOFF.md                ← estás aquí
+├── README.md                 ← entry point + índice de docs
+├── ARCHITECTURE.md           ← diagramas + flujos + capa AI
+├── CHANGELOG.md, CONTRIBUTING.md, SECURITY.md, LICENSE
+├── client/                   ← React 18 SPA
+│   └── src/{App,AuthContext}.js, theme.css, modules/, shell/, utils/
+├── server/                   ← Express + pg
+│   ├── index.js, middleware/auth.js
+│   ├── database/{migrate,pool,seed}.js
+│   ├── routes/*.js           ← una por entidad
+│   └── utils/                ← helpers compartidos (sanitize, http, events,
+│                                ai_logger, json_schema, level, slug, calc, …)
 ├── docs/
-│   ├── PROJECT_STATE_HANDOFF.md     ← estado actual (fresco)
-│   ├── MANUAL_DE_USUARIO.md         ← manual funcional
+│   ├── PROJECT_STATE_HANDOFF.md     ← estado actual
+│   ├── MANUAL_DE_USUARIO.md         ← funcional
 │   ├── ONBOARDING_DEV.md
-│   ├── runbooks/                    ← DEPLOY / DR / ROLLBACK / BULK / V2_MIGRATION
-│   └── specs/v2/                    ← especificaciones (pueden estar desfasadas)
-├── infra/                      ← AWS CDK (TS) — stack alterno, inactivo hoy
-├── .github/workflows/          ← 6 pipelines
-├── Dockerfile                  ← multi-stage
-├── docker-compose.yml          ← prod-like
-└── docker-compose.dev.yml      ← dev local
+│   ├── CONVENTIONS.md, MODULES_OVERVIEW.md
+│   ├── API_REFERENCE.md, AI_INTEGRATION_GUIDE.md
+│   ├── ROADMAP.md, DECISIONS.md, RUNBOOKS_INDEX.md
+│   ├── runbooks/             ← DEPLOY / DR / ROLLBACK / BULK / V2_MIGRATION
+│   └── specs/v2/             ← specs originales (código gana)
+├── infra/                    ← AWS CDK (TS) — stack alterno, inactivo
+├── .github/workflows/        ← 6 pipelines
+├── Dockerfile
+├── docker-compose.yml        ← prod-like
+└── docker-compose.dev.yml    ← dev local
 ```
 
 ---
 
-## 8. Primer día del equipo entrante — checklist sugerida
+## 8. Primer día del equipo entrante — checklist
 
-- [ ] Clonar el repo y levantar `docker-compose.dev.yml` sin tocar nada. Verificar que todas las pantallas cargan con la seed.
-- [ ] Leer `HANDOFF.md` (este archivo) + `PROJECT_STATE_HANDOFF.md` + `ARCHITECTURE.md`.
-- [ ] Correr ambas suites de tests y confirmar 456 + 318 en verde.
-- [ ] Hacer un PR trivial (corregir un typo en algún comentario) contra `develop` para probar el pipeline de CI.
-- [ ] Abrir la app con las credenciales seed y recorrer los 3 flujos happy path:
-  1. Crear cliente → crear oportunidad → crear cotización staff aug → revisar resumen.
-  2. Crear contrato desde oportunidad → abrir resource request → asignar empleado (sugerencias).
-  3. Registrar time entries del empleado asignado → abrir Dashboard del mismo usuario.
-- [ ] Revisar las 4 **preguntas abiertas** al Product Owner en `PROJECT_STATE_HANDOFF.md §10` y conversarlas con Daniel antes de planear sprint 1.
+- [ ] Clonar el repo y levantar `docker-compose.dev.yml`. Verificar que todas las pantallas cargan con la seed.
+- [ ] Leer este archivo + `PROJECT_STATE_HANDOFF.md` + `ARCHITECTURE.md` + `CONVENTIONS.md`.
+- [ ] Correr ambas suites de tests y confirmar 638 server + 325 client (las 2 fallas TimeMe son pre-existentes).
+- [ ] Hacer un PR trivial (typo en algún comentario) contra `develop` para probar el pipeline de CI.
+- [ ] Abrir la app con credenciales seed y recorrer 4 flujos happy path:
+  1. **Quote**: crear cliente → oportunidad → cotización staff_aug → revisar resumen.
+  2. **Quote→Contract**: marcar opp como `won` → confirmar "crear contrato" → `kick-off` con fecha → ver resource_requests auto-creadas.
+  3. **Stafffing**: desde el planner, click en barra "Sin asignar" → modal de candidatos → asignar.
+  4. **Plan vs Real**: registrar % en `/time/team` → ver reporte `/reports/plan-vs-real`.
+- [ ] Revisar [`docs/DECISIONS.md`](docs/DECISIONS.md) para entender el "por qué" detrás de los caveats.
+- [ ] Conversar las preguntas abiertas en `PROJECT_STATE_HANDOFF.md §10` con Daniel antes de planear sprint 1.
 
 ---
 
-## 9. Contactos
+## 9. Cambios recientes que necesitas saber (2026-04 → 2026-05)
+
+Los últimos 7 PRs introdujeron features y deuda saneada importantes. Detalle en [`CHANGELOG.md`](CHANGELOG.md). Highlights:
+
+1. **Capacity Planner asignación in-place** — ya no te saca a otra pantalla.
+2. **Plan-vs-Real semanal** (`/reports/plan-vs-real`) con auto-scoping por rol.
+3. **Conversión quotation→contract de un click** + **kick-off del contrato** que crea resource_requests desde la cotización.
+4. **Manager / lead role** con visibilidad de equipo directo.
+5. **Cleanup técnico** masivo: paginación parameterizada, `serverError()` en 40+ endpoints, `safeRollback`, helpers `sanitize`/`http`.
+6. **Capa AI-readiness**: `ai_interactions`, `ai_prompt_templates`, `delivery_facts`, embeddings pgvector, materialized view `mv_plan_vs_real_weekly`, helpers `ai_logger`/`json_schema`/`slug`/`level`.
+7. **Documentación refrescada** (este documento + 11 archivos más en `docs/`).
+
+Ver [`docs/ROADMAP.md`](docs/ROADMAP.md) para el estado completo.
+
+---
+
+## 10. Contactos
 
 | Rol | Persona | Contacto |
-|-----|---------|----------|
+|---|---|---|
 | Product Owner / origen | Daniel Villa Camacho | GitHub `@danielvillacamacho-collab` |
 | Infra / AWS | TBD | TBD |
 | On-call | TBD | Definir al arrancar |
 
-Si algo no está documentado: preferir **preguntar en el primer sprint** que asumir. El código y `PROJECT_STATE_HANDOFF.md` cubren ~90% del estado real, pero hay decisiones que solo viven en la cabeza del dueño de producto.
+Si algo no está documentado: preferir **preguntar en el primer sprint** que asumir. La documentación en `/docs` cubre ~95% del estado real, pero hay decisiones que sólo viven en la cabeza del PO.
 
 ---
 
-*Este documento es la primera cosa que debería actualizar el equipo entrante cuando cambie una convención crítica (branching, nombres de entornos, owners). Si se queda desactualizado, pierde su valor.*
+*Este documento es la primera cosa que debe actualizar el equipo entrante cuando cambie una convención crítica (branching, owners, agregue/elimine docs). Si se queda desactualizado pierde su valor.*
