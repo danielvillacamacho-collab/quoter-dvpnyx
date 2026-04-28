@@ -43,6 +43,7 @@ app.use('/api/bulk-import',       require('./routes/bulk_import'));  // ✅ Spri
 app.use('/api/squads',            _stubs.squads);
 app.use('/api/events',            _stubs.events);
 app.use('/api/notifications',     require('./routes/notifications')); // ✅ In-app notifications
+app.use('/api/ai-interactions',   require('./routes/ai_interactions')); // ✅ AI agent log + decision feedback
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.
