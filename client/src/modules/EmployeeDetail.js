@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { apiGet } from '../utils/apiV2';
+import { apiGet, apiPut } from '../utils/apiV2';
 import StatusBadge from '../shell/StatusBadge';
+import { useAuth } from '../AuthContext';
 
 const s = {
   page:   { maxWidth: 1100, margin: '0 auto' },
@@ -32,27 +33,53 @@ function Field({ label, children }) {
 export default function EmployeeDetail() {
   const { id } = useParams();
   const nav = useNavigate();
+  // useAuth() puede devolver undefined en tests que no envuelven con AuthProvider.
+  const auth = useAuth() || {};
+  const isAdmin = !!auth.isAdmin;
   const [emp, setEmp] = useState(null);
   const [skills, setSkills] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  // Lista de líderes posibles (admin/lead) para el picker de manager.
+  const [managerCandidates, setManagerCandidates] = useState([]);
+  const [savingManager, setSavingManager] = useState(false);
 
   useEffect(() => {
     setLoading(true);
-    Promise.all([
+    const promises = [
       apiGet(`/api/employees/${id}`),
       apiGet(`/api/employees/${id}/skills`),
       apiGet(`/api/assignments?employee_id=${id}&limit=200`),
-    ])
-      .then(([e, sk, a]) => {
+    ];
+    if (isAdmin) {
+      // Lista de usuarios con rol admin/lead/superadmin para el picker de manager.
+      promises.push(apiGet('/api/users').catch(() => ({ data: [] })));
+    }
+    Promise.all(promises)
+      .then(([e, sk, a, u]) => {
         setEmp(e || null);
         setSkills(sk?.data || []);
         setAssignments(a?.data || []);
+        if (u) {
+          const list = (u.data || u || []).filter((x) => ['admin', 'lead', 'superadmin'].includes(x.role));
+          setManagerCandidates(list);
+        }
       })
       .catch((e) => setErr(e.message || 'Error'))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, isAdmin]);
+
+  const updateManager = async (managerUserId) => {
+    setSavingManager(true);
+    try {
+      const updated = await apiPut(`/api/employees/${id}`, { manager_user_id: managerUserId || null });
+      setEmp(updated);
+    } catch (e) {
+      // eslint-disable-next-line no-alert
+      alert('Error guardando manager: ' + (e.message || ''));
+    } finally { setSavingManager(false); }
+  };
 
   if (loading) return <div style={s.page}><div style={{ color: 'var(--text-light)' }}>Cargando…</div></div>;
   if (err || !emp) return <div style={s.page}><div style={{ color: 'var(--danger)' }}>{err || 'Empleado no encontrado'}</div></div>;
@@ -87,6 +114,30 @@ export default function EmployeeDetail() {
           <Field label="Cuenta de usuario">{emp.user_email || '—'}</Field>
         </div>
       </div>
+
+      {isAdmin && (
+        <div style={s.card}>
+          <h2 style={s.h2}>Líder directo</h2>
+          <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
+            Determina quién puede ver/editar el tiempo y los reportes plan-vs-real de este empleado (además de los admins).
+          </div>
+          <select
+            value={emp.manager_user_id || ''}
+            onChange={(e) => updateManager(e.target.value || null)}
+            disabled={savingManager}
+            style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, minWidth: 280 }}
+            aria-label="Líder directo"
+          >
+            <option value="">— Sin líder asignado —</option>
+            {managerCandidates.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name || u.email} {u.role !== 'lead' ? `(${u.role})` : ''}
+              </option>
+            ))}
+          </select>
+          {savingManager && <span style={{ fontSize: 12, color: 'var(--text-light)', marginLeft: 10 }}>Guardando…</span>}
+        </div>
+      )}
 
       <div style={s.card}>
         <h2 style={s.h2}>Utilización</h2>

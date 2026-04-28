@@ -198,6 +198,202 @@ router.get('/time-compliance', async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Error interno' }); }
 });
 
+/**
+ * EI-8 — Plan vs Real (Time-MVP-00.2).
+ *
+ * Compara, semana por semana, el plan (assignments.weekly_hours convertido
+ * a % sobre la capacidad del empleado) contra el % real registrado en
+ * `weekly_time_allocations`. Salida pensada para que un líder vea, fila
+ * por fila por (empleado × asignación), si la persona está trabajando en
+ * lo que se planeó o se está desviando.
+ *
+ * Query:
+ *   week_start  YYYY-MM-DD (opcional, default lunes de la semana actual)
+ *   employee_id UUID (opcional, filtra a una sola persona — útil en /time/team)
+ *   manager_id  UUID (opcional, filtra a empleados cuyo manager_user_id=X.
+ *                     Cuando el caller es role='lead' se fuerza a su id.)
+ *
+ * Respuesta:
+ *   { week_start_date, week_end_date,
+ *     rows: [{ employee_id, employee_name, area_name, level,
+ *              capacity_hours, weekly_total_planned_pct, weekly_total_actual_pct,
+ *              has_actual_data,                 // true si registró algo esa semana
+ *              lines: [{ assignment_id, contract_id, contract_name, role_title,
+ *                        planned_hours, planned_pct, actual_pct, diff_pct,
+ *                        status }],            // status: 'on_plan'|'over'|'under'|'unplanned'|'missing'
+ *              bench_pct }] }
+ *
+ * Notas:
+ *   - Si el empleado tiene allocations sin assignment correspondiente
+ *     (ej. registró 50% en algo que ya no está en assignments), aparece
+ *     como línea con status='unplanned'.
+ *   - Si tiene assignment pero NO registró tiempo, status='missing'.
+ *   - Tolerancia: |diff| <= 10pp → 'on_plan'.
+ */
+router.get('/plan-vs-real', async (req, res) => {
+  try {
+    const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+    const isLead  = req.user.role === 'lead';
+
+    const weekStart = (() => {
+      const w = String(req.query.week_start || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(w)) {
+        const d = new Date(w + 'T00:00:00Z');
+        const day = d.getUTCDay();
+        const diff = day === 0 ? -6 : 1 - day;
+        d.setUTCDate(d.getUTCDate() + diff);
+        return d.toISOString().slice(0, 10);
+      }
+      const d = new Date();
+      const day = d.getUTCDay();
+      const diff = day === 0 ? -6 : 1 - day;
+      d.setUTCDate(d.getUTCDate() + diff);
+      d.setUTCHours(0, 0, 0, 0);
+      return d.toISOString().slice(0, 10);
+    })();
+    const weekEnd = (() => {
+      const d = new Date(weekStart + 'T00:00:00Z');
+      d.setUTCDate(d.getUTCDate() + 6);
+      return d.toISOString().slice(0, 10);
+    })();
+
+    // Whom can the caller see?
+    const empFilters = [`e.deleted_at IS NULL`, `e.status IN ('active','on_leave','bench')`];
+    const params = [weekStart, weekEnd];
+    if (req.query.employee_id) {
+      params.push(req.query.employee_id);
+      empFilters.push(`e.id = $${params.length}`);
+    }
+    // Lead: scoped to direct reports. Non-admin/non-lead: scoped to themselves.
+    if (isLead) {
+      params.push(req.user.id);
+      empFilters.push(`e.manager_user_id = $${params.length}`);
+    } else if (!isAdmin) {
+      params.push(req.user.id);
+      empFilters.push(`e.user_id = $${params.length}`);
+    } else if (req.query.manager_id) {
+      params.push(req.query.manager_id);
+      empFilters.push(`e.manager_user_id = $${params.length}`);
+    }
+
+    // 1) Empleados visibles + sus assignments activos en la semana.
+    const { rows: empRows } = await pool.query(
+      `SELECT e.id AS employee_id,
+              (e.first_name || ' ' || e.last_name) AS employee_name,
+              e.weekly_capacity_hours, e.level, ar.name AS area_name
+         FROM employees e
+         LEFT JOIN areas ar ON ar.id = e.area_id
+        WHERE ${empFilters.join(' AND ')}
+        ORDER BY e.first_name, e.last_name`,
+      params
+    );
+    if (!empRows.length) {
+      return res.json({ week_start_date: weekStart, week_end_date: weekEnd, rows: [] });
+    }
+    const empIds = empRows.map((r) => r.employee_id);
+
+    const { rows: asgRows } = await pool.query(
+      `SELECT a.id, a.employee_id, a.contract_id, a.role_title, a.weekly_hours,
+              a.start_date, a.end_date, a.status,
+              c.name AS contract_name
+         FROM assignments a
+         LEFT JOIN contracts c ON c.id = a.contract_id
+        WHERE a.employee_id = ANY($1::uuid[])
+          AND a.deleted_at IS NULL
+          AND a.status IN ('planned','active')
+          AND a.start_date <= $3::date
+          AND (a.end_date IS NULL OR a.end_date >= $2::date)`,
+      [empIds, weekStart, weekEnd]
+    );
+
+    const { rows: allocRows } = await pool.query(
+      `SELECT wta.employee_id, wta.assignment_id, wta.pct, wta.notes,
+              c.name AS contract_name, a.role_title
+         FROM weekly_time_allocations wta
+         LEFT JOIN assignments a ON a.id = wta.assignment_id
+         LEFT JOIN contracts   c ON c.id = a.contract_id
+        WHERE wta.employee_id = ANY($1::uuid[])
+          AND wta.week_start_date = $2::date`,
+      [empIds, weekStart]
+    );
+
+    const TOLERANCE_PP = 10; // ±10 puntos porcentuales = "on_plan"
+
+    const result = empRows.map((emp) => {
+      const cap = Number(emp.weekly_capacity_hours || 0) || 0;
+      const empAsgs = asgRows.filter((a) => a.employee_id === emp.employee_id);
+      const empAllocs = allocRows.filter((a) => a.employee_id === emp.employee_id);
+      const hasActual = empAllocs.length > 0;
+
+      // Build a unified set of (assignment_id) keys.
+      const seen = new Set();
+      const lines = [];
+      empAsgs.forEach((a) => {
+        seen.add(a.id);
+        const plannedPct = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 1000) / 10 : 0;
+        const allocRow = empAllocs.find((x) => x.assignment_id === a.id);
+        const actualPct = allocRow ? Number(allocRow.pct) : null;
+        let status;
+        if (actualPct == null) status = hasActual ? 'missing' : 'no_data';
+        else if (Math.abs(actualPct - plannedPct) <= TOLERANCE_PP) status = 'on_plan';
+        else if (actualPct > plannedPct) status = 'over';
+        else status = 'under';
+        lines.push({
+          assignment_id: a.id,
+          contract_id: a.contract_id,
+          contract_name: a.contract_name,
+          role_title: a.role_title,
+          planned_hours: Number(a.weekly_hours),
+          planned_pct: plannedPct,
+          actual_pct: actualPct,
+          diff_pct: actualPct == null ? null : Math.round((actualPct - plannedPct) * 10) / 10,
+          status,
+        });
+      });
+      // Allocations sin assignment vigente → 'unplanned'.
+      empAllocs.forEach((al) => {
+        if (al.assignment_id && seen.has(al.assignment_id)) return;
+        lines.push({
+          assignment_id: al.assignment_id,
+          contract_id: null,
+          contract_name: al.contract_name || '(asignación no vigente)',
+          role_title: al.role_title || null,
+          planned_hours: 0,
+          planned_pct: 0,
+          actual_pct: Number(al.pct),
+          diff_pct: Number(al.pct),
+          status: 'unplanned',
+        });
+      });
+
+      const totalPlanned = Math.round(lines.reduce((s, l) => s + (l.planned_pct || 0), 0) * 10) / 10;
+      const totalActual = hasActual
+        ? Math.round(lines.reduce((s, l) => s + (l.actual_pct || 0), 0) * 10) / 10
+        : null;
+      const benchPct = totalActual == null ? null : Math.max(0, Math.round((100 - totalActual) * 10) / 10);
+
+      return {
+        employee_id: emp.employee_id,
+        employee_name: emp.employee_name,
+        area_name: emp.area_name,
+        level: emp.level,
+        capacity_hours: cap,
+        has_actual_data: hasActual,
+        weekly_total_planned_pct: totalPlanned,
+        weekly_total_actual_pct: totalActual,
+        bench_pct: benchPct,
+        lines,
+      };
+    });
+
+    res.json({ week_start_date: weekStart, week_end_date: weekEnd, rows: result });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /reports/plan-vs-real failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 /** ED-1 — Personal dashboard: a small rollup for "me". */
 router.get('/my-dashboard', async (req, res) => {
   try {

@@ -276,6 +276,120 @@ router.post('/', adminOnly, async (req, res) => {
   }
 });
 
+/* -------- CREATE FROM QUOTATION (admin+) --------
+ *
+ * `POST /api/contracts/from-quotation/:quotation_id`
+ *
+ * Atajo de un click para convertir una cotización ganada en contrato.
+ * Toma defaults sensatos de la quotation:
+ *   - name              ← quotation.project_name
+ *   - client_id         ← quotation.client_id (o opportunity.client_id)
+ *   - type              ← staff_aug → 'capacity', fixed_scope → 'project'
+ *   - start_date        ← hoy (override en body)
+ *   - winning_quotation_id ← :quotation_id
+ *   - opportunity_id    ← quotation.opportunity_id (si existe)
+ *   - account_owner_id  ← caller
+ *
+ * Body opcional:
+ *   { name?, start_date?, end_date?, type? }   // overrides
+ *
+ * Si la quotation no tiene client_id directo NI opportunity, devuelve 400
+ * pidiéndole al UI que elija un client_id antes de convertir.
+ *
+ * Importante: NO marca la quotation como 'approved' ni la oportunidad como
+ * 'won' — eso queda como decisión humana en sus respectivos endpoints
+ * (evita state-changes mágicos en cascada).
+ */
+router.post('/from-quotation/:quotation_id', adminOnly, async (req, res) => {
+  const { quotation_id } = req.params;
+  const body = req.body || {};
+
+  try {
+    const { rows: qRows } = await pool.query(
+      `SELECT q.id, q.type, q.project_name, q.client_id, q.opportunity_id,
+              q.client_name, o.client_id AS opp_client_id
+         FROM quotations q
+         LEFT JOIN opportunities o ON o.id = q.opportunity_id
+        WHERE q.id = $1 AND (q.deleted_at IS NULL)`,
+      [quotation_id]
+    );
+    if (!qRows.length) return res.status(404).json({ error: 'Cotización no encontrada' });
+    const q = qRows[0];
+
+    const clientId = body.client_id || q.client_id || q.opp_client_id;
+    if (!clientId) {
+      return res.status(400).json({
+        error: 'La cotización no está vinculada a ningún cliente. Vincula la cotización a un cliente/oportunidad antes de convertir, o pasa client_id en el body.',
+        code: 'no_client_link',
+        quotation: { id: q.id, project_name: q.project_name, client_name: q.client_name },
+      });
+    }
+
+    // Map quotation type → contract type.
+    const contractType = body.type || (q.type === 'fixed_scope' ? 'project' : 'capacity');
+    if (!VALID_TYPES.includes(contractType)) {
+      return res.status(400).json({ error: 'type inválido (capacity|project|resell)' });
+    }
+
+    // Verify client exists.
+    const { rows: cRows } = await pool.query(
+      `SELECT id, name FROM clients WHERE id=$1 AND deleted_at IS NULL`, [clientId]
+    );
+    if (!cRows.length) return res.status(400).json({ error: 'Cliente no existe' });
+
+    // Resolve squad like POST / does (creator's squad → default).
+    const { rows: uRows } = await pool.query(`SELECT squad_id FROM users WHERE id=$1`, [req.user.id]);
+    let resolvedSquadId = uRows[0]?.squad_id || null;
+    if (!resolvedSquadId) {
+      const { rows: sRows } = await pool.query(
+        `SELECT id FROM squads WHERE deleted_at IS NULL AND active=true
+          ORDER BY (LOWER(name)=LOWER('DVPNYX Global')) DESC, created_at ASC LIMIT 1`
+      );
+      resolvedSquadId = sRows[0]?.id || null;
+    }
+    if (!resolvedSquadId) {
+      const { rows: createdRows } = await pool.query(
+        `INSERT INTO squads (name, description, active)
+           VALUES ('DVPNYX Global', 'Squad por defecto (auto-creado)', true)
+           RETURNING id`
+      );
+      resolvedSquadId = createdRows[0]?.id || null;
+    }
+
+    const startDate = body.start_date || new Date().toISOString().slice(0, 10);
+    const contractName = (body.name && String(body.name).trim()) || q.project_name || `Contrato ${q.id.slice(0, 8)}`;
+
+    const { rows } = await pool.query(
+      `INSERT INTO contracts
+         (name, client_id, opportunity_id, winning_quotation_id, type,
+          start_date, end_date, account_owner_id, squad_id, created_by, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, 'planned')
+       RETURNING *`,
+      [
+        contractName, clientId, q.opportunity_id || null, q.id, contractType,
+        startDate, body.end_date || null, resolvedSquadId, req.user.id,
+      ]
+    );
+    const c = rows[0];
+
+    await emitEvent(pool, {
+      event_type: 'contract.created_from_quotation', entity_type: 'contract', entity_id: c.id,
+      actor_user_id: req.user.id,
+      payload: {
+        quotation_id: q.id, project_name: q.project_name,
+        contract_id: c.id, contract_name: c.name, type: contractType,
+      },
+      req,
+    });
+
+    res.status(201).json(c);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('POST /contracts/from-quotation failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 /* -------- UPDATE (admin+) -------- */
 router.put('/:id', adminOnly, async (req, res) => {
   try {
