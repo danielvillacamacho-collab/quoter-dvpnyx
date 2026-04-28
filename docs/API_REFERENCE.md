@@ -155,7 +155,9 @@ Body: `{ format: 'xlsx' | 'pdf' }`. Devuelve binario.
 ## Contracts
 
 ### `GET /api/contracts`
-Filtros: `search`, `client_id`, `status`, `type`, `squad_id`. Status alias `draft→planned`, `on_hold→paused`.
+Filtros: `search`, `client_id`, `status`, `type`, `subtype`, `squad_id`. Status alias `draft→planned`, `on_hold→paused`.
+
+`subtype` acepta cualquiera de los 6 valores canónicos (`staff_augmentation`, `mission_driven_squad`, `managed_service`, `time_and_materials`, `fixed_scope`, `hour_pool`) o `none` para filtrar contratos sin subtipo (legacy). Subtypes no válidos → 400.
 
 ### `GET /api/contracts/export.csv`
 
@@ -163,12 +165,19 @@ Filtros: `search`, `client_id`, `status`, `type`, `squad_id`. Status alias `draf
 Devuelve contract + nombres de owner/DM/CM (joins) + counts de requests/assignments.
 
 ### `POST /api/contracts` 🔒 admin
-Body: `{ name*, client_id*, type*, start_date*, end_date?, opportunity_id?, winning_quotation_id?, ... }`. Squad auto-resuelto.
+Body: `{ name*, client_id*, type*, contract_subtype, start_date*, end_date?, opportunity_id?, winning_quotation_id?, ... }`. Squad auto-resuelto.
+
+**`contract_subtype`** obligatorio cuando `type` es `capacity` o `project`. Valores válidos por tipo: ver [`data_model.md §6`](specs/v2/03_data_model.md#contract_subtype-subtypes-spec).
+- 400 con `code:'subtype_required'` si falta para capacity/project.
+- 400 con `code:'subtype_invalid_for_type'` si no matchea el type.
+- 400 con `code:'subtype_not_allowed_for_resell'` si type=resell con subtype no-null.
 
 ### `POST /api/contracts/from-quotation/:quotation_id` 🔒 admin
 Crea contrato desde quotation con defaults sensatos. Body opcional override.
 - `staff_aug → capacity`, `fixed_scope → project`.
 - 400 con `code:'no_client_link'` si la quotation no tiene cliente.
+- `contract_subtype` aceptado opcionalmente. Si no se manda, queda NULL — el delivery manager lo completa en el detalle del contrato antes de operar.
+- Si se manda y no es válido para el type derivado: 400 con `code:'subtype_invalid_for_type'`.
 
 ### `POST /api/contracts/:id/kick-off` 🔒 admin / DM / owner / cap-manager
 Body: `{ kick_off_date* }`. Lee winning_quotation y crea resource_requests.
@@ -177,6 +186,12 @@ Body: `{ kick_off_date* }`. Lee winning_quotation y crea resource_requests.
 - Persiste `metadata.kick_off_date` y emite `contract.kicked_off`.
 
 ### `PUT /api/contracts/:id` 🔒 admin
+
+**Reglas de `contract_subtype` en PUT:**
+- Si el caller cambia `type` a capacity/project sin pasar `contract_subtype` → 400 (no se hereda el viejo).
+- Si el caller cambia a `type='resell'`, el subtype se borra (NULL).
+- Si el contrato actual tiene subtype=NULL (legacy) y el caller no toca `type`, los demás campos pueden editarse sin forzar subtype.
+- Si el contrato tiene subtype y el caller pasa `contract_subtype: null` con type capacity/project → 400.
 
 ### `POST /api/contracts/:id/status` 🔒 admin
 Body: `{ new_status }`. Transiciones:

@@ -23,6 +23,7 @@ const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { stringifyCsv } = require('../utils/csv');
 const { parsePagination } = require('../utils/sanitize');
 const { serverError, safeRollback } = require('../utils/http');
+const { validateContractSubtype, ALL_SUBTYPES } = require('../utils/contract_subtype');
 
 router.use(auth);
 
@@ -45,7 +46,7 @@ function normalizeStatus(s) {
 }
 
 const EDITABLE_FIELDS = [
-  'name', 'type', 'opportunity_id', 'winning_quotation_id',
+  'name', 'type', 'contract_subtype', 'opportunity_id', 'winning_quotation_id',
   'start_date', 'end_date', 'account_owner_id', 'delivery_manager_id',
   'capacity_manager_id', 'squad_id', 'notes', 'tags', 'metadata',
 ];
@@ -67,6 +68,18 @@ router.get('/', async (req, res) => {
     if (req.query.status)    wheres.push(`c.status = ${add(normalizeStatus(req.query.status))}`);
     if (req.query.type)      wheres.push(`c.type = ${add(req.query.type)}`);
     if (req.query.squad_id)  wheres.push(`c.squad_id = ${add(req.query.squad_id)}`);
+    if (req.query.subtype) {
+      // Validamos contra la whitelist en memoria — evita injection y rechaza
+      // valores no canónicos (ruido analítico). Aceptamos también 'none' como
+      // alias para "sin especificar" (contratos legacy).
+      if (req.query.subtype === 'none') {
+        wheres.push(`c.contract_subtype IS NULL`);
+      } else if (ALL_SUBTYPES.has(req.query.subtype)) {
+        wheres.push(`c.contract_subtype = ${add(req.query.subtype)}`);
+      } else {
+        return res.status(400).json({ error: 'subtype inválido' });
+      }
+    }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
     // limit/offset son enteros saneados → siempre seguros vía $N (no al template).
@@ -114,10 +127,19 @@ router.get('/export.csv', async (req, res) => {
     if (req.query.client_id) wheres.push(`c.client_id = ${add(req.query.client_id)}`);
     if (req.query.status)    wheres.push(`c.status = ${add(normalizeStatus(req.query.status))}`);
     if (req.query.type)      wheres.push(`c.type = ${add(req.query.type)}`);
+    if (req.query.subtype) {
+      if (req.query.subtype === 'none') {
+        wheres.push(`c.contract_subtype IS NULL`);
+      } else if (ALL_SUBTYPES.has(req.query.subtype)) {
+        wheres.push(`c.contract_subtype = ${add(req.query.subtype)}`);
+      } else {
+        return res.status(400).json({ error: 'subtype inválido' });
+      }
+    }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
     const { rows } = await pool.query(
-      `SELECT c.id, c.name, c.type, c.status, c.start_date, c.end_date,
+      `SELECT c.id, c.name, c.type, c.contract_subtype, c.status, c.start_date, c.end_date,
               c.notes, c.created_at,
               cl.name AS client_name
          FROM contracts c
@@ -128,15 +150,16 @@ router.get('/export.csv', async (req, res) => {
       params
     );
     const csv = stringifyCsv(rows, [
-      { key: 'id',           header: 'ID' },
-      { key: 'name',         header: 'Nombre' },
-      { key: 'client_name',  header: 'Cliente' },
-      { key: 'type',         header: 'Tipo' },
-      { key: 'status',       header: 'Estado' },
-      { key: 'start_date',   header: 'Inicio' },
-      { key: 'end_date',     header: 'Fin' },
-      { key: 'notes',        header: 'Notas' },
-      { key: 'created_at',   header: 'Creado' },
+      { key: 'id',                header: 'ID' },
+      { key: 'name',              header: 'Nombre' },
+      { key: 'client_name',       header: 'Cliente' },
+      { key: 'type',              header: 'Tipo' },
+      { key: 'contract_subtype',  header: 'Subtipo' },
+      { key: 'status',            header: 'Estado' },
+      { key: 'start_date',        header: 'Inicio' },
+      { key: 'end_date',          header: 'Fin' },
+      { key: 'notes',             header: 'Notas' },
+      { key: 'created_at',        header: 'Creado' },
     ]);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="contratos.csv"');
@@ -183,7 +206,7 @@ router.post('/', adminOnly, async (req, res) => {
   const body = req.body || {};
   const {
     name, client_id, opportunity_id, winning_quotation_id, type,
-    start_date, end_date, account_owner_id, delivery_manager_id,
+    contract_subtype, start_date, end_date, account_owner_id, delivery_manager_id,
     capacity_manager_id, squad_id, notes, tags, metadata,
   } = body;
 
@@ -192,6 +215,14 @@ router.post('/', adminOnly, async (req, res) => {
   if (!type) return res.status(400).json({ error: 'type es requerido' });
   if (!VALID_TYPES.includes(type)) return res.status(400).json({ error: 'type inválido (capacity|project|resell)' });
   if (!start_date) return res.status(400).json({ error: 'start_date es requerido' });
+
+  // SPEC subtipo-contrato (Abril 2026): obligatorio para capacity/project,
+  // null para resell. La spec exige bloquear al guardar si falta.
+  const subtypeCheck = validateContractSubtype(type, contract_subtype, { required: true });
+  if (!subtypeCheck.ok) {
+    return res.status(400).json({ error: subtypeCheck.error, code: subtypeCheck.code });
+  }
+  const resolvedSubtype = subtypeCheck.value;
 
   try {
     // Resolve squad_id automatically: explicit body → creator's squad → global default.
@@ -259,14 +290,14 @@ router.post('/', adminOnly, async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO contracts
-         (name, client_id, opportunity_id, winning_quotation_id, type,
+         (name, client_id, opportunity_id, winning_quotation_id, type, contract_subtype,
           start_date, end_date, account_owner_id, delivery_manager_id,
           capacity_manager_id, squad_id, notes, tags, metadata, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING *`,
       [
         String(name).trim(), client_id, opportunity_id || null, winning_quotation_id || null, type,
-        start_date, end_date || null, ownerId, delivery_manager_id || null,
+        resolvedSubtype, start_date, end_date || null, ownerId, delivery_manager_id || null,
         capacity_manager_id || null, resolvedSquadId, notes || null, tags || null,
         metadata ? JSON.stringify(metadata) : null, req.user.id,
       ]
@@ -275,7 +306,7 @@ router.post('/', adminOnly, async (req, res) => {
     await emitEvent(pool, {
       event_type: 'contract.created', entity_type: 'contract', entity_id: c.id,
       actor_user_id: req.user.id,
-      payload: { name: c.name, type: c.type, client_id: c.client_id, opportunity_id: c.opportunity_id, status: c.status },
+      payload: { name: c.name, type: c.type, contract_subtype: c.contract_subtype, client_id: c.client_id, opportunity_id: c.opportunity_id, status: c.status },
       req,
     });
     res.status(201).json(c);
@@ -341,6 +372,15 @@ router.post('/from-quotation/:quotation_id', adminOnly, async (req, res) => {
       return res.status(400).json({ error: 'type inválido (capacity|project|resell)' });
     }
 
+    // Subtype: opcional en este endpoint (la spec dice que el FORM lo requiere
+    // pero from-quotation es atajo API; el DM lo completa después en el detalle
+    // del contrato antes de kick-off). Si el caller lo manda, validamos.
+    const subtypeCheck = validateContractSubtype(contractType, body.contract_subtype, { required: false });
+    if (!subtypeCheck.ok) {
+      return res.status(400).json({ error: subtypeCheck.error, code: subtypeCheck.code });
+    }
+    const resolvedSubtype = subtypeCheck.value;
+
     // Verify client exists.
     const { rows: cRows } = await pool.query(
       `SELECT id, name FROM clients WHERE id=$1 AND deleted_at IS NULL`, [clientId]
@@ -371,13 +411,13 @@ router.post('/from-quotation/:quotation_id', adminOnly, async (req, res) => {
 
     const { rows } = await pool.query(
       `INSERT INTO contracts
-         (name, client_id, opportunity_id, winning_quotation_id, type,
+         (name, client_id, opportunity_id, winning_quotation_id, type, contract_subtype,
           start_date, end_date, account_owner_id, squad_id, created_by, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9, 'planned')
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $9, 'planned')
        RETURNING *`,
       [
         contractName, clientId, q.opportunity_id || null, q.id, contractType,
-        startDate, body.end_date || null, resolvedSquadId, req.user.id,
+        resolvedSubtype, startDate, body.end_date || null, resolvedSquadId, req.user.id,
       ]
     );
     const c = rows[0];
@@ -388,6 +428,7 @@ router.post('/from-quotation/:quotation_id', adminOnly, async (req, res) => {
       payload: {
         quotation_id: q.id, project_name: q.project_name,
         contract_id: c.id, contract_name: c.name, type: contractType,
+        contract_subtype: resolvedSubtype,
       },
       req,
     });
@@ -416,27 +457,63 @@ router.put('/:id', adminOnly, async (req, res) => {
       return res.status(400).json({ error: 'type inválido' });
     }
 
+    // SPEC subtipo-contrato: validación contextual.
+    //
+    // Reglas de la spec ("Casos borde"):
+    //   - Si el usuario CAMBIA el `type` → subtype obligatorio (debe matchear
+    //     el nuevo type, o ser null si pasa a 'resell').
+    //   - Si el usuario NO toca `type` y el contrato actual ya tiene subtype:
+    //     debe seguir siendo coherente (el caller puede mandar uno nuevo
+    //     válido para ese type).
+    //   - Si el usuario NO toca `type` y el contrato actual tiene subtype=NULL
+    //     (legacy pre-spec): permitir guardar OTROS campos sin forzar subtype.
+    //     Sólo se valida si el body trae `contract_subtype` explícito.
+    const effectiveType = body.type || before.type;
+    const subtypeProvided = Object.prototype.hasOwnProperty.call(body, 'contract_subtype');
+    const typeChanged = body.type && body.type !== before.type;
+
+    let resolvedSubtype = before.contract_subtype;
+    if (subtypeProvided || typeChanged) {
+      // Cuando el type cambia y el caller NO mandó un subtype nuevo, descartamos
+      // el viejo (es del type anterior, ya no aplica) y forzamos al usuario a
+      // dar uno explícito — la spec exige reset del subtype al cambiar tipo.
+      const candidateSubtype = subtypeProvided
+        ? body.contract_subtype
+        : (typeChanged ? null : before.contract_subtype);
+      const required = typeChanged
+        ? effectiveType !== 'resell'
+        : (effectiveType === 'capacity' || effectiveType === 'project') &&
+          before.contract_subtype != null; // si ya tenía, no permitir vaciarlo silenciosamente
+      const check = validateContractSubtype(effectiveType, candidateSubtype, { required });
+      if (!check.ok) {
+        return res.status(400).json({ error: check.error, code: check.code });
+      }
+      resolvedSubtype = check.value;
+    }
+
     const { rows } = await pool.query(
       `UPDATE contracts SET
           name                 = COALESCE($1, name),
           type                 = COALESCE($2, type),
-          opportunity_id       = COALESCE($3, opportunity_id),
-          winning_quotation_id = COALESCE($4, winning_quotation_id),
-          start_date           = COALESCE($5, start_date),
-          end_date             = COALESCE($6, end_date),
-          account_owner_id     = COALESCE($7, account_owner_id),
-          delivery_manager_id  = COALESCE($8, delivery_manager_id),
-          capacity_manager_id  = COALESCE($9, capacity_manager_id),
-          squad_id             = COALESCE($10, squad_id),
-          notes                = COALESCE($11, notes),
-          tags                 = COALESCE($12, tags),
-          metadata             = COALESCE($13::jsonb, metadata),
+          contract_subtype     = $3,
+          opportunity_id       = COALESCE($4, opportunity_id),
+          winning_quotation_id = COALESCE($5, winning_quotation_id),
+          start_date           = COALESCE($6, start_date),
+          end_date             = COALESCE($7, end_date),
+          account_owner_id     = COALESCE($8, account_owner_id),
+          delivery_manager_id  = COALESCE($9, delivery_manager_id),
+          capacity_manager_id  = COALESCE($10, capacity_manager_id),
+          squad_id             = COALESCE($11, squad_id),
+          notes                = COALESCE($12, notes),
+          tags                 = COALESCE($13, tags),
+          metadata             = COALESCE($14::jsonb, metadata),
           updated_at           = NOW()
-        WHERE id=$14 AND deleted_at IS NULL
+        WHERE id=$15 AND deleted_at IS NULL
         RETURNING *`,
       [
         body.name ? String(body.name).trim() : null,
         body.type ?? null,
+        resolvedSubtype,
         body.opportunity_id ?? null,
         body.winning_quotation_id ?? null,
         body.start_date ?? null,

@@ -17,6 +17,65 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ---
 
+## Phase 15 — Subtipo de contrato (2026-04-28)
+
+### feat(contracts): contract_subtype field con catálogo controlado
+
+Respuesta a `SPEC_subtipo-contrato.docx` (operaciones, prioridad ALTA).
+Bloqueaba reportería por modelo de trabajo y era prerequisito del módulo
+de billing.
+
+**Schema (idempotente, aditivo):**
+- Nueva columna `contracts.contract_subtype VARCHAR(50) NULL`.
+- CHECK constraint con los 6 valores válidos a nivel DB.
+- Index parcial `WHERE deleted_at IS NULL AND contract_subtype IS NOT NULL`.
+- COMMENT ON COLUMN para documentar la regla type↔subtype.
+
+**Catálogo (`utils/contract_subtype.js` server + `utils/contractSubtype.js` client):**
+- `capacity` → 4 subtipos: `staff_augmentation`, `mission_driven_squad`,
+  `managed_service`, `time_and_materials`.
+- `project` → 2 subtipos: `fixed_scope`, `hour_pool`.
+- `resell` → siempre NULL.
+- Helper `validateContractSubtype(type, subtype, opts)` con códigos de
+  error consistentes (`subtype_required` / `subtype_invalid_for_type` /
+  `subtype_not_allowed_for_resell` / `subtype_unknown`).
+
+**Server (`routes/contracts.js`):**
+- POST acepta y valida (obligatorio para capacity/project).
+- PUT diferencia el caso legacy (subtype=NULL existente, no se fuerza si
+  el usuario no toca type) del caso "type cambió" (requiere subtype nuevo).
+- GET acepta `?subtype=` (incluyendo `none` para filtrar legacy sin subtipo).
+- `from-quotation` acepta subtype opcional (DM lo completa después si no
+  viene en body — la spec dice que el FORM lo requiere, pero el atajo API
+  permite NULL inicial).
+- CSV export incluye columna Subtipo.
+- Eventos `contract.created` y `contract.created_from_quotation` incluyen
+  `contract_subtype` en el payload.
+
+**Cliente (`modules/Contracts.js` + `ContractDetail.js`):**
+- Dropdown Subtipo aparece debajo de Tipo, dependiente del valor de Tipo.
+- Reset al cambiar tipo (con preservación inteligente: si el subtipo
+  actual es válido para el nuevo tipo, no se borra).
+- Validación: `<select required>` + chequeo manual con mensaje
+  "Debes seleccionar un subtipo para continuar" debajo del campo.
+- Excepción legacy: editar contratos pre-spec sin tocar el type permite
+  guardar otros campos.
+- Lista: nueva columna Subtipo (muestra etiqueta o "Sin especificar").
+- Filtro de Subtipo en la lista (auto-restringido al tipo filtrado;
+  incluye "Sin especificar" para legacy).
+- ContractDetail: campo Subtipo en sección Resumen + banner amarillo si
+  el contrato tiene type que requiere subtype y está vacío.
+- CSV download incluye subtype filter.
+
+**Tests:**
+- Server: 36 nuevos en `routes/contracts.test.js` + `utils/contract_subtype.test.js` cubriendo todos los códigos de error, todos los caminos PUT (legacy, type-changed, subtype-changed-only), filtro GET, from-quotation con/sin/inválido subtype.
+- Client: 4 nuevos cubriendo dropdown dependiente, reset al cambiar tipo, ocultarse en resell, y atributo `required` sobre el select.
+- Total: 638 → **674 server**, 327 → **331 client**.
+
+**Criterios de aceptación de la spec:** todos cubiertos.
+
+---
+
 ## Phase 14 — Documentación integral refresh (2026-05)
 
 ### docs: refresh completo del set de documentación

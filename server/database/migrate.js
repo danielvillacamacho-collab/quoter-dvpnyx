@@ -666,6 +666,48 @@ const V2_ALTERS = `
   );
   CREATE INDEX IF NOT EXISTS wta_employee_week_idx ON weekly_time_allocations(employee_id, week_start_date);
   CREATE INDEX IF NOT EXISTS wta_assignment_idx ON weekly_time_allocations(assignment_id);
+
+  -- ==================================================================
+  -- SUBTYPE-CONTRATO (Abril 2026) — clasificación dentro del Tipo.
+  -- ==================================================================
+  -- Operaciones necesita distinguir el modelo de trabajo dentro de cada
+  -- type ('capacity' / 'project'). Hoy esa distinción vive en notes con
+  -- valores inconsistentes ("T&M", "Tiempo y materiales", "TyM"). Sin
+  -- estructura no se puede filtrar/reportar y bloquea Módulo 3 (billing).
+  --
+  -- Aditivo: NULL en contratos existentes (mostrar "Sin especificar"
+  -- en UI). Validación enforced server-side y UI.
+  --
+  -- Mapeo válido:
+  --   capacity → staff_augmentation | mission_driven_squad | managed_service | time_and_materials
+  --   project  → fixed_scope | hour_pool
+  --   resell   → NULL siempre (sin subtipos por ahora)
+  ALTER TABLE contracts ADD COLUMN IF NOT EXISTS contract_subtype VARCHAR(50) NULL;
+
+  -- CHECK constraint con los 6 valores válidos (NULL siempre permitido).
+  -- La coherencia subtype↔type se valida en el server (depende de otra columna,
+  -- expresable con CHECK pero más legible en código).
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'contracts'::regclass AND conname = 'contracts_subtype_check'
+    ) THEN
+      ALTER TABLE contracts ADD CONSTRAINT contracts_subtype_check
+        CHECK (
+          contract_subtype IS NULL OR contract_subtype IN (
+            'staff_augmentation','mission_driven_squad','managed_service','time_and_materials',
+            'fixed_scope','hour_pool'
+          )
+        );
+    END IF;
+  END $$;
+
+  CREATE INDEX IF NOT EXISTS contracts_subtype_idx
+    ON contracts(contract_subtype) WHERE deleted_at IS NULL AND contract_subtype IS NOT NULL;
+
+  COMMENT ON COLUMN contracts.contract_subtype IS
+    'Clasificación dentro del type. capacity → staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project → fixed_scope|hour_pool. resell → NULL. Coherencia type↔subtype validada en server/routes/contracts.js.';
 `;
 
 /* ==================================================================

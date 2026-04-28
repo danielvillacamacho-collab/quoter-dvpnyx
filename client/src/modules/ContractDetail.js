@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPut, apiPost } from '../utils/apiV2';
 import { useAuth } from '../AuthContext';
+import { formatSubtype, typeRequiresSubtype } from '../utils/contractSubtype';
 
 const s = {
   page:   { maxWidth: 1200, margin: '0 auto' },
@@ -129,15 +130,37 @@ export default function ContractDetail() {
       <div style={s.sub}>
         Cliente:{' '}
         {contract.client_id ? <Link to={`/clients/${contract.client_id}`} style={s.link}>{contract.client_name}</Link> : '—'}
-        {' · '}{contract.type}{' · '}
+        {' · '}{contract.type}
+        {contract.contract_subtype && (
+          <> · <span style={{ fontWeight: 500 }}>{formatSubtype(contract.contract_subtype)}</span></>
+        )}
+        {' · '}
         <strong>{contract.status}</strong>{' · '}
         {contract.start_date ? String(contract.start_date).slice(0, 10) : '—'} →{' '}
         {contract.end_date ? String(contract.end_date).slice(0, 10) : 'sin fin'}
       </div>
 
+      {/* SPEC subtipo-contrato (Abril 2026): si el contrato tiene type que
+          requiere subtype y está vacío (legacy o creado vía from-quotation
+          sin subtype), avisar al usuario. */}
+      {typeRequiresSubtype(contract.type) && !contract.contract_subtype && (
+        <div style={{ ...s.card, background: '#fffbe6', borderColor: '#facc15', padding: 12 }}>
+          <div style={{ fontSize: 13, color: '#92400e' }}>
+            ⚠ Este contrato no tiene <strong>subtipo</strong> definido. Edítalo
+            para clasificarlo correctamente — el campo es necesario para
+            reportes y reglas de facturación.
+          </div>
+        </div>
+      )}
+
       <div style={s.card}>
         <h2 style={s.h2}>Resumen</h2>
         <div style={s.grid}>
+          <Field label="Subtipo">
+            {contract.contract_subtype
+              ? formatSubtype(contract.contract_subtype)
+              : (typeRequiresSubtype(contract.type) ? '— Sin especificar —' : null)}
+          </Field>
           <Field label="Oportunidad">
             {contract.opportunity_id
               ? <Link to={`/opportunities/${contract.opportunity_id}`} style={s.link}>{contract.opportunity_name || 'ver'}</Link>

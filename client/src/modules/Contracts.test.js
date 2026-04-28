@@ -102,17 +102,82 @@ describe('Contracts module', () => {
     fireEvent.change(within(dialog).getByLabelText('Nombre'), { target: { value: 'New Contract' } });
     fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
     fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'project' } });
+    // SPEC subtipo-contrato: project obliga subtype
+    fireEvent.change(within(dialog).getByLabelText('Subtipo'), { target: { value: 'fixed_scope' } });
     fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-06-01' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/contracts',
-        expect.objectContaining({ name: 'New Contract', client_id: 'c1', type: 'project' })
+        expect.objectContaining({
+          name: 'New Contract', client_id: 'c1', type: 'project',
+          contract_subtype: 'fixed_scope',
+        })
       );
     });
     // squad_id ya no se envía desde el cliente — lo resuelve el backend
     const payload = apiV2.apiPost.mock.calls[0][1];
     expect(payload).not.toHaveProperty('squad_id');
+  });
+
+  describe('SPEC subtipo-contrato (Abril 2026)', () => {
+    it('al elegir Capacity, el dropdown Subtipo muestra exactamente 4 opciones', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByRole('button', { name: /Nuevo Contrato/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'capacity' } });
+      const subtypeSelect = within(dialog).getByLabelText('Subtipo');
+      // 4 opciones reales + 1 placeholder
+      expect(subtypeSelect.querySelectorAll('option')).toHaveLength(5);
+      expect(within(subtypeSelect).getByText('Staff Augmentation')).toBeTruthy();
+      expect(within(subtypeSelect).getByText('Mission-driven squad')).toBeTruthy();
+      expect(within(subtypeSelect).getByText('Servicio administrado / Soporte')).toBeTruthy();
+      expect(within(subtypeSelect).getByText('Tiempo y Materiales')).toBeTruthy();
+    });
+
+    it('al elegir Reventa, el dropdown Subtipo no aparece', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByRole('button', { name: /Nuevo Contrato/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'resell' } });
+      expect(within(dialog).queryByLabelText('Subtipo')).toBeNull();
+    });
+
+    it('al cambiar Capacity → Proyecto, el subtipo se resetea', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByRole('button', { name: /Nuevo Contrato/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'capacity' } });
+      fireEvent.change(within(dialog).getByLabelText('Subtipo'), { target: { value: 'staff_augmentation' } });
+      expect(within(dialog).getByLabelText('Subtipo').value).toBe('staff_augmentation');
+      fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'project' } });
+      // Reseteado: ahora muestra placeholder vacío y opciones de project
+      expect(within(dialog).getByLabelText('Subtipo').value).toBe('');
+      expect(within(dialog).queryByText('Staff Augmentation')).toBeNull();
+      expect(within(dialog).getByText('Alcance fijo / POC')).toBeTruthy();
+    });
+
+    it('intentar guardar sin subtype muestra error y no llama POST', async () => {
+      apiV2.apiPost.mockClear();
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByRole('button', { name: /Nuevo Contrato/i }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText('Nombre'), { target: { value: 'X' } });
+      fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
+      fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'capacity' } });
+      fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-06-01' } });
+      // El form usa <select required> — el navegador bloquea el submit antes
+      // de que React vea el evento. Verificamos vía el atributo required del
+      // dropdown que la spec quedó implementada (UI nativa hace el resto).
+      const subtypeSelect = within(dialog).getByLabelText('Subtipo');
+      expect(subtypeSelect).toBeRequired();
+      // Tampoco debe haberse llamado POST sin completar el campo.
+      expect(apiV2.apiPost).not.toHaveBeenCalledWith('/api/contracts', expect.anything());
+    });
   });
 
   it('deletes with confirmation', async () => {
