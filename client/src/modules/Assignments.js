@@ -4,6 +4,7 @@ import AssignmentValidationModal from './AssignmentValidationModal';
 import AssignmentValidationInline from './AssignmentValidationInline';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import SearchableSelect from '../shell/SearchableSelect';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -126,11 +127,23 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
         {initial?.id ? 'Editar asignación' : 'Nueva asignación'}
       </h2>
       <div>
-        <label style={s.label}>Solicitud *</label>
-        <select style={s.input} value={form.resource_request_id || ''} onChange={(e) => set('resource_request_id', e.target.value)} aria-label="Solicitud" required disabled={!!initial?.id}>
-          <option value="">— Selecciona —</option>
-          {requests.map((r) => <option key={r.id} value={r.id}>{r.role_title} · {r.contract_name} · {r.level}</option>)}
-        </select>
+        <label style={s.label} htmlFor="assignment-request">Solicitud *</label>
+        <SearchableSelect
+          id="assignment-request"
+          aria-label="Solicitud"
+          value={form.resource_request_id || ''}
+          onChange={(v) => set('resource_request_id', v)}
+          required
+          disabled={!!initial?.id}
+          options={requests.map((r) => ({
+            id: r.id,
+            label: `${r.role_title} · ${r.contract_name}`,
+            hint: `Nivel ${r.level} · ${r.quantity} cupos · ${r.active_assignments_count ?? 0} activos`,
+            // searchText: incluye contract+role+nivel para que el usuario
+            // pueda escribir "alpha", "L4" o "backend" indistintamente.
+            searchText: `${r.role_title} ${r.contract_name} ${r.level}`,
+          }))}
+        />
         {selectedRequest && (
           <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 2 }}>
             Contrato: {selectedRequest.contract_name} · Cantidad: {selectedRequest.quantity} · Activos: {selectedRequest.active_assignments_count ?? 0}
@@ -138,15 +151,23 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
         )}
       </div>
       <div>
-        <label style={s.label}>Empleado *</label>
-        <select style={s.input} value={form.employee_id || ''} onChange={(e) => set('employee_id', e.target.value)} aria-label="Empleado" required disabled={!!initial?.id}>
-          <option value="">— Selecciona —</option>
-          {employees.filter((e) => e.status !== 'terminated').map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.first_name} {e.last_name} · {e.level} · {e.weekly_capacity_hours}h cap.
-            </option>
-          ))}
-        </select>
+        <label style={s.label} htmlFor="assignment-employee">Empleado *</label>
+        <SearchableSelect
+          id="assignment-employee"
+          aria-label="Empleado"
+          value={form.employee_id || ''}
+          onChange={(v) => set('employee_id', v)}
+          required
+          disabled={!!initial?.id}
+          options={employees
+            .filter((e) => e.status !== 'terminated')
+            .map((e) => ({
+              id: e.id,
+              label: `${e.first_name} ${e.last_name}`,
+              hint: `${e.level} · ${e.weekly_capacity_hours}h cap.`,
+              searchText: `${e.first_name} ${e.last_name} ${e.level}`,
+            }))}
+        />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
@@ -219,10 +240,13 @@ export default function Assignments() {
   }, [statusFilter]);
 
   const loadLookups = useCallback(async () => {
+    // Lookup grande para que el combobox de búsqueda tenga el universo
+    // completo (>100 empleados / solicitudes en producción) y el filtrado
+    // se haga client-side sin pegarle a la API por cada tecla.
     try {
       const [rr, re] = await Promise.all([
-        apiGet('/api/resource-requests?limit=200'),
-        apiGet('/api/employees?limit=200'),
+        apiGet('/api/resource-requests?limit=500'),
+        apiGet('/api/employees?limit=500'),
       ]);
       setRequests((rr?.data || []).filter((r) => !['filled', 'cancelled'].includes(r.status)));
       setEmployees(re?.data || []);

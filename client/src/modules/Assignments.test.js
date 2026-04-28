@@ -8,6 +8,19 @@ jest.mock('../utils/apiV2');
 
 const mount = () => render(<MemoryRouter><Assignments /></MemoryRouter>);
 
+/**
+ * Helper para los <SearchableSelect>: enfoca el input para abrir el
+ * listbox, espera a que la opción esté en el DOM (los lookups cargan
+ * async) y la selecciona. Async para tolerar la carrera entre la carga
+ * de assignments y la de los lookups.
+ */
+const pickFromCombobox = async (dialog, label, optionText) => {
+  fireEvent.focus(within(dialog).getByLabelText(label));
+  const list = within(dialog).getByRole('listbox');
+  const option = await within(list).findByText(optionText);
+  fireEvent.mouseDown(option);
+};
+
 const sampleAssignments = [
   {
     id: 'a1', employee_first_name: 'Ana', employee_last_name: 'García',
@@ -52,7 +65,7 @@ describe('Assignments module', () => {
     expect(within(row).getByText('Backend Lead')).toBeInTheDocument();
   });
 
-  it('request dropdown excludes filled/cancelled requests', async () => {
+  it('request combobox excludes filled/cancelled requests', async () => {
     mount();
     await screen.findByText('Ana García');
     await waitFor(() => {
@@ -61,19 +74,42 @@ describe('Assignments module', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
     const dialog = await screen.findByRole('dialog');
-    const reqSel = within(dialog).getByLabelText('Solicitud');
-    expect(reqSel.querySelector('option[value="r1"]')).not.toBeNull();
-    expect(reqSel.querySelector('option[value="r9"]')).toBeNull();
+    fireEvent.focus(within(dialog).getByLabelText('Solicitud'));
+    const list = within(dialog).getByRole('listbox');
+    // Esperamos a que la opción válida esté presente — entonces sabemos
+    // que el lookup ya hidrató el state y la ausencia de "Closed role"
+    // es una decisión real del filtro, no un timing race.
+    await within(list).findByText(/Backend Lead/);
+    expect(within(list).queryByText('Closed role')).toBeNull();
   });
 
-  it('employee dropdown excludes terminated employees', async () => {
+  it('employee combobox excludes terminated employees', async () => {
     mount();
     await screen.findByText('Ana García');
     fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
     const dialog = await screen.findByRole('dialog');
-    const empSel = within(dialog).getByLabelText('Empleado');
-    expect(empSel.querySelector('option[value="e1"]')).not.toBeNull();
-    expect(empSel.querySelector('option[value="e9"]')).toBeNull();
+    fireEvent.focus(within(dialog).getByLabelText('Empleado'));
+    const list = within(dialog).getByRole('listbox');
+    await within(list).findByText('Ana García');
+    expect(within(list).queryByText(/Terminated Person/)).toBeNull();
+  });
+
+  it('employee combobox filters by typed query', async () => {
+    // Reglas claras del nuevo combobox: el usuario tipea "ana" y sólo debe
+    // ver coincidencias de Ana — central a la UX que vinimos a arreglar.
+    mount();
+    await screen.findByText('Ana García');
+    fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
+    const dialog = await screen.findByRole('dialog');
+    const empInput = within(dialog).getByLabelText('Empleado');
+    fireEvent.focus(empInput);
+    // Espera a que el lookup termine antes de filtrar.
+    await within(within(dialog).getByRole('listbox')).findByText('Ana García');
+    fireEvent.change(empInput, { target: { value: 'ana' } });
+    const list = within(dialog).getByRole('listbox');
+    const options = within(list).getAllByRole('option');
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveTextContent('Ana García');
   });
 
   it('creates assignment via POST (happy path, no overrides)', async () => {
@@ -85,11 +121,10 @@ describe('Assignments module', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
     const dialog = await screen.findByRole('dialog');
-    await waitFor(() => {
-      expect(within(dialog).getByLabelText('Solicitud').querySelector('option[value="r1"]')).not.toBeNull();
-    });
-    fireEvent.change(within(dialog).getByLabelText('Solicitud'), { target: { value: 'r1' } });
-    fireEvent.change(within(dialog).getByLabelText('Empleado'),  { target: { value: 'e1' } });
+
+    await pickFromCombobox(dialog, 'Solicitud', /Backend Lead/);
+    await pickFromCombobox(dialog, 'Empleado', 'Ana García');
+
     fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-05-01' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {
@@ -130,10 +165,12 @@ describe('Assignments module', () => {
     fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => {
-      expect(within(dialog).getByLabelText('Solicitud').querySelector('option[value="r1"]')).not.toBeNull();
+      // El combobox precisa que la lista de solicitudes ya haya cargado
+      // antes de abrir el listbox.
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/resource-requests'))).toBe(true);
     });
-    fireEvent.change(within(dialog).getByLabelText('Solicitud'), { target: { value: 'r1' } });
-    fireEvent.change(within(dialog).getByLabelText('Empleado'),  { target: { value: 'e1' } });
+    await pickFromCombobox(dialog, 'Solicitud', /Backend Lead/);
+    await pickFromCombobox(dialog, 'Empleado', 'Ana García');
     fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-05-01' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
 
@@ -171,10 +208,10 @@ describe('Assignments module', () => {
     fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => {
-      expect(within(dialog).getByLabelText('Solicitud').querySelector('option[value="r1"]')).not.toBeNull();
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/resource-requests'))).toBe(true);
     });
-    fireEvent.change(within(dialog).getByLabelText('Solicitud'), { target: { value: 'r1' } });
-    fireEvent.change(within(dialog).getByLabelText('Empleado'),  { target: { value: 'e1' } });
+    await pickFromCombobox(dialog, 'Solicitud', /Backend Lead/);
+    await pickFromCombobox(dialog, 'Empleado', 'Ana García');
     fireEvent.change(within(dialog).getByLabelText('Fecha inicio'), { target: { value: '2026-05-01' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
 
