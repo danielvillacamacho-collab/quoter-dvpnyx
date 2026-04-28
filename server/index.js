@@ -6,13 +6,72 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 
 const app = express();
+// Detrás de Traefik (1 hop). Necesario para que req.ip sea el IP real del
+// cliente y el rate-limit no agrupe todo el tráfico bajo el IP del proxy.
+// Más seguro que 'true' porque sólo confía en un único hop.
+app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000', credentials: true }));
 app.use(express.json({ limit: '5mb' }));
 
-const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
-app.use('/api/', limiter);
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Demasiados intentos. Intente en 15 minutos.' } });
+/* ===================================================================
+ * Rate limiting
+ *
+ * Aprendizaje 2026-04-28: el límite anterior (200 req / 15min global por IP)
+ * tumbó la app porque toda la oficina sale por una sola IP NAT y la SPA
+ * hace 5-10 calls por navegación. Resultado: 10 usuarios = se agota la
+ * cuota en minutos y nadie puede entrar.
+ *
+ * Decisiones del fix:
+ *   - Global: 2000 req / 15min, key por (user_id si autenticado, sino IP)
+ *     para que NAT compartido no penalice. 2000 es generoso pero protege
+ *     de scraping/abuso.
+ *   - Login: 30 intentos / 15min por (email + IP) para que un mistype
+ *     repetido no bloquee a otros del mismo NAT.
+ *   - Health: bypass para que monitoring no consuma cuota.
+ *   - handler: SIEMPRE responde JSON para que el cliente pueda parsearlo
+ *     (antes el cliente recibía text/plain "Too many requests..." y crasheaba
+ *     con "Unexpected token 'T'... is not valid JSON").
+ *   - standardHeaders: 'draft-7' expone cabeceras RateLimit-* legibles.
+ * =================================================================== */
+function jsonRateLimitHandler(retryAfterSeconds) {
+  return (req, res /* , next, options */) => {
+    res.status(429).json({
+      error: 'Demasiadas peticiones. Esperá unos minutos e intentá de nuevo.',
+      code: 'rate_limited',
+      retry_after_seconds: retryAfterSeconds,
+    });
+  };
+}
+
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 2000,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Authenticated users get their own bucket; resto cae a IP (req.ip
+    // honra X-Forwarded-For si trust proxy está activado).
+    return (req.user && req.user.id) ? `u:${req.user.id}` : `ip:${req.ip}`;
+  },
+  skip: (req) => req.path === '/health' || req.path.startsWith('/health'),
+  handler: jsonRateLimitHandler(15 * 60),
+});
+app.use('/api/', apiLimiter);
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Por (email, IP) — alguien tipeando mal su pass no bloquea a otros del
+    // mismo NAT, pero un atacante por IP-única no escapa con N emails.
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    return `${req.ip}|${email}`;
+  },
+  handler: jsonRateLimitHandler(15 * 60),
+});
 app.use('/api/auth/login', loginLimiter);
 
 app.use('/api/health', require('./routes/health'));
