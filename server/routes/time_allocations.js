@@ -83,11 +83,36 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ error: 'week_start inválido (YYYY-MM-DD)' });
     }
     const monday = mondayOf(weekStart);
+    const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
 
     const { employee, error } = await resolveEmployee(req, req.query.employee_id);
     if (error === 'forbidden') return res.status(403).json({ error: 'No puedes ver allocations de otro empleado' });
     if (error === 'not_found') return res.status(404).json({ error: 'Empleado no encontrado' });
-    if (error === 'no_employee_for_user') return res.status(404).json({ error: 'Tu usuario no está vinculado a un empleado. Contacta a admin.' });
+    if (error === 'no_employee_for_user') {
+      // Admin/superadmin sin employees row (caso CEO etc.): devolvemos 200
+      // con la lista de empleados disponibles para que la UI muestre un
+      // picker. Para non-admin, sí es un error real.
+      if (isAdmin) {
+        const { rows: candidates } = await pool.query(
+          `SELECT e.id, e.name, e.user_id, u.email
+             FROM employees e
+             LEFT JOIN users u ON u.id = e.user_id
+            WHERE e.deleted_at IS NULL
+            ORDER BY e.name ASC
+            LIMIT 500`
+        );
+        return res.json({
+          requires_employee_pick: true,
+          available_employees: candidates,
+          week_start_date: monday,
+          message: 'Tu usuario no tiene un empleado vinculado. Selecciona uno para ver su tiempo.',
+        });
+      }
+      return res.status(404).json({
+        error: 'Tu usuario no está vinculado a un empleado. Contacta a admin.',
+        code: 'no_employee_for_user',
+      });
+    }
 
     const sunday = (() => {
       const d = new Date(monday + 'T00:00:00Z');

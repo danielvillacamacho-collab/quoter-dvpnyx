@@ -65,18 +65,27 @@ export default function TimeTeam() {
   // entries: { [assignment_id]: string del input }
   const [entries, setEntries] = useState({});
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // RR: el caller puede ser admin sin employees row (CEO/superadmin). En
+  // ese caso, el server devuelve `requires_employee_pick + available_employees`
+  // y el UI muestra un dropdown para elegir empleado. employee_id (cuando se
+  // setea) se usa en GET y PUT.
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(''); setSuccess('');
     try {
-      const result = await apiGet(`/api/time-allocations?week_start=${weekStart}`);
+      const qs = new URLSearchParams({ week_start: weekStart });
+      if (selectedEmployeeId) qs.set('employee_id', selectedEmployeeId);
+      const result = await apiGet(`/api/time-allocations?${qs}`);
       setData(result);
-      const seed = {};
-      result.allocations.forEach((a) => { seed[a.assignment_id] = String(a.pct); });
-      setEntries(seed);
+      if (!result.requires_employee_pick) {
+        const seed = {};
+        (result.allocations || []).forEach((a) => { seed[a.assignment_id] = String(a.pct); });
+        setEntries(seed);
+      }
     } catch (e) { setError(e.message || 'Error cargando semana'); }
     finally { setLoading(false); }
-  }, [weekStart]);
+  }, [weekStart, selectedEmployeeId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -118,10 +127,12 @@ export default function TimeTeam() {
     if (overCap) return;
     setSaving(true); setError(''); setSuccess('');
     try {
-      const result = await apiPut('/api/time-allocations/bulk', {
+      const body = {
         week_start_date: weekStart,
         allocations: buildPayloadAllocations(),
-      });
+      };
+      if (selectedEmployeeId) body.employee_id = selectedEmployeeId;
+      const result = await apiPut('/api/time-allocations/bulk', body);
       const benchMsg = (result.warnings || []).find((w) => w.code === 'bench')?.message;
       setSuccess(benchMsg || `Semana guardada (100% asignado).`);
       // Resync con server (refleja IDs y posibles snaps de fecha).
@@ -143,6 +154,41 @@ export default function TimeTeam() {
   if (loading) return <div style={s.page}>Cargando…</div>;
   if (!data) return <div style={s.page}>{error || 'Error'}</div>;
 
+  // Admin sin employees row → mostrar picker.
+  if (data.requires_employee_pick) {
+    return (
+      <div style={s.page}>
+        <div style={s.header}>
+          <h2 style={s.title}>⏱ Tiempo semanal</h2>
+        </div>
+        <div style={s.banner}>
+          {data.message || 'Tu usuario no tiene un empleado vinculado. Como admin, puedes seleccionar un empleado para ver/editar su tiempo.'}
+        </div>
+        <div style={s.card}>
+          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 6 }}>
+            Selecciona un empleado para continuar
+          </label>
+          <select
+            value={selectedEmployeeId || ''}
+            onChange={(e) => setSelectedEmployeeId(e.target.value || null)}
+            style={{ ...s.navBtn, width: '100%', padding: '8px 12px', fontSize: 13 }}
+            aria-label="Empleado"
+          >
+            <option value="">— Selecciona un empleado —</option>
+            {(data.available_employees || []).map((emp) => (
+              <option key={emp.id} value={emp.id}>
+                {emp.name}{emp.email ? ` · ${emp.email}` : ''}
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 8 }}>
+            Tu propio rol como CEO/admin no requiere registrar tiempo, pero puedes ayudar a un empleado a llenar su semana desde aquí.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const monday = new Date(data.week_start_date + 'T00:00:00');
 
   return (
@@ -151,6 +197,13 @@ export default function TimeTeam() {
         <h2 style={s.title}>⏱ Tiempo semanal</h2>
         <div style={s.sub}>
           {data.employee.name} · semana del <strong>{fmtRangeES(monday)}</strong>
+          {selectedEmployeeId && (
+            <button type="button"
+                    onClick={() => setSelectedEmployeeId(null)}
+                    style={{ marginLeft: 8, fontSize: 11, color: 'var(--purple-dark)', background: 'transparent', border: '1px solid var(--border)', borderRadius: 4, padding: '2px 8px', cursor: 'pointer' }}>
+              ← cambiar empleado
+            </button>
+          )}
         </div>
       </div>
 
