@@ -29,6 +29,7 @@ import ResourceRequests from './modules/ResourceRequests';
 import Assignments from './modules/Assignments';
 import CapacityPlanner from './modules/CapacityPlanner';
 import TimeMe from './modules/TimeMe';
+import TimeTeam from './modules/TimeTeam';
 import Reports from './modules/Reports';
 import DashboardMe from './modules/DashboardMe';
 import ClientDetail from './modules/ClientDetail';
@@ -177,7 +178,7 @@ function Layout() {
           <Route path="/capacity/planner" element={<CapacityPlanner />} />
           <Route path="/time" element={<TimeMe />} />
           <Route path="/time/me" element={<TimeMe />} />
-          <Route path="/time/team" element={<ComingSoon />} />
+          <Route path="/time/team" element={<TimeTeam />} />
           <Route path="/reports" element={<Reports />} />
           <Route path="/reports/:type" element={<Reports />} />
           <Route path="/dashboard/me" element={<DashboardMe />} />

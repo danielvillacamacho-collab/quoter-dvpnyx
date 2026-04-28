@@ -98,7 +98,7 @@ export function buildGroups(isAdmin) {
     {
       title: 'Time Tracking', items: [
         { path: '/time/me',   label: 'Mis horas' },
-        { path: '/time/team', label: 'Horas del equipo' },
+        { path: '/time/team', label: 'Tiempo semanal' },
       ],
     },
     {
