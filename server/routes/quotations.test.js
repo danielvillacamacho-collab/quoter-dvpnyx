@@ -498,19 +498,63 @@ describe('POST /api/quotations/:id/export — fixed-scope export', () => {
     expect(res.status).toBe(404);
   });
 
-  it('returns 403 when non-owner non-admin tries to export', async () => {
+  it('returns 403 when user has neither admin role nor an exporting function', async () => {
+    // Perfil t\u00e9cnico sin permisos comerciales: ni owner, ni admin, ni
+    // comercial/preventa/admin function \u2192 403.
+    mockCurrentUser = { id: 'tech1', role: 'member', function: 'fte_tecnico' };
     pushQuotation({ created_by: 'other-user' });
     const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
     expect(res.status).toBe(403);
   });
 
   it('allows admin to export someone else\u2019s quotation', async () => {
-    mockCurrentUser = { id: 'admin1', role: 'admin', function: 'ops' };
+    mockCurrentUser = { id: 'admin1', role: 'admin', function: 'admin' };
     pushQuotation({ created_by: 'other-user' });
     pushChildren();
     queryQueue.push({ rows: [] }); // audit_log insert
     const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
     expect(res.status).toBe(200);
+  });
+
+  it('allows a comercial (function=comercial) to export any quotation', async () => {
+    mockCurrentUser = { id: 'com1', role: 'member', function: 'comercial' };
+    pushQuotation({ created_by: 'other-user' });
+    pushChildren();
+    queryQueue.push({ rows: [] }); // audit_log insert
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(200);
+  });
+
+  it('allows a preventa (function=preventa) to export any quotation', async () => {
+    mockCurrentUser = { id: 'pv1', role: 'member', function: 'preventa' };
+    pushQuotation({ created_by: 'other-user' });
+    pushChildren();
+    queryQueue.push({ rows: [] }); // audit_log insert
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(200);
+  });
+
+  it('falls back to DB lookup when JWT does not carry function (legacy token)', async () => {
+    // JWT viejo: req.user no trae `function`. El handler debe consultarla
+    // en BD para evitar forzar re-login despu\u00e9s del hotfix.
+    mockCurrentUser = { id: 'com2', role: 'member' }; // sin function
+    pushQuotation({ created_by: 'other-user' });
+    queryQueue.push({ rows: [{ function: 'comercial' }] }); // SELECT function FROM users
+    pushChildren();
+    queryQueue.push({ rows: [] }); // audit_log insert
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(200);
+    const fnLookup = issuedQueries.find((q) => /SELECT function FROM users/.test(String(q.sql)));
+    expect(fnLookup).toBeTruthy();
+    expect(fnLookup.params).toEqual(['com2']);
+  });
+
+  it('falls back to DB lookup and 403s when user has no exporting function', async () => {
+    mockCurrentUser = { id: 'tech2', role: 'member' }; // sin function en JWT
+    pushQuotation({ created_by: 'other-user' });
+    queryQueue.push({ rows: [{ function: 'fte_tecnico' }] }); // SELECT function FROM users
+    const res = await callWithHeaders('POST', '/api/quotations/q1/export?format=xlsx');
+    expect(res.status).toBe(403);
   });
 
   it('accepts staff_aug quotations with ≥1 priced line (xlsx)', async () => {

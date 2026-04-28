@@ -15,12 +15,12 @@ router.post('/login', async (req, res) => {
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Credenciales inválidas' });
     const token = jwt.sign(
-      { id: user.id, email: user.email, name: user.name, role: user.role },
+      { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null },
       process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
     );
     await pool.query(`INSERT INTO audit_log (user_id, action, details, ip_address) VALUES ($1, 'login', '{}', $2)`,
       [user.id, req.ip]);
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, must_change_password: user.must_change_password } });
+    res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null, must_change_password: user.must_change_password } });
   } catch (err) { serverError(res, 'POST /auth/login', err); }
 });
 
@@ -43,7 +43,7 @@ router.post('/change-password', auth, async (req, res) => {
 router.get('/me', auth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      'SELECT id, email, name, role, must_change_password, preferences FROM users WHERE id=$1',
+      'SELECT id, email, name, role, function, must_change_password, preferences FROM users WHERE id=$1',
       [req.user.id],
     );
     if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
