@@ -27,6 +27,7 @@ Estados: 🟢 vigente · ⚪ superada · 🔴 rechazada
 - [REVENUE-PLACEHOLDER · Revenue MVP simplificado](#revenue-placeholder)
 - [SLUG-LATER · Slugs aditivos sin populate inicial](#slug-later)
 - [SUBTYPE-FROM-QUOTATION-NULL · from-quotation no exige subtype](#subtype-from-quotation-null)
+- [EMPLOYEE-COSTS · Decisiones de diseño del módulo de costos](#employee-costs)
 
 ---
 
@@ -277,6 +278,60 @@ El sistema tiene dos caminos para crear contratos:
 - ContractDetail muestra banner si type requiere subtype pero está NULL — UX nudge sin bloqueo duro.
 - Reportes deben filtrar `subtype=none` para encontrar contratos pendientes de clasificar.
 - El día que se haga el módulo de billing, se debería bloquear billing setup hasta que el subtype esté seteado.
+
+---
+
+## EMPLOYEE-COSTS
+
+**Decisiones de diseño del módulo de costos** · 2026-04-28 · 🟢 vigente
+
+**Contexto.** Spec `spec_costos_empleado.docx` pide registrar el costo empresa mensual por empleado para calcular márgenes reales. La spec dejaba 8 decisiones técnicas abiertas; las resolvimos así (con razonamiento explícito).
+
+### 1. Period: `CHAR(6)` `'YYYYMM'`
+La spec proponía `VARCHAR(7) "2026-04"`. Elegimos `CHAR(6)` para alinear con el resto del sistema (`exchange_rates.yyyymm`, `revenue_periods.yyyymm`). Joins futuros entre estas tablas son sin cast.
+
+### 2. `employees.company_monthly_cost` deprecada (no borrada)
+La columna existía desde V2 inicial pero nunca se usó. Decidimos:
+- NO borrar (preserva schema histórico).
+- Marcar con `COMMENT ON COLUMN ... IS 'DEPRECATED 2026-04: ver employee_costs'`.
+- Nuevos empleados quedan con NULL.
+- Fuente única de verdad: `employee_costs`.
+
+### 3. FK `ON DELETE RESTRICT` (no CASCADE)
+La spec proponía CASCADE. Lo cambiamos a RESTRICT porque el historial financiero debe ser inmutable (NIIF 15) aunque el empleado sea soft-deleteado. Si en el futuro hace falta purgar a un empleado, primero hay que archivar/borrar manualmente sus costos (decisión consciente).
+
+### 4. Empleados nuevos: costo opcional, badge "Nuevo"
+Si un empleado entró este mes y no tiene costo del mes anterior para copiar, NO bloqueamos su carga. La mass view muestra badge "Nuevo" + el costo teórico del nivel como placeholder gris (no guardado). Finanzas decide cuándo cargarlo.
+
+### 5. Recálculo FX manual con endpoint dedicado
+Cuando exchange_rates cambia para un período con costos ya cargados, NO recalculamos automáticamente. La razón: re-disparar UPDATEs masivos sin contexto humano genera audit log noise y sorpresas. En su lugar:
+- Endpoint explícito `POST /api/employee-costs/recalculate-usd/:period`.
+- Botón "🔄 Recalcular USD" en el mass view.
+- Solo afecta rows abiertos (locked NO se tocan, requiere superadmin para deslockear).
+
+### 6. Encryption at rest: diferida
+La spec lo recomienda pero requiere infra (key management con KMS o pgcrypto + secret rotation). Por ahora:
+- Plaintext en `gross_cost` y `cost_usd`.
+- Acceso restringido por rol a nivel de route + UI.
+- COMMENT ON COLUMN marca los campos como `PII:high`.
+
+Cuando llegue el equipo de infra, evaluar `pgcrypto` con keys gestionadas externamente.
+
+### 7. Período futuro: máximo +1 mes
+Para forecasting básico permitimos cargar costos del mes siguiente al actual. Más allá → 400 con `code:'period_too_far_future'`. Razón: evita que finanzas cargue por error costos de 2027 y los descubra meses después.
+
+### 8. Bulk: patrón preview/commit (alineado con `bulk_import`)
+Dos endpoints separados:
+- `bulk/preview` → dry-run, devuelve errors/warnings/applied sin escribir.
+- `bulk/commit` → atómico (si CUALQUIER error, ROLLBACK).
+
+Esto refactoriza `processBulk` en 2 fases (validar todos → aplicar todos) — garantiza atomicidad.
+
+### Por qué no se hicieron otras cosas
+
+- **Audit de READs**: spec lo sugiere. Decidimos diferir hasta que llegue cliente externo o auditoría real lo exija; por ahora el acceso restringido por rol + audit de mutaciones es suficiente.
+- **Trigger DB de inmutabilidad para locked rows**: lo enforce el código del route. Trigger DB sería más robusto pero más complejo de revertir si se necesita superadmin override.
+- **Auto-merge inteligente en CSV import** (detección de duplicados, fuzzy match de emails): YAGNI hasta que finanzas reporte un caso real.
 
 ---
 

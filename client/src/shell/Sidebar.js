@@ -5,7 +5,7 @@ import {
   Home, UserPlus, FileText, Building2, Briefcase, FileCheck2,
   ClipboardList, CalendarDays, LayoutGrid, Users, Layers, Tag,
   Clock, TrendingUp, BarChart3, BookOpen, Settings, UserCog, Upload,
-  Palette, LogOut,
+  Palette, LogOut, DollarSign,
 } from 'lucide-react';
 
 /**
@@ -56,6 +56,7 @@ const ICONS = {
   '/wiki':                    BookOpen,
   '/admin/params':            Settings,
   '/admin/exchange-rates':    BarChart3,
+  '/admin/employee-costs':    DollarSign,
   '/admin/users':             UserCog,
   '/admin/bulk-import':       Upload,
   '/preferencias':            Palette,
@@ -117,10 +118,11 @@ export function buildGroups(isAdmin) {
   if (isAdmin) {
     groups.push({
       title: 'Configuración', items: [
-        { path: '/admin/params',         label: 'Parámetros'      },
-        { path: '/admin/exchange-rates', label: 'Tasas de cambio' },
-        { path: '/admin/users',          label: 'Usuarios'        },
-        { path: '/admin/bulk-import',    label: 'Carga masiva'    },
+        { path: '/admin/params',          label: 'Parámetros'      },
+        { path: '/admin/exchange-rates',  label: 'Tasas de cambio' },
+        { path: '/admin/employee-costs',  label: 'Costos del equipo' },
+        { path: '/admin/users',           label: 'Usuarios'        },
+        { path: '/admin/bulk-import',     label: 'Carga masiva'    },
       ],
     });
   }
