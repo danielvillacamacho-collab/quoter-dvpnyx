@@ -77,6 +77,10 @@ export default function TimeTeam() {
       const qs = new URLSearchParams({ week_start: weekStart });
       if (selectedEmployeeId) qs.set('employee_id', selectedEmployeeId);
       const result = await apiGet(`/api/time-allocations?${qs}`);
+      if (!result) {
+        setError('No se pudo cargar la semana (respuesta vacía).');
+        return;
+      }
       setData(result);
       if (!result.requires_employee_pick) {
         const seed = {};
@@ -92,7 +96,7 @@ export default function TimeTeam() {
   const totalPct = useMemo(() => {
     if (!data) return 0;
     let sum = 0;
-    data.active_assignments.forEach((a) => {
+    (data.active_assignments || []).forEach((a) => {
       const v = entries[a.id];
       if (v !== '' && v != null && !isNaN(Number(v))) sum += Number(v);
     });
@@ -116,7 +120,7 @@ export default function TimeTeam() {
 
   const buildPayloadAllocations = () => {
     if (!data) return [];
-    return data.active_assignments.map((a) => {
+    return (data.active_assignments || []).map((a) => {
       const v = entries[a.id];
       const pct = v === '' || v == null || isNaN(Number(v)) ? 0 : Number(v);
       return { assignment_id: a.id, pct };
@@ -189,14 +193,16 @@ export default function TimeTeam() {
     );
   }
 
-  const monday = new Date(data.week_start_date + 'T00:00:00');
+  const monday = data.week_start_date ? new Date(data.week_start_date + 'T00:00:00') : startOfWeek(new Date());
+  const activeAssignments = data.active_assignments || [];
+  const employeeName = data.employee?.name || '—';
 
   return (
     <div style={s.page}>
       <div style={s.header}>
         <h2 style={s.title}>⏱ Tiempo semanal</h2>
         <div style={s.sub}>
-          {data.employee.name} · semana del <strong>{fmtRangeES(monday)}</strong>
+          {employeeName} · semana del <strong>{fmtRangeES(monday)}</strong>
           {selectedEmployeeId && (
             <button type="button"
                     onClick={() => setSelectedEmployeeId(null)}
@@ -227,7 +233,7 @@ export default function TimeTeam() {
       {success && <div style={{ ...s.banner, background: '#e8f5ec', borderColor: '#10b981', color: '#065f46' }}>{success}</div>}
 
       <div style={s.card}>
-        {data.active_assignments.length === 0 ? (
+        {activeAssignments.length === 0 ? (
           <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-light)' }}>
             No tienes asignaciones activas en esta semana. Tu tiempo está 100% en bench.
           </div>
@@ -241,7 +247,7 @@ export default function TimeTeam() {
               </tr>
             </thead>
             <tbody>
-              {data.active_assignments.map((a) => (
+              {activeAssignments.map((a) => (
                 <tr key={a.id}>
                   <td style={s.td}>
                     <div style={{ fontWeight: 600 }}>{a.contract_name || '—'}</div>
@@ -284,7 +290,7 @@ export default function TimeTeam() {
         )}
 
         <div style={s.bar} aria-label="Distribución de la semana">
-          {data.active_assignments.map((a, idx) => {
+          {activeAssignments.map((a, idx) => {
             const pct = Number(entries[a.id] || 0);
             if (pct <= 0) return null;
             const colors = ['#7c3aed', '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4', '#8b5cf6', '#84cc16'];
@@ -310,9 +316,9 @@ export default function TimeTeam() {
           <button
             type="button"
             onClick={handleSaveClick}
-            disabled={saving || overCap || data.active_assignments.length === 0}
+            disabled={saving || overCap || activeAssignments.length === 0}
             title={overCap ? `La suma es ${totalPct.toFixed(2)}% — ajusta antes de guardar` : undefined}
-            style={{ ...s.btn, ...s.btnPrimary, opacity: (saving || overCap || data.active_assignments.length === 0) ? 0.5 : 1, cursor: overCap ? 'not-allowed' : 'pointer' }}
+            style={{ ...s.btn, ...s.btnPrimary, opacity: (saving || overCap || activeAssignments.length === 0) ? 0.5 : 1, cursor: overCap ? 'not-allowed' : 'pointer' }}
           >
             {saving ? 'Guardando…' : 'Guardar semana'}
           </button>

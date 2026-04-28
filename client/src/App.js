@@ -15,6 +15,7 @@ import StatusBadge from './shell/StatusBadge';
 import NotificationsDrawer from './shell/NotificationsDrawer';
 import { apiGet } from './utils/apiV2';
 import ComingSoon from './shell/ComingSoon';
+import ErrorBoundary from './shell/ErrorBoundary';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
 import PipelineKanban from './modules/PipelineKanban';
@@ -152,6 +153,7 @@ function Layout() {
           onClose={() => setNotifOpen(false)}
           onUpdateUnread={setUnread}
         />
+        <ErrorBoundary>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
@@ -186,6 +188,7 @@ function Layout() {
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           <Route path="/preferencias" element={<Preferencias />} />
         </Routes>
+        </ErrorBoundary>
         <Footer />
       </div>
     </div>
