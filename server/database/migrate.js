@@ -643,6 +643,29 @@ const V2_ALTERS = `
     PRIMARY KEY (yyyymm, currency)
   );
   CREATE INDEX IF NOT EXISTS idx_exchange_rates_currency ON exchange_rates(currency, yyyymm);
+
+  -- ==================================================================
+  -- Time-MVP-00.1 (Abril 2026) — Weekly time allocations en %.
+  -- ==================================================================
+  -- Cada empleado registra cuánto % de su semana dedicó a cada
+  -- asignación activa. Bench se calcula como 100 - SUM(pct) (no se
+  -- persiste). Coexiste con time_entries (horas diarias) — modelos
+  -- distintos, eng team va a consolidar.
+  CREATE TABLE IF NOT EXISTS weekly_time_allocations (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id     UUID NOT NULL REFERENCES employees(id),
+    week_start_date DATE NOT NULL,
+    assignment_id   UUID NOT NULL REFERENCES assignments(id),
+    pct             NUMERIC(5,2) NOT NULL CHECK (pct >= 0 AND pct <= 100),
+    notes           TEXT NULL,
+    created_by      UUID NOT NULL REFERENCES users(id),
+    updated_by      UUID NOT NULL REFERENCES users(id),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (employee_id, week_start_date, assignment_id)
+  );
+  CREATE INDEX IF NOT EXISTS wta_employee_week_idx ON weekly_time_allocations(employee_id, week_start_date);
+  CREATE INDEX IF NOT EXISTS wta_assignment_idx ON weekly_time_allocations(assignment_id);
 `;
 
 /* ==================================================================
