@@ -78,10 +78,17 @@ router.get('/entities', (_req, res) => {
 });
 
 router.get('/templates/:entity', (req, res) => {
-  const csv = templateToCsv(req.params.entity);
+  const entity = req.params.entity;
+  // Validar entity contra whitelist ANTES de tocar response headers — evita
+  // que `entity` vaya al Content-Disposition sin saneo (riesgo de filename
+  // injection / path traversal en cliente).
+  if (!ENTITIES.includes(entity)) {
+    return res.status(404).json({ error: 'Plantilla no encontrada' });
+  }
+  const csv = templateToCsv(entity);
   if (!csv) return res.status(404).json({ error: 'Plantilla no encontrada' });
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="template_${req.params.entity}.csv"`);
+  res.setHeader('Content-Disposition', `attachment; filename="template_${entity}.csv"`);
   res.send(csv);
 });
 

@@ -21,6 +21,8 @@ const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { stringifyCsv } = require('../utils/csv');
+const { parsePagination } = require('../utils/sanitize');
+const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
 
@@ -51,13 +53,11 @@ const EDITABLE_FIELDS = [
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '25', 10), 1), 100);
-    const offset = (page - 1) * limit;
+    const { page, limit, offset } = parsePagination(req.query);
 
     const wheres = ['c.deleted_at IS NULL'];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
+    const filterParams = [];
+    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
 
     if (req.query.search) {
       const like = '%' + req.query.search + '%';
@@ -69,8 +69,12 @@ router.get('/', async (req, res) => {
     if (req.query.squad_id)  wheres.push(`c.squad_id = ${add(req.query.squad_id)}`);
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    // limit/offset son enteros saneados → siempre seguros vía $N (no al template).
+    const dataParams = [...filterParams, limit, offset];
+    const limitIdx = filterParams.length + 1;
+    const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM contracts c ${where}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM contracts c ${where}`, filterParams),
       pool.query(
         `SELECT c.*,
            cl.name AS client_name,
@@ -80,8 +84,8 @@ router.get('/', async (req, res) => {
            LEFT JOIN clients cl ON cl.id = c.client_id
            ${where}
            ORDER BY c.updated_at DESC
-           LIMIT ${limit} OFFSET ${offset}`,
-        params
+           LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        dataParams
       ),
     ]);
     res.json({
@@ -171,7 +175,7 @@ router.get('/:id', async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Contrato no encontrado' });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /contracts/:id', err); }
 });
 
 /* -------- CREATE (admin+) -------- */
@@ -571,7 +575,7 @@ router.post('/:id/status', adminOnly, async (req, res) => {
       cancelled_requests: cancelledRequests.length,
     });
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
+    await safeRollback(conn, 'transaction');
     // eslint-disable-next-line no-console
     console.error('POST /contracts/:id/status failed:', err);
     res.status(500).json({ error: 'Error interno' });
@@ -607,7 +611,7 @@ router.delete('/:id', adminOnly, async (req, res) => {
       actor_user_id: req.user.id, payload: { name: rows[0].name }, req,
     });
     res.json({ message: 'Contrato eliminado' });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'DELETE /contracts/:id', err); }
 });
 
 /* -------- KICK-OFF: SEED RESOURCE_REQUESTS FROM WINNING QUOTATION --------
@@ -857,7 +861,7 @@ router.post('/:id/kick-off', async (req, res) => {
       skipped,
     });
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
+    await safeRollback(conn, 'transaction');
     // eslint-disable-next-line no-console
     console.error('POST /contracts/:id/kick-off failed:', err);
     res.status(500).json({ error: 'Error interno' });

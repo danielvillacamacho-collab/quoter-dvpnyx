@@ -19,6 +19,8 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { parsePagination } = require('../utils/sanitize');
+const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
 
@@ -50,13 +52,11 @@ function validateEmploymentType(et) {
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '25', 10), 1), 100);
-    const offset = (page - 1) * limit;
+    const { page, limit, offset } = parsePagination(req.query);
 
     const wheres = ['e.deleted_at IS NULL'];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
+    const filterParams = [];
+    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
 
     if (req.query.search) {
       const like = '%' + req.query.search + '%';
@@ -69,8 +69,10 @@ router.get('/', async (req, res) => {
     if (req.query.country)     wheres.push(`e.country = ${add(req.query.country)}`);
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const limitIdx = filterParams.length + 1;
+    const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM employees e ${where}`, params),
+      pool.query(`SELECT COUNT(*)::int AS total FROM employees e ${where}`, filterParams),
       pool.query(
         `SELECT e.*,
            a.name AS area_name,
@@ -79,8 +81,8 @@ router.get('/', async (req, res) => {
            LEFT JOIN areas a ON a.id = e.area_id
            ${where}
            ORDER BY e.last_name, e.first_name
-           LIMIT ${limit} OFFSET ${offset}`,
-        params
+           LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+        [...filterParams, limit, offset]
       ),
     ]);
     res.json({
@@ -111,7 +113,7 @@ router.get('/:id', async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Empleado no encontrado' });
     res.json(rows[0]);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /employees/:id', err); }
 });
 
 /* -------- CREATE (admin+) -------- */
@@ -346,7 +348,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     await conn.query('COMMIT');
     res.json({ ...after, cancelled_assignments: cancelledAssignments.length });
   } catch (err) {
-    await conn.query('ROLLBACK').catch(() => {});
+    await safeRollback(conn, 'transaction');
     // eslint-disable-next-line no-console
     console.error('PUT /employees/:id failed:', err);
     res.status(500).json({ error: 'Error interno' });
@@ -385,7 +387,7 @@ router.delete('/:id', adminOnly, async (req, res) => {
       req,
     });
     res.json({ message: 'Empleado eliminado' });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'DELETE /employees/:id', err); }
 });
 
 /* ========================================================================
@@ -530,7 +532,7 @@ router.delete('/:id/skills/:skillId', adminOnly, async (req, res) => {
       req,
     });
     res.json({ message: 'Skill removido' });
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'DELETE /employees/:id/skills/:skillId', err); }
 });
 
 module.exports = router;

@@ -10,6 +10,7 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
+const { serverError } = require('../utils/http');
 
 const TRACKED_FIELDS = ['value', 'label', 'note'];
 
@@ -22,7 +23,7 @@ router.get('/', auth, async (req, res) => {
       grouped[row.category].push(row);
     }
     res.json(grouped);
-  } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+  } catch (err) { serverError(res, 'GET /parameters', err); }
 });
 
 router.put('/:id', auth, adminOnly, async (req, res) => {
@@ -61,11 +62,7 @@ router.put('/:id', auth, adminOnly, async (req, res) => {
     });
 
     res.json(after);
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /parameters/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
-  }
+  } catch (err) { serverError(res, 'PUT /parameters/:id', err); }
 });
 
 module.exports = router;

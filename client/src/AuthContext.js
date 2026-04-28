@@ -68,7 +68,12 @@ export function AuthProvider({ children }) {
    * backend returns (sanitized/coerced values).
    */
   const updatePreferences = async (patch) => {
-    const optimistic = { ...(user?.preferences || {}), ...patch };
+    // Capturamos los prefs PREVIOS al inicio del closure — no usamos
+    // `user?.preferences` en el catch (eso lee la variable user
+    // potencialmente actualizada de forma concurrente y revierte a un
+    // estado equivocado).
+    const previousPrefs = user?.preferences || {};
+    const optimistic = { ...previousPrefs, ...patch };
     setUser((prev) => (prev ? { ...prev, preferences: optimistic } : prev));
     applyPreferences(optimistic);
     try {
@@ -77,9 +82,9 @@ export function AuthProvider({ children }) {
       applyPreferences(preferences);
       return preferences;
     } catch (e) {
-      // roll back on failure so the UI reflects the real server state
-      setUser((prev) => (prev ? { ...prev, preferences: user?.preferences || {} } : prev));
-      applyPreferences(user?.preferences);
+      // Rollback al estado previo capturado al inicio.
+      setUser((prev) => (prev ? { ...prev, preferences: previousPrefs } : prev));
+      applyPreferences(previousPrefs);
       throw e;
     }
   };
