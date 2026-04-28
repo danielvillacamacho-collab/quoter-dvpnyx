@@ -152,14 +152,20 @@ router.get('/:id', async (req, res) => {
          cl.name AS client_name, cl.country AS client_country, cl.tier AS client_tier,
          o.name  AS opportunity_name, o.status AS opportunity_status,
          q.project_name AS winning_quotation_name, q.type AS winning_quotation_type,
+         uao.name  AS account_owner_name,    uao.email  AS account_owner_email,
+         udm.name  AS delivery_manager_name, udm.email  AS delivery_manager_email,
+         ucm.name  AS capacity_manager_name, ucm.email  AS capacity_manager_email,
          (SELECT COUNT(*)::int FROM resource_requests WHERE contract_id=c.id AND deleted_at IS NULL) AS requests_count,
          (SELECT COUNT(*)::int FROM resource_requests WHERE contract_id=c.id AND status IN ('open','partially_filled') AND deleted_at IS NULL) AS open_requests_count,
          (SELECT COUNT(*)::int FROM assignments WHERE contract_id=c.id AND deleted_at IS NULL) AS assignments_count,
          (SELECT COUNT(*)::int FROM assignments WHERE contract_id=c.id AND status='active' AND deleted_at IS NULL) AS active_assignments_count
          FROM contracts c
-         LEFT JOIN clients        cl ON cl.id = c.client_id
-         LEFT JOIN opportunities  o  ON o.id = c.opportunity_id
-         LEFT JOIN quotations     q  ON q.id = c.winning_quotation_id
+         LEFT JOIN clients        cl  ON cl.id = c.client_id
+         LEFT JOIN opportunities  o   ON o.id = c.opportunity_id
+         LEFT JOIN quotations     q   ON q.id = c.winning_quotation_id
+         LEFT JOIN users          uao ON uao.id = c.account_owner_id
+         LEFT JOIN users          udm ON udm.id = c.delivery_manager_id
+         LEFT JOIN users          ucm ON ucm.id = c.capacity_manager_id
         WHERE c.id = $1 AND c.deleted_at IS NULL`,
       [req.params.id]
     );
@@ -602,6 +608,262 @@ router.delete('/:id', adminOnly, async (req, res) => {
     });
     res.json({ message: 'Contrato eliminado' });
   } catch (err) { res.status(500).json({ error: 'Error interno' }); }
+});
+
+/* -------- KICK-OFF: SEED RESOURCE_REQUESTS FROM WINNING QUOTATION --------
+ *
+ * `POST /api/contracts/:id/kick-off`
+ *
+ * Después de que el contrato fue creado (típicamente desde una oportunidad
+ * ganada con cotización), el delivery manager hace el "kick-off" del
+ * proyecto. Le da una fecha de inicio (kick_off_date) y el sistema lee las
+ * líneas de la winning_quotation y crea automáticamente las
+ * resource_requests con esos defaults.
+ *
+ * Permisos: admin/superadmin SIEMPRE. Para roles 'lead' y 'member' está
+ * permitido sólo si son el delivery_manager_id, account_owner_id o
+ * capacity_manager_id del contrato.
+ *
+ * Body:
+ *   { kick_off_date: 'YYYY-MM-DD' }
+ *
+ * Reglas:
+ *   - El contrato debe tener winning_quotation_id.
+ *   - El contrato NO debe tener resource_requests previas (devuelve 409
+ *     con `code: 'already_seeded'` para que la UI pueda decidir si
+ *     forzar — ofrecemos `?force=1` para borrar las anteriores y resembrar).
+ *   - Los quotation_lines se mapean así:
+ *       role_title    ← line.role_title (o `${specialty} (${level})` si vacío)
+ *       level         ← `L${line.level}` (1..11) — fallback 'L3' si ausente
+ *       country       ← line.country
+ *       quantity      ← line.quantity (default 1)
+ *       weekly_hours  ← line.hours_per_week (default 40)
+ *       start_date    ← kick_off_date
+ *       end_date      ← kick_off_date + duration_months*30 días
+ *       area_id       ← match por specialty (ILIKE area.name) → fallback 1
+ *
+ * Response:
+ *   201 { contract, kick_off_date, created_requests: [...], skipped: [...] }
+ */
+const SPECIALTY_TO_AREA_KEY = {
+  // Mapeo heurístico de specialties típicas en quotations a area.key.
+  // Nuevos términos se pueden añadir aquí sin migración.
+  'desarrollo': 'development', 'development': 'development', 'dev': 'development',
+  'frontend': 'development', 'backend': 'development', 'fullstack': 'development', 'mobile': 'development',
+  'qa': 'testing', 'testing': 'testing', 'quality': 'testing',
+  'devops': 'devops_sre', 'sre': 'devops_sre', 'infra': 'infra_security',
+  'seguridad': 'infra_security', 'security': 'infra_security',
+  'data': 'data_ai', 'ai': 'data_ai', 'ml': 'data_ai', 'analytics': 'data_ai',
+  'ux': 'ux_ui', 'ui': 'ux_ui', 'diseño': 'ux_ui', 'design': 'ux_ui',
+  'product': 'product_management', 'pm': 'product_management', 'po': 'product_management',
+  'project': 'project_management', 'pmo': 'project_management',
+  'analista': 'functional_analysis', 'analisis': 'functional_analysis', 'funcional': 'functional_analysis',
+};
+
+router.post('/:id/kick-off', async (req, res) => {
+  const contractId = req.params.id;
+  const body = req.body || {};
+  const kickOffDate = String(body.kick_off_date || '').trim();
+  const force = req.query.force === '1' || body.force === true;
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(kickOffDate)) {
+    return res.status(400).json({ error: 'kick_off_date es requerido (YYYY-MM-DD)' });
+  }
+
+  const conn = await pool.connect();
+  try {
+    await conn.query('BEGIN');
+
+    const { rows: cRows } = await conn.query(
+      `SELECT id, name, status, winning_quotation_id,
+              delivery_manager_id, account_owner_id, capacity_manager_id
+         FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
+      [contractId]
+    );
+    if (!cRows.length) {
+      await conn.query('ROLLBACK');
+      return res.status(404).json({ error: 'Contrato no encontrado' });
+    }
+    const contract = cRows[0];
+
+    // Permission gate: admin OR (DM/owner/capacity_manager del contrato).
+    const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+    const isContractStakeholder =
+      contract.delivery_manager_id === req.user.id ||
+      contract.account_owner_id === req.user.id ||
+      contract.capacity_manager_id === req.user.id;
+    if (!isAdmin && !isContractStakeholder) {
+      await conn.query('ROLLBACK');
+      return res.status(403).json({
+        error: 'Sólo el delivery manager (o un admin) puede iniciar el kick-off de este contrato.',
+      });
+    }
+
+    if (['completed', 'cancelled'].includes(contract.status)) {
+      await conn.query('ROLLBACK');
+      return res.status(400).json({ error: `Contrato está ${contract.status}, no se puede sembrar.` });
+    }
+
+    if (!contract.winning_quotation_id) {
+      await conn.query('ROLLBACK');
+      return res.status(400).json({
+        error: 'El contrato no tiene cotización ganadora vinculada. Edita el contrato y asocia una winning_quotation_id antes del kick-off.',
+        code: 'no_winning_quotation',
+      });
+    }
+
+    // Idempotency check: no permitir resiembra accidental.
+    const { rows: existingRR } = await conn.query(
+      `SELECT id FROM resource_requests WHERE contract_id=$1 AND deleted_at IS NULL LIMIT 1`,
+      [contractId]
+    );
+    if (existingRR.length && !force) {
+      await conn.query('ROLLBACK');
+      return res.status(409).json({
+        error: 'El contrato ya tiene solicitudes. Pasa ?force=1 para borrar las anteriores y resembrar.',
+        code: 'already_seeded',
+      });
+    }
+    if (existingRR.length && force) {
+      // Soft-delete las previas — assignments existentes se preservan
+      // pero quedan huérfanas de su request. Decisión consciente: el
+      // resembrar se considera "operación de admin" y se loggea.
+      await conn.query(
+        `UPDATE resource_requests SET deleted_at = NOW()
+          WHERE contract_id=$1 AND deleted_at IS NULL`,
+        [contractId]
+      );
+    }
+
+    // Cargar las quotation_lines.
+    const { rows: lines } = await conn.query(
+      `SELECT id, sort_order, specialty, role_title, level, country,
+              quantity, duration_months, hours_per_week, phase
+         FROM quotation_lines
+        WHERE quotation_id = $1
+        ORDER BY sort_order ASC, id ASC`,
+      [contract.winning_quotation_id]
+    );
+    if (!lines.length) {
+      await conn.query('ROLLBACK');
+      return res.status(400).json({
+        error: 'La cotización ganadora no tiene líneas. Nada que sembrar.',
+        code: 'empty_quotation',
+      });
+    }
+
+    // Cargar areas para mapeo specialty → area_id.
+    const { rows: areaRows } = await conn.query(
+      `SELECT id, key, name FROM areas WHERE active=true ORDER BY id`
+    );
+    const areaByKey = new Map(areaRows.map((a) => [a.key, a]));
+    const areaByName = new Map(areaRows.map((a) => [String(a.name).toLowerCase(), a]));
+    const defaultAreaId = (areaByKey.get('development') || areaRows[0])?.id;
+    if (!defaultAreaId) {
+      await conn.query('ROLLBACK');
+      return res.status(500).json({ error: 'No hay áreas en el sistema. Ejecuta seeds primero.' });
+    }
+
+    function resolveAreaId(specialty) {
+      if (!specialty) return defaultAreaId;
+      const norm = String(specialty).toLowerCase().trim();
+      // exact name match
+      if (areaByName.has(norm)) return areaByName.get(norm).id;
+      // heuristic key match
+      for (const [needle, key] of Object.entries(SPECIALTY_TO_AREA_KEY)) {
+        if (norm.includes(needle)) {
+          const a = areaByKey.get(key);
+          if (a) return a.id;
+        }
+      }
+      return defaultAreaId;
+    }
+
+    const created = [];
+    const skipped = [];
+    const kickoffMs = new Date(kickOffDate + 'T00:00:00Z').getTime();
+    for (const line of lines) {
+      try {
+        const lvl = Number(line.level);
+        const levelStr = (Number.isFinite(lvl) && lvl >= 1 && lvl <= 11) ? `L${lvl}` : 'L3';
+        const months = Number(line.duration_months) > 0 ? Number(line.duration_months) : 6;
+        const endMs = kickoffMs + months * 30 * 86400000;
+        const endDate = new Date(endMs).toISOString().slice(0, 10);
+        const areaId = resolveAreaId(line.specialty);
+        const roleTitle = (line.role_title && String(line.role_title).trim())
+          || (line.specialty ? `${line.specialty} ${levelStr}` : `Recurso ${levelStr}`);
+        const weeklyHours = Number(line.hours_per_week) > 0 ? Number(line.hours_per_week) : 40;
+        const quantity = Number(line.quantity) > 0 ? Number(line.quantity) : 1;
+        const notesParts = [];
+        if (line.phase) notesParts.push(`Fase: ${line.phase}`);
+        if (line.specialty) notesParts.push(`Specialty: ${line.specialty}`);
+        notesParts.push(`Sembrado desde quotation_line ${line.id} en kick-off ${kickOffDate}`);
+
+        const { rows: rrRows } = await conn.query(
+          `INSERT INTO resource_requests
+             (contract_id, role_title, area_id, level, country,
+              weekly_hours, start_date, end_date, quantity, priority, notes, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'medium',$10,$11)
+           RETURNING *`,
+          [
+            contractId, roleTitle, areaId, levelStr, line.country || null,
+            weeklyHours, kickOffDate, endDate, quantity, notesParts.join(' · '), req.user.id,
+          ]
+        );
+        created.push(rrRows[0]);
+      } catch (lineErr) {
+        // Una línea inválida no debe tumbar todo el seeding.
+        skipped.push({
+          line_id: line.id, role_title: line.role_title, specialty: line.specialty,
+          error: lineErr.message,
+        });
+      }
+    }
+
+    // Guarda kick_off_date y timestamp en metadata del contrato (sin
+    // migración — metadata es jsonb).
+    const { rows: updated } = await conn.query(
+      `UPDATE contracts
+          SET start_date  = LEAST(start_date, $2::date),
+              metadata    = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                              'kick_off_date',           $2::date,
+                              'kicked_off_at',           NOW(),
+                              'kicked_off_by',           $3::uuid,
+                              'kick_off_seeded_count',   $4::int
+                            ),
+              updated_at  = NOW()
+        WHERE id = $1
+        RETURNING *`,
+      [contractId, kickOffDate, req.user.id, created.length]
+    );
+
+    await emitEvent(pool, {
+      event_type: 'contract.kicked_off', entity_type: 'contract', entity_id: contractId,
+      actor_user_id: req.user.id,
+      payload: {
+        kick_off_date: kickOffDate,
+        seeded_requests: created.length,
+        skipped_lines: skipped.length,
+        force: !!force,
+      },
+      req,
+    });
+
+    await conn.query('COMMIT');
+    res.status(201).json({
+      contract: updated[0],
+      kick_off_date: kickOffDate,
+      created_requests: created,
+      skipped,
+    });
+  } catch (err) {
+    await conn.query('ROLLBACK').catch(() => {});
+    // eslint-disable-next-line no-console
+    console.error('POST /contracts/:id/kick-off failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  } finally {
+    conn.release();
+  }
 });
 
 module.exports = router;

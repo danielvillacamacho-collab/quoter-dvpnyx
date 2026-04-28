@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { apiGet } from '../utils/apiV2';
+import { apiGet, apiPut, apiPost } from '../utils/apiV2';
+import { useAuth } from '../AuthContext';
 
 const s = {
   page:   { maxWidth: 1200, margin: '0 auto' },
@@ -29,27 +30,93 @@ function Field({ label, children }) {
 export default function ContractDetail() {
   const { id } = useParams();
   const nav = useNavigate();
+  const auth = useAuth() || {};
+  const isAdmin = !!auth.isAdmin;
+  const userId = auth.user?.id;
   const [contract, setContract] = useState(null);
   const [requests, setRequests] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  // Pickers para admin: lista de usuarios con rol admin/lead para roles del contrato.
+  const [userCandidates, setUserCandidates] = useState([]);
+  const [savingDM, setSavingDM] = useState(false);
+  // Kick-off form state.
+  const [kickOffDate, setKickOffDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [kickOffBusy, setKickOffBusy] = useState(false);
+  const [kickOffMsg, setKickOffMsg] = useState(null); // { ok, msg }
 
-  useEffect(() => {
-    setLoading(true);
-    Promise.all([
+  const reload = () => {
+    return Promise.all([
       apiGet(`/api/contracts/${id}`),
       apiGet(`/api/resource-requests?contract_id=${id}&limit=200`),
       apiGet(`/api/assignments?contract_id=${id}&limit=200`),
-    ])
-      .then(([c, r, a]) => {
-        setContract(c || null);
-        setRequests(r?.data || []);
-        setAssignments(a?.data || []);
-      })
+    ]).then(([c, r, a]) => {
+      setContract(c || null);
+      setRequests(r?.data || []);
+      setAssignments(a?.data || []);
+    });
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    const tasks = [reload()];
+    if (isAdmin) {
+      tasks.push(
+        apiGet('/api/users')
+          .then((u) => {
+            const list = (u?.data || u || []).filter((x) => ['admin', 'lead', 'superadmin'].includes(x.role));
+            setUserCandidates(list);
+          })
+          .catch(() => {})
+      );
+    }
+    Promise.all(tasks)
       .catch((e) => setErr(e.message || 'Error'))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, isAdmin]); // reload no se incluye intencionalmente: sólo refrescamos al cambiar id/isAdmin.
+
+  const updateDeliveryManager = async (deliveryManagerId) => {
+    setSavingDM(true);
+    try {
+      await apiPut(`/api/contracts/${id}`, { delivery_manager_id: deliveryManagerId || null });
+      await reload();
+    } catch (e) {
+      // eslint-disable-next-line no-alert
+      alert('Error guardando delivery manager: ' + (e.message || ''));
+    } finally { setSavingDM(false); }
+  };
+
+  const runKickOff = async (force = false) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(kickOffDate)) {
+      setKickOffMsg({ ok: false, msg: 'Fecha de kick-off inválida.' });
+      return;
+    }
+    setKickOffBusy(true); setKickOffMsg(null);
+    try {
+      const url = `/api/contracts/${id}/kick-off${force ? '?force=1' : ''}`;
+      const res = await apiPost(url, { kick_off_date: kickOffDate });
+      const created = res?.created_requests?.length ?? 0;
+      const skipped = res?.skipped?.length ?? 0;
+      setKickOffMsg({
+        ok: true,
+        msg: `✓ Kick-off ${kickOffDate}: ${created} solicitudes creadas${skipped ? ` (${skipped} líneas saltadas)` : ''}.`,
+      });
+      await reload();
+    } catch (e) {
+      const msg = e.message || 'Error en kick-off';
+      // El servidor devuelve 409 con code:'already_seeded' — ofrecer
+      // resembrar.
+      if (/already.?seeded|ya tiene solicitudes/i.test(msg)) {
+        // eslint-disable-next-line no-alert
+        if (window.confirm('El contrato ya tiene solicitudes. ¿Borrarlas y resembrar desde la cotización?')) {
+          await runKickOff(true);
+          return;
+        }
+      }
+      setKickOffMsg({ ok: false, msg });
+    } finally { setKickOffBusy(false); }
+  };
 
   if (loading) return <div style={s.page}><div style={{ color: 'var(--text-light)' }}>Cargando…</div></div>;
   if (err || !contract) return <div style={s.page}><div style={{ color: 'var(--danger)' }}>{err || 'Contrato no encontrado'}</div></div>;
@@ -76,10 +143,14 @@ export default function ContractDetail() {
               ? <Link to={`/opportunities/${contract.opportunity_id}`} style={s.link}>{contract.opportunity_name || 'ver'}</Link>
               : null}
           </Field>
-          <Field label="Cotización ganadora">{contract.winning_quotation_name}</Field>
-          <Field label="Account owner">{contract.account_owner_id}</Field>
-          <Field label="Delivery manager">{contract.delivery_manager_id}</Field>
-          <Field label="Capacity manager">{contract.capacity_manager_id}</Field>
+          <Field label="Cotización ganadora">
+            {contract.winning_quotation_id
+              ? <Link to={`/quotation/${contract.winning_quotation_id}`} style={s.link}>{contract.winning_quotation_name || 'ver'}</Link>
+              : null}
+          </Field>
+          <Field label="Account owner">{contract.account_owner_name || contract.account_owner_email || contract.account_owner_id}</Field>
+          <Field label="Delivery manager">{contract.delivery_manager_name || contract.delivery_manager_email || (contract.delivery_manager_id ? contract.delivery_manager_id : '— sin asignar —')}</Field>
+          <Field label="Capacity manager">{contract.capacity_manager_name || contract.capacity_manager_email || contract.capacity_manager_id}</Field>
           <Field label="Solicitudes abiertas">{contract.open_requests_count ?? 0}</Field>
           <Field label="Asignaciones activas">{contract.active_assignments_count ?? 0}</Field>
         </div>
@@ -90,6 +161,109 @@ export default function ContractDetail() {
           </div>
         )}
       </div>
+
+      {/* Admin: asignar delivery manager. */}
+      {isAdmin && (
+        <div style={s.card}>
+          <h2 style={s.h2}>Delivery manager</h2>
+          <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
+            El delivery manager es quien hace el kick-off (sembrar solicitudes desde la cotización) y administra los recursos del contrato.
+          </div>
+          <select
+            value={contract.delivery_manager_id || ''}
+            onChange={(e) => updateDeliveryManager(e.target.value || null)}
+            disabled={savingDM}
+            style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, minWidth: 320 }}
+            aria-label="Delivery manager"
+          >
+            <option value="">— Sin delivery manager asignado —</option>
+            {userCandidates.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name || u.email} {u.role !== 'lead' ? `(${u.role})` : ''}
+              </option>
+            ))}
+          </select>
+          {savingDM && <span style={{ fontSize: 12, color: 'var(--text-light)', marginLeft: 10 }}>Guardando…</span>}
+        </div>
+      )}
+
+      {/* Kick-off panel: visible si el contrato tiene cotización ganadora y el
+          caller es admin / DM / account_owner / capacity_manager. */}
+      {contract.winning_quotation_id && (isAdmin
+        || contract.delivery_manager_id === userId
+        || contract.account_owner_id === userId
+        || contract.capacity_manager_id === userId
+      ) && (
+        <div style={{ ...s.card, borderColor: 'var(--purple-dark)', background: '#fbfaff' }}>
+          <h2 style={s.h2}>🚀 Kick-off del proyecto</h2>
+          {requests.length === 0 ? (
+            <>
+              <div style={{ fontSize: 13, marginBottom: 12 }}>
+                Cuando ejecutes el kick-off, el sistema leerá las líneas de la cotización ganadora y creará automáticamente las solicitudes de recursos con estos defaults:
+              </div>
+              <ul style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 0, marginBottom: 12, paddingLeft: 20 }}>
+                <li>Rol, nivel, país y cantidad de cada línea</li>
+                <li>Horas semanales = horas/semana de la cotización</li>
+                <li>Inicio = fecha de kick-off</li>
+                <li>Fin = kick-off + duración (meses) de la línea</li>
+                <li>Área inferida del specialty (puedes ajustar después)</li>
+              </ul>
+            </>
+          ) : (
+            <div style={{ fontSize: 13, marginBottom: 12, color: 'var(--text-light)' }}>
+              {contract.metadata?.kick_off_date ? (
+                <>Kick-off realizado el <strong>{String(contract.metadata.kick_off_date).slice(0, 10)}</strong>. {requests.length} solicitudes vivas. Puedes resembrar (borra las actuales) si necesitas reiniciar desde la cotización.</>
+              ) : (
+                <>Este contrato ya tiene {requests.length} solicitudes — el kick-off no es necesario. Si quieres regenerar desde la cotización, marca "Resembrar".</>
+              )}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'end', flexWrap: 'wrap' }}>
+            <div>
+              <div style={s.label}>Fecha de kick-off</div>
+              <input
+                type="date"
+                value={kickOffDate}
+                onChange={(e) => setKickOffDate(e.target.value)}
+                style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, marginTop: 4 }}
+                aria-label="Fecha de kick-off"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => runKickOff(false)}
+              disabled={kickOffBusy}
+              style={{
+                background: 'var(--purple-dark)', color: '#fff', border: 'none', borderRadius: 8,
+                padding: '9px 18px', fontSize: 13, fontWeight: 600, cursor: kickOffBusy ? 'wait' : 'pointer',
+                opacity: kickOffBusy ? 0.6 : 1,
+              }}
+              aria-label="Iniciar kick-off"
+            >
+              {kickOffBusy ? 'Procesando…' : (requests.length === 0 ? '🚀 Iniciar kick-off' : '🔄 Resembrar desde cotización')}
+            </button>
+          </div>
+          {kickOffMsg && (
+            <div style={{
+              marginTop: 12, padding: '8px 12px', borderRadius: 6, fontSize: 13,
+              background: kickOffMsg.ok ? '#e8f5ec' : '#fde8eb',
+              border: `1px solid ${kickOffMsg.ok ? '#10b981' : '#ef4444'}`,
+              color: kickOffMsg.ok ? '#065f46' : '#b00020',
+            }} role="status">
+              {kickOffMsg.msg}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Si tiene cotización pero no hay DM ni eres admin → recordatorio. */}
+      {contract.winning_quotation_id && !contract.delivery_manager_id && !isAdmin && (
+        <div style={{ ...s.card, background: '#fffbe6', borderColor: '#facc15' }}>
+          <div style={{ fontSize: 13, color: '#92400e' }}>
+            Este contrato aún no tiene <strong>delivery manager</strong> asignado. Pídele al admin que asigne uno antes de iniciar el kick-off.
+          </div>
+        </div>
+      )}
 
       <div style={s.card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
