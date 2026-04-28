@@ -20,6 +20,7 @@ import Opportunities from './modules/Opportunities';
 import PipelineKanban from './modules/PipelineKanban';
 import Revenue from './modules/Revenue';
 import RevenuePlanEditor from './modules/RevenuePlanEditor';
+import ExchangeRates from './modules/ExchangeRates';
 import Areas from './modules/Areas';
 import Skills from './modules/Skills';
 import Employees from './modules/Employees';
@@ -156,6 +157,7 @@ function Layout() {
           <Route path="/quotation/:id" element={<QuotationRouter />} />
           <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
+          {isAdmin && <Route path="/admin/exchange-rates" element={<ExchangeRates />} />}
           {isAdmin && <Route path="/admin/users" element={<Users />} />}
           {isAdmin && <Route path="/admin/bulk-import" element={<BulkImport />} />}
           {/* V2 modules — placeholders until they ship in later sprints */}

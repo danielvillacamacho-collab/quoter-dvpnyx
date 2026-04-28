@@ -93,40 +93,82 @@ describe('GET /api/revenue', () => {
     expect(res.status).toBe(400);
   });
 
-  it('returns matrix with months, rows, col_totals, global_total', async () => {
+  it('returns matrix with months, rows, col_totals, global_total (USD only)', async () => {
     queryQueue.push({ rows: [
       { id: 'k1', name: 'Contract A', type: 'capacity', status: 'active', start_date: '2026-01-01',
-        total_value_usd: 30000, client_id: 'c1', client_name: 'Acme', client_country: 'CO',
+        total_value_usd: 30000, original_currency: 'USD', client_id: 'c1', client_name: 'Acme', client_country: 'CO',
         owner_id: 'u1', owner_name: 'Laura' },
     ] });
     queryQueue.push({ rows: [
       { contract_id: 'k1', yyyymm: '202602', projected_usd: 5000, real_usd: 5200, status: 'closed', notes: null, closed_at: new Date(), updated_at: new Date() },
       { contract_id: 'k1', yyyymm: '202603', projected_usd: 5500, real_usd: null, status: 'open', notes: null, closed_at: null, updated_at: new Date() },
     ] });
+    queryQueue.push({ rows: [] }); // exchange_rates (no rates needed for USD-only)
     const res = await client.call('GET', '/api/revenue?from=202602&to=202603');
     expect(res.status).toBe(200);
     expect(res.body.months).toEqual(['202602', '202603']);
     expect(res.body.rows).toHaveLength(1);
     const row = res.body.rows[0];
-    expect(row.cells['202602'].real_usd).toBe(5200);
-    expect(row.cells['202603'].real_usd).toBeNull();
-    expect(row.row_total.projected_usd).toBe(10500);
-    expect(row.row_total.real_usd).toBe(5200);
-    expect(res.body.col_totals['202602'].projected_usd).toBe(5000);
-    expect(res.body.global_total.projected_usd).toBe(10500);
+    expect(row.cells['202602'].real_amount_display).toBe(5200);
+    expect(row.cells['202603'].real_amount_display).toBeNull();
+    expect(row.row_total.projected_amount_display).toBe(10500);
+    expect(row.row_total.real_amount_display).toBe(5200);
+    expect(res.body.col_totals['202602'].projected_amount_display).toBe(5000);
+    expect(res.body.global_total.projected_amount_display).toBe(10500);
+    expect(res.body.display_currency).toBe('USD');
   });
 
   it('handles contract with no periods (all cells null)', async () => {
     queryQueue.push({ rows: [
       { id: 'k1', name: 'C', type: 'capacity', status: 'planned', start_date: '2026-01-01',
-        total_value_usd: 0, client_id: 'c1', client_name: 'X', client_country: 'CO',
+        total_value_usd: 0, original_currency: 'USD', client_id: 'c1', client_name: 'X', client_country: 'CO',
         owner_id: 'u1', owner_name: 'Y' },
     ] });
     queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [] }); // exchange_rates
     const res = await client.call('GET', '/api/revenue?from=202601&to=202602');
     expect(res.status).toBe(200);
     expect(res.body.rows[0].cells['202601']).toBeNull();
-    expect(res.body.rows[0].row_total.projected_usd).toBe(0);
+    expect(res.body.rows[0].row_total.projected_amount_display).toBe(0);
+  });
+
+  it('RR-MVP-00.6: converts COP contract to USD using exchange_rates', async () => {
+    queryQueue.push({ rows: [
+      { id: 'k1', name: 'Contract COP', type: 'project', status: 'active', start_date: '2026-01-01',
+        total_value_usd: 100000000, original_currency: 'COP', client_id: 'c1', client_name: 'Bancolombia',
+        client_country: 'CO', owner_id: 'u1', owner_name: 'Laura' },
+    ] });
+    queryQueue.push({ rows: [
+      { contract_id: 'k1', yyyymm: '202602', projected_usd: 40000000, real_usd: 40000000, status: 'open' },
+    ] });
+    queryQueue.push({ rows: [
+      { yyyymm: '202602', currency: 'COP', usd_rate: '4000' }, // 1 USD = 4000 COP
+    ] });
+    const res = await client.call('GET', '/api/revenue?from=202602&to=202602&display_currency=USD');
+    expect(res.status).toBe(200);
+    const cell = res.body.rows[0].cells['202602'];
+    expect(cell.projected_amount_original).toBe(40000000); // COP
+    expect(cell.projected_amount_display).toBe(10000); // 40,000,000 / 4000 = $10,000 USD
+    expect(cell.real_amount_display).toBe(10000);
+    expect(res.body.global_total.projected_amount_display).toBe(10000);
+    expect(res.body.display_currency).toBe('USD');
+  });
+
+  it('RR-MVP-00.6: flags fx_missing when rate not found', async () => {
+    queryQueue.push({ rows: [
+      { id: 'k1', name: 'C', type: 'capacity', status: 'active', start_date: '2026-01-01',
+        total_value_usd: 1000, original_currency: 'EUR', client_id: 'c1', client_name: 'X',
+        client_country: 'ES', owner_id: 'u1', owner_name: 'Y' },
+    ] });
+    queryQueue.push({ rows: [
+      { contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: 500, status: 'open' },
+    ] });
+    queryQueue.push({ rows: [] }); // No EUR rates configured
+    const res = await client.call('GET', '/api/revenue?from=202602&to=202602&display_currency=USD');
+    expect(res.status).toBe(200);
+    expect(res.body.fx_missing).toBe(true);
+    expect(res.body.rows[0].cells['202602'].fx_missing).toBe(true);
+    expect(res.body.rows[0].cells['202602'].projected_amount_display).toBeNull();
   });
 });
 

@@ -54,6 +54,7 @@ function expandMonths(from, to) {
 /* -------- LIST (matrix) -------- */
 router.get('/', async (req, res) => {
   try {
+    const fxUtils = require('../utils/fx');
     const from = String(req.query.from || '').trim();
     const to = String(req.query.to || '').trim();
     if (!YYYYMM_RE.test(from) || !YYYYMM_RE.test(to)) {
@@ -61,6 +62,8 @@ router.get('/', async (req, res) => {
     }
     const months = expandMonths(from, to);
     if (!months.length) return res.status(400).json({ error: 'Rango de meses vacío' });
+    // RR-MVP-00.6: moneda en la que el usuario quiere ver totales y celdas.
+    const displayCurrency = String(req.query.display_currency || 'USD').toUpperCase();
 
     const wheres = ['c.deleted_at IS NULL'];
     const params = [];
@@ -105,50 +108,120 @@ router.get('/', async (req, res) => {
       });
     }
 
-    // Build matrix + totals
-    const rows = contracts.map((c) => {
+    // Cargar TODOS los rates relevantes — todas las monedas que aparecen
+    // en los contratos + display_currency. Carga una sola query y el
+    // helper buildRatesMap maneja fallback al rate más reciente disponible.
+    const ratesNeeded = new Set([displayCurrency]);
+    contracts.forEach((c) => {
+      const ccy = String(c.original_currency || 'USD').toUpperCase();
+      if (ccy !== 'USD') ratesNeeded.add(ccy);
+    });
+    const fxList = ratesNeeded.size > 0
+      ? (await pool.query(
+          `SELECT yyyymm, currency, usd_rate FROM exchange_rates WHERE currency = ANY($1::text[]) ORDER BY currency, yyyymm`,
+          [Array.from(ratesNeeded)],
+        )).rows
+      : [];
+    const rates = fxUtils.buildRatesMap(fxList);
+
+    // Para cada celda construimos:
+    //   amount_original (en contract.original_currency)
+    //   amount_display  (convertido a displayCurrency, null si rate falta)
+    // Los totales (row/col/global) se computan en displayCurrency.
+    let missingRate = false;
+    const rowsOut = contracts.map((c) => {
       const cells = {};
-      let row_projected = 0; let row_real = 0;
+      const ccyOrig = String(c.original_currency || 'USD').toUpperCase();
+      let row_proj_disp = 0; let row_real_disp = 0;
+      let row_proj_orig = 0; let row_real_orig = 0;
       months.forEach((m) => {
         const cell = (periodsByContract.get(c.id) || {})[m] || null;
-        const p = cell ? Number(cell.projected_usd || 0) : 0;
-        const r = cell && cell.real_usd != null ? Number(cell.real_usd) : null;
-        row_projected += p; if (r != null) row_real += r;
-        cells[m] = cell ? {
-          projected_usd: p,
+        if (!cell) { cells[m] = null; return; }
+        const projOrig = Number(cell.projected_usd || 0);
+        const realOrig = cell.real_usd != null ? Number(cell.real_usd) : null;
+        const projConv = fxUtils.convert(projOrig, ccyOrig, displayCurrency, m, rates);
+        const realConv = realOrig == null
+          ? { amount: null, rateUsed: null }
+          : fxUtils.convert(realOrig, ccyOrig, displayCurrency, m, rates);
+        if (projOrig > 0 && projConv.amount == null) missingRate = true;
+        if (realOrig != null && realConv.amount == null) missingRate = true;
+        row_proj_orig += projOrig;
+        row_proj_disp += projConv.amount != null ? projConv.amount : 0;
+        if (realOrig != null) {
+          row_real_orig += realOrig;
+          row_real_disp += realConv.amount != null ? realConv.amount : 0;
+        }
+        cells[m] = {
+          projected_amount_original: projOrig,
+          projected_amount_display:  projConv.amount,
           projected_pct: cell.projected_pct != null ? Number(cell.projected_pct) : null,
-          real_usd: r,
+          real_amount_original: realOrig,
+          real_amount_display:  realConv.amount,
           real_pct: cell.real_pct != null ? Number(cell.real_pct) : null,
+          // Aliases legacy (mantienen el nombre `_usd` aunque el contenido
+          // sea moneda original — eng team va a renombrar).
+          projected_usd: projOrig,
+          real_usd: realOrig,
+          fx_missing: (projOrig > 0 && projConv.amount == null) || (realOrig != null && realConv.amount == null),
           status: cell.status,
           notes: cell.notes,
           closed_at: cell.closed_at,
           closed_by: cell.closed_by,
           updated_at: cell.updated_at,
           updated_by: cell.updated_by,
-        } : null;
+        };
       });
-      return { contract: c, cells, row_total: { projected_usd: row_projected, real_usd: row_real } };
+      return {
+        contract: c,
+        cells,
+        row_total: {
+          projected_amount_display: row_proj_disp,
+          real_amount_display:      row_real_disp,
+          projected_amount_original: row_proj_orig,
+          real_amount_original:      row_real_orig,
+          original_currency:         ccyOrig,
+          // Legacy aliases:
+          projected_usd: row_proj_orig,
+          real_usd:      row_real_orig,
+        },
+      };
     });
 
-    // Column totals + global
+    // Column totals + global (en displayCurrency).
     const col_totals = {};
-    months.forEach((m) => { col_totals[m] = { projected_usd: 0, real_usd: 0 }; });
-    let global_projected = 0; let global_real = 0;
-    rows.forEach((r) => {
+    months.forEach((m) => { col_totals[m] = { projected_amount_display: 0, real_amount_display: 0 }; });
+    let global_proj = 0; let global_real = 0;
+    rowsOut.forEach((r) => {
       months.forEach((m) => {
         const c = r.cells[m];
-        if (c) {
-          col_totals[m].projected_usd += c.projected_usd;
-          if (c.real_usd != null) col_totals[m].real_usd += c.real_usd;
-          global_projected += c.projected_usd;
-          if (c.real_usd != null) global_real += c.real_usd;
+        if (!c) return;
+        if (c.projected_amount_display != null) {
+          col_totals[m].projected_amount_display += c.projected_amount_display;
+          global_proj += c.projected_amount_display;
         }
+        if (c.real_amount_display != null) {
+          col_totals[m].real_amount_display += c.real_amount_display;
+          global_real += c.real_amount_display;
+        }
+      });
+      // Legacy aliases on col_totals:
+      Object.values(col_totals).forEach((t) => {
+        t.projected_usd = t.projected_amount_display;
+        t.real_usd      = t.real_amount_display;
       });
     });
 
     res.json({
-      months, rows, col_totals,
-      global_total: { projected_usd: global_projected, real_usd: global_real },
+      months, rows: rowsOut, col_totals,
+      display_currency: displayCurrency,
+      fx_missing: missingRate,
+      global_total: {
+        projected_amount_display: global_proj,
+        real_amount_display:      global_real,
+        // Legacy aliases:
+        projected_usd: global_proj,
+        real_usd:      global_real,
+      },
     });
   } catch (err) {
     // eslint-disable-next-line no-console
