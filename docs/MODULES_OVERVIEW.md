@@ -124,6 +124,13 @@ planned → active → paused → completed
                           → cancelled
 ```
 
+**Subtipos** (SPEC subtipo-contrato Abril 2026): cada contrato lleva un `contract_subtype` además del `type`. Catálogo controlado en `utils/contract_subtype.js`:
+- `capacity` → `staff_augmentation` | `mission_driven_squad` | `managed_service` | `time_and_materials`
+- `project` → `fixed_scope` | `hour_pool`
+- `resell` → siempre NULL
+
+Obligatorio al crear/editar capacity y project. Validación server-side con códigos de error específicos. Filtro `?subtype=` en GET.
+
 **Deuda:** `total_value_usd` editable libre, sin reconciliación con quotation_lines.
 
 ---

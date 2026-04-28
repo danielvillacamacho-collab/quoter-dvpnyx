@@ -26,6 +26,7 @@ Estados: 🟢 vigente · ⚪ superada · 🔴 rechazada
 - [TS-NO-MIGRATION · No migrar a TypeScript](#ts-no-migration)
 - [REVENUE-PLACEHOLDER · Revenue MVP simplificado](#revenue-placeholder)
 - [SLUG-LATER · Slugs aditivos sin populate inicial](#slug-later)
+- [SUBTYPE-FROM-QUOTATION-NULL · from-quotation no exige subtype](#subtype-from-quotation-null)
 
 ---
 
@@ -254,6 +255,28 @@ Estados: 🟢 vigente · ⚪ superada · 🔴 rechazada
 - El frontend puede empezar a usar slugs en URLs cuando estén populados.
 
 **Acción pendiente.** Job de backfill + endpoint admin `POST /api/admin/slugs/refresh` (no implementado).
+
+---
+
+## SUBTYPE-FROM-QUOTATION-NULL
+
+**from-quotation no exige subtype** · 2026-04-28 · 🟢 vigente
+
+**Contexto.** La SPEC `subtipo-contrato.docx` (Abril 2026) dice que el FORM de creación de contrato debe exigir `contract_subtype` cuando type es capacity o project. Para "creación desde oportunidad ganada" la spec aclara: "el subtipo debe aparecer vacío y ser obligatorio — no se asume ningún valor".
+
+El sistema tiene dos caminos para crear contratos:
+- `POST /api/contracts` — formulario manual (donde la spec aplica directo)
+- `POST /api/contracts/from-quotation/:id` — atajo API que toma defaults de la quotation y crea con un click
+
+**Decisión.** El formulario sí valida y exige `contract_subtype`. El endpoint `from-quotation` lo acepta opcionalmente: si no viene en body, queda NULL y el delivery manager lo completa después en el detalle del contrato (banner amarillo lo recuerda). Si viene y no es válido para el type derivado, devuelve 400.
+
+**Razón.** El atajo de un click no debería romperse cuando el frontend nuevo lo invoca. El subtype es decisión operativa del DM, que típicamente NO está disponible al momento de ganar la oportunidad. La spec habla del FORM, no del atajo API.
+
+**Consecuencias.**
+- Contratos creados vía `from-quotation` pueden quedar con `subtype=NULL` por minutos/horas hasta que el DM lo complete.
+- ContractDetail muestra banner si type requiere subtype pero está NULL — UX nudge sin bloqueo duro.
+- Reportes deben filtrar `subtype=none` para encontrar contratos pendientes de clasificar.
+- El día que se haga el módulo de billing, se debería bloquear billing setup hasta que el subtype esté seteado.
 
 ---
 

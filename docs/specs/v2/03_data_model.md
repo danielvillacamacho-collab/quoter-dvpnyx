@@ -298,6 +298,7 @@ Contrato firmado con un cliente. Distinto de quotation: la quotation es propuest
 | `opportunity_id` | UUID NULL → opportunities | |
 | `winning_quotation_id` | UUID NULL → quotations | base para kick-off |
 | `type` | VARCHAR(20) | CHECK: `capacity` \| `project` \| `resell` |
+| `contract_subtype` | VARCHAR(50) NULL | CHECK: 6 valores válidos. Coherencia con `type` validada en `routes/contracts.js` vía `utils/contract_subtype.js`. NULL para `resell`. **Obligatorio** al crear/editar capacity y project (excepción: legacy edits que no tocan type). Ver [SPEC subtipo-contrato](#contract_subtype-subtypes-spec) abajo |
 | `status` | VARCHAR(20) DEFAULT 'planned' | CHECK: `planned` \| `active` \| `paused` \| `completed` \| `cancelled` |
 | `start_date`, `end_date` | DATE | CHECK: `end >= start` |
 | `account_owner_id` | UUID NOT NULL → users | |
@@ -313,6 +314,27 @@ Contrato firmado con un cliente. Distinto de quotation: la quotation es propuest
 | `deleted_at`, `created_by`, `created_at`, `updated_at` | | |
 
 **Endpoint singular:** `POST /api/contracts/:id/kick-off` lee la winning_quotation y crea `resource_requests` automáticamente.
+
+#### contract_subtype (subtypes spec)
+
+Catálogo del campo `contract_subtype` (Abril 2026). Helper:
+[`server/utils/contract_subtype.js`](../../../server/utils/contract_subtype.js) ·
+[`client/src/utils/contractSubtype.js`](../../../client/src/utils/contractSubtype.js).
+
+| `type` | Subtipos válidos (valor interno → etiqueta visible) |
+|---|---|
+| `capacity` | `staff_augmentation` → "Staff Augmentation" · `mission_driven_squad` → "Mission-driven squad" · `managed_service` → "Servicio administrado / Soporte" · `time_and_materials` → "Tiempo y Materiales" |
+| `project`  | `fixed_scope` → "Alcance fijo / POC" · `hour_pool` → "Bolsa de horas" |
+| `resell`   | (sin subtipos — siempre `NULL`) |
+
+**Reglas de coherencia (server):**
+- `type='capacity'` o `type='project'` + `contract_subtype=NULL` en POST → `400 code:'subtype_required'`
+- `type='resell'` + `contract_subtype` no-null → `400 code:'subtype_not_allowed_for_resell'`
+- subtype no en la lista del type → `400 code:'subtype_invalid_for_type'`
+- En PUT: si el caller cambia el `type`, el subtype se requiere (no se hereda del type viejo)
+- En PUT: contratos legacy con `subtype=NULL` pueden editar OTROS campos sin forzar subtype, salvo que el caller cambie type o pase subtype explícito.
+
+**CHECK constraint en DB** valida los 6 valores válidos a nivel de schema; la coherencia con `type` queda en código (depende de otra columna).
 
 ### `resource_requests`
 

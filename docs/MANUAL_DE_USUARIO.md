@@ -752,7 +752,34 @@ Antes había que ir a otra pantalla. Ahora:
 4. Toast verde "✓ {Empleado} asignado a {Rol}" + planner refresca.
 5. Si hay overbooking u otra validación que requiere override, te lleva al formulario manual con prefill.
 
-### 6. Asignar líder directo a un empleado
+### 6. Subtipo de contrato (Abril 2026)
+
+Cada contrato ahora se clasifica con un **Subtipo** además del Tipo. Esto permite reportar y filtrar por modelo de trabajo.
+
+**Catálogo:**
+
+- **Capacity** se subdivide en:
+  - Staff Augmentation
+  - Mission-driven squad
+  - Servicio administrado / Soporte
+  - Tiempo y Materiales
+- **Proyecto** se subdivide en:
+  - Alcance fijo / POC
+  - Bolsa de horas
+- **Reventa** no tiene subtipos.
+
+**Cuándo lo ves:**
+
+1. Al **crear** un contrato (formulario manual): aparece debajo de Tipo. Es **obligatorio** para Capacity y Proyecto.
+2. Al **editar**: igual. Si cambias el Tipo, el Subtipo se resetea — debes elegir uno del nuevo Tipo.
+3. En la **lista de contratos**: nueva columna Subtipo. "Sin especificar" para contratos antiguos.
+4. **Filtro** disponible en la lista, junto al filtro por Tipo. Incluye opción "Sin especificar" para encontrar contratos pendientes de clasificar.
+5. **Detalle del contrato**: visible en el subtítulo y en la sección Resumen. Si el contrato tiene Tipo capacity/project pero no Subtipo, aparece un banner amarillo recordándolo.
+6. **CSV export**: incluye la columna Subtipo.
+
+**Contratos antiguos sin subtipo:** se pueden seguir editando (otros campos) sin forzar a clasificarlos. Pero si cambias el Tipo, te exige Subtipo nuevo. Recomendamos completarlos progresivamente.
+
+### 7. Asignar líder directo a un empleado
 
 Para que la visibilidad de equipo funcione:
 
