@@ -78,10 +78,10 @@ describe('Sidebar', () => {
     expect(container.querySelector('.sidebar')).not.toHaveClass('open');
   });
 
-  it('buildGroups returns 8 groups for admins and 7 for non-admins (+ Finanzas group from RR-MVP-00.1)', () => {
+  it('buildGroups returns 9 groups for admins and 8 for non-admins (+ Iniciativas internas group from SPEC-II-00)', () => {
     // Sanity on the pure model helper so it stays useful for consumers
     // (Command Palette quick actions list, for example).
-    expect(buildGroups(true).length).toBe(8);
-    expect(buildGroups(false).length).toBe(7);
+    expect(buildGroups(true).length).toBe(9);
+    expect(buildGroups(false).length).toBe(8);
   });
 });

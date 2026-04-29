@@ -104,6 +104,11 @@ app.use('/api/events',            _stubs.events);
 app.use('/api/notifications',     require('./routes/notifications')); // ✅ In-app notifications
 app.use('/api/ai-interactions',   require('./routes/ai_interactions')); // ✅ AI agent log + decision feedback
 app.use('/api/employee-costs',    require('./routes/employee_costs')); // ✅ Employee Costs (admin-only PII)
+// SPEC-II-00 — Internal Initiatives, Novelties & Idle Time (Abril 2026)
+app.use('/api/internal-initiatives', require('./routes/internal_initiatives'));
+app.use('/api/novelties',         require('./routes/novelties'));
+app.use('/api/holidays',          require('./routes/holidays'));
+app.use('/api/idle-time',         require('./routes/idle_time'));
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.
