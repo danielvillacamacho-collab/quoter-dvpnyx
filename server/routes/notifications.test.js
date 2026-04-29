@@ -148,23 +148,45 @@ describe('notify() helper', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('swallows DB errors and returns null', async () => {
-    const res = await notify(
-      { query: async () => { throw new Error('boom'); } },
-      { user_id: 'u1', type: 't', title: 'x' }
-    );
+  it('swallows DB errors and returns null (pool path)', async () => {
+    // Pool-shaped (has .connect) → no savepoint, single query that throws.
+    const fakePool = {
+      connect: () => {},
+      query: async () => { throw new Error('boom'); },
+    };
+    const res = await notify(fakePool, { user_id: 'u1', type: 't', title: 'x' });
     expect(res).toBeNull();
   });
 
+  it('swallows DB errors AND rolls back to savepoint when called with a txn client (INC-002)', async () => {
+    const calls = [];
+    const fakeClient = {
+      // No .connect → treated as txn client → savepoint path.
+      query: async (sql) => {
+        calls.push(sql);
+        if (/^SAVEPOINT /.test(sql) || /^ROLLBACK TO SAVEPOINT /.test(sql)) return { rows: [] };
+        if (/^INSERT INTO notifications/.test(sql)) throw new Error('FK violation');
+        return { rows: [] };
+      },
+    };
+    const res = await notify(fakeClient, { user_id: 'u1', type: 't', title: 'x' });
+    expect(res).toBeNull();
+    expect(calls.some((s) => /^SAVEPOINT /.test(s))).toBe(true);
+    expect(calls.some((s) => /^ROLLBACK TO SAVEPOINT /.test(s))).toBe(true);
+  });
+
   it('notifyMany dedupes and skips falsy ids', async () => {
+    // Use pool-shaped fake (has .connect) so the helper takes the
+    // single-query path — control SQL isn't generated.
     const inserted = [];
-    const conn = {
+    const fakePool = {
+      connect: () => {},
       query: async (_sql, params) => {
         inserted.push(params[0]);
         return { rows: [{ id: 'n-' + params[0] }] };
       },
     };
-    const rows = await notifyMany(conn, ['a', 'b', 'a', null, undefined, 'c'], {
+    const rows = await notifyMany(fakePool, ['a', 'b', 'a', null, undefined, 'c'], {
       type: 't', title: 'x',
     });
     expect(inserted).toEqual(['a', 'b', 'c']);

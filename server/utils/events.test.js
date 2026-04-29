@@ -1,10 +1,13 @@
 const { emitEvent, buildUpdatePayload } = require('./events');
 
 describe('emitEvent', () => {
+  // Pool-shaped (has .connect) so emitEvent takes the single-query path.
+  // The savepoint path is exercised in the dedicated INC-002 test below.
   const fakeClient = () => {
     const calls = [];
     return {
       calls,
+      connect: () => {},
       query: jest.fn(async (sql, params) => {
         calls.push({ sql, params });
         return { rows: [{ id: 'evt-1', created_at: new Date().toISOString() }] };
@@ -48,12 +51,34 @@ describe('emitEvent', () => {
   });
 
   it('returns null and does NOT throw when DB insert fails', async () => {
-    const client = { query: jest.fn(async () => { throw new Error('boom'); }) };
+    const client = { connect: () => {}, query: jest.fn(async () => { throw new Error('boom'); }) };
     const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const out = await emitEvent(client, {
       event_type: 'x', entity_type: 'y', entity_id: 'z',
     });
     expect(out).toBeNull();
+    spy.mockRestore();
+  });
+
+  it('INC-002: when called with a txn client, isolates failure with SAVEPOINT/ROLLBACK so the surrounding txn survives', async () => {
+    // No .connect → emitEvent treats this as a transaction client and
+    // wraps the INSERT in a SAVEPOINT. If the INSERT fails, we expect
+    // an explicit ROLLBACK TO SAVEPOINT so Postgres doesn't mark the
+    // outer txn aborted (which would kill the caller's COMMIT).
+    const calls = [];
+    const txnClient = {
+      query: jest.fn(async (sql) => {
+        calls.push(sql);
+        if (/^SAVEPOINT /.test(sql) || /^ROLLBACK TO SAVEPOINT /.test(sql)) return { rows: [] };
+        if (/^INSERT INTO events/.test(sql)) throw new Error('FK violation');
+        return { rows: [] };
+      }),
+    };
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const out = await emitEvent(txnClient, { event_type: 'x', entity_type: 'y', entity_id: 'z' });
+    expect(out).toBeNull();
+    expect(calls.some((s) => /^SAVEPOINT /.test(s))).toBe(true);
+    expect(calls.some((s) => /^ROLLBACK TO SAVEPOINT /.test(s))).toBe(true);
     spy.mockRestore();
   });
 

@@ -319,6 +319,39 @@ describe('POST /api/assignments — EN-1', () => {
     const override = emitEvent.mock.calls.find((c) => c[1].event_type === 'assignment.overridden');
     expect(override).toBeFalsy();
   });
+
+  /**
+   * INC-002 regression: when notify() throws (e.g. employee.user_id
+   * points to a deleted users row → FK violation on notifications),
+   * the assignment must STILL be created. Pre-fix the notify call ran
+   * inside the open transaction with the txn client, so a failed
+   * INSERT poisoned the txn and the COMMIT failed → 500. Post-fix
+   * notify runs against the pool AFTER the COMMIT, so any failure is
+   * isolated and the user-facing mutation succeeds.
+   */
+  it('INC-002: assignment is created (201) even when notify() throws (broken FK on user_id)', async () => {
+    const { notify } = require('../utils/notifications');
+    notify.mockClear();
+    notify.mockImplementationOnce(async () => {
+      throw new Error('insert or update on table "notifications" violates foreign key constraint "notifications_user_id_fkey"');
+    });
+
+    queryQueue.push({ rows: [happyRR()] });
+    queryQueue.push({ rows: [{ id: 'ct1', status: 'active' }] });
+    queryQueue.push({ rows: [happyEmp()] });
+    queryQueue.push({ rows: [{ total: 10 }] });
+    queryQueue.push({ rows: [{ id: 'a-new', status: 'planned' }] });
+    queryQueue.push({ rows: [{
+      employee_user_id: 'orphaned-user-id', employee_name: 'Alejandro Vertel',
+      contract_name: 'MSA-2026',
+      delivery_manager_id: null, capacity_manager_id: null,
+    }] });
+
+    const res = await client.call('POST', '/api/assignments', validBody);
+    expect(res.status).toBe(201);
+    expect(res.body.id).toBe('a-new');
+    expect(notify).toHaveBeenCalled();
+  });
 });
 
 /**

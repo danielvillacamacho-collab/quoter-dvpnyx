@@ -97,6 +97,59 @@ PR: `hotfix/rate-limit-login`. Commit: `d43c762`.
 
 ---
 
+## INC-002 — Asignaciones imposibles de crear para 5 empleados específicos (txn envenenada por notify dentro de la transacción)
+
+**Severidad:** P1 — funcionalidad crítica del módulo Capacity rota para un subset de empleados.
+**Fecha:** 2026-04-29.
+**Duración:** ~días desde que apareció hasta el reporte; fix aplicado el mismo día del reporte.
+**Reportado por:** Daniel Villa Camacho — primero notó que no podía asignar a Alejandro Vertel; al investigar, otros 4 empleados (Andrés Vasquez, Samuel Solano, Lorenzo Reinso, Juan Uni) presentaban el mismo síntoma. El resto del equipo asignaba sin problema.
+
+### Síntoma
+
+`POST /api/assignments` devolvía **500 "Error interno"** únicamente para esos empleados. Validaciones (área/nivel/capacidad/fechas) no se mostraban, no aparecía el modal de override — solo un error genérico desde el servidor. La asignación nunca se persistía.
+
+### Causa raíz
+
+El handler en `server/routes/assignments.js` ejecutaba `notify(conn, ...)` y `notifyMany(conn, ...)` **dentro** de la transacción abierta (`BEGIN` … queries … notify … `COMMIT`). El helper `notify()` tiene su propio `try/catch` que atrapa los errores de DB y devuelve `null` para que las notificaciones sean best-effort.
+
+Pero hay una sutileza de Postgres: **cuando una query falla dentro de una transacción, Postgres marca la txn como ABORTED**. Cualquier query siguiente — incluyendo el `COMMIT` — falla con:
+
+> `current transaction is aborted, commands ignored until end of transaction block`
+
+El `try/catch` interno de `notify()` ocultaba el error JS pero no rescataba el estado de la transacción. El `COMMIT` posterior fallaba, caía al catch externo del handler → `ROLLBACK` → 500.
+
+¿Por qué solo afectaba a 5 empleados? Porque **`employees.user_id` apuntaba a un `users.id` que ya no existía** (hard-deleted en alguna limpieza previa o seed inválido). El `INSERT INTO notifications (user_id, ...)` violaba el FK constraint solo para esos empleados; el otro 95% tenía `user_id` válido o `NULL` y no entraba al INSERT.
+
+### Fix
+
+Tres cambios coordinados en `fix/assignments-notify-poisons-txn`:
+
+1. **`server/routes/assignments.js`** — mover el bloque de notificaciones después del `COMMIT` y usar el `pool` directo en vez del `conn` de la transacción. Las notificaciones ahora son verdaderamente best-effort: si fallan, la asignación ya está persistida y el `res.status(201)` ya se envió.
+2. **`server/utils/notifications.js`** — defensiva en profundidad: cuando `notify()` recibe un client de transacción (detectado por la ausencia de `.connect`), envuelve el INSERT en un `SAVEPOINT … RELEASE/ROLLBACK TO SAVEPOINT`. Así, si un futuro caller usa el patrón viejo por error, no envenena la txn.
+3. **`server/utils/events.js`** — mismo blindaje en `emitEvent()`, que tiene la **misma forma** y se llama dentro de transacciones en todas las rutas del producto.
+4. **Hotfix de datos** (run-once en producción): `UPDATE employees SET user_id = NULL WHERE user_id NOT IN (SELECT id FROM users);` — desbloquea inmediatamente a los 5 empleados sin necesidad de redeploy.
+
+### Aprendizajes
+
+- **Helpers que atrapan errores DENTRO de una transacción son una trampa.** El JS sigue, pero el estado SQL no se recupera. Si un helper hace una query que puede fallar, debe correr en una conexión propia (pool) o usar SAVEPOINT explícito.
+- **"Best-effort" no significa "no falla nunca"** — significa "no debe abortar la operación principal". Para conseguirlo de verdad, el helper tiene que correr fuera de la txn principal o aislarse con un savepoint.
+- **Bugs que afectan a un subset extraño de filas suelen ser FK rotos.** Cuando el síntoma es "5 empleados sí, los demás no", la primera query a correr es `LEFT JOIN ... WHERE other.id IS NULL`.
+- **Los logs sí lo decían**, pero el mensaje real (`notify() failed: ... foreign key constraint`) estaba degradado a `console.error` y se perdía entre el ruido. La línea de `POST /assignments failed` que sí se notaba era el síntoma, no la causa.
+
+### Acciones derivadas
+
+- [ ] Auditar todas las llamadas a `emitEvent(conn, ...)` y `notify(conn, ...)` en el resto de rutas. Hoy quedan blindadas por el savepoint, pero la guideline debe ser "siempre `pool` después del COMMIT".
+- [ ] Agregar a `docs/CONVENTIONS.md` una sección "Helpers dentro de transacciones" con la regla y un par de ejemplos.
+- [ ] Test pre-deploy o seed-validator que detecte `employees.user_id` con FK rotos antes de que aparezcan en producción.
+- [ ] Considerar reemplazar `console.error` por un logger estructurado con niveles, para que errores como `FK violation` salten en alertas en vez de perderse.
+
+### Prevención
+
+- **Test de regresión** (`assignments.test.js` "INC-002: assignment is created (201) even when notify() throws"): mockea un fallo en `notify` y verifica que el POST devuelve 201. Si alguien revierte el orden notify→commit, este test rompe.
+- **Test del savepoint** en `notifications.test.js` y `events.test.js`: verifican que cuando se llama con un txn client y el INSERT falla, se emiten las queries `SAVEPOINT` y `ROLLBACK TO SAVEPOINT` en orden.
+
+---
+
 ## Cómo agregar un incidente a este registro
 
 Cuando ocurre algo que afecta usuarios reales (no un bug menor):
