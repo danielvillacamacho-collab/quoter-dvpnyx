@@ -321,10 +321,11 @@ describe('CapacityPlanner module', () => {
     expect(within(ct1Row).getByText('Contrato Alpha')).toBeInTheDocument();
     // Ana is assigned to ct1 via assignment a1 (rr1). Her name should appear
     // in contract cells for weeks 0..7.
+    // Bars now include the % label ("Ana García · 50%"), so we use a regex.
     for (let i = 0; i <= 7; i += 1) {
-      expect(within(screen.getByTestId(`contract-cell-ct1-${i}`)).getByText('Ana García')).toBeInTheDocument();
+      expect(within(screen.getByTestId(`contract-cell-ct1-${i}`)).getByText(/Ana García/)).toBeInTheDocument();
     }
-    expect(within(screen.getByTestId(`contract-cell-ct1-8`)).queryByText('Ana García')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId(`contract-cell-ct1-8`)).queryByText(/Ana García/)).not.toBeInTheDocument();
   });
 
   it('projects view renders unfilled requests with dashed "Sin asignar" bars', async () => {
