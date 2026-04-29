@@ -150,6 +150,58 @@ Tres cambios coordinados en `fix/assignments-notify-poisons-txn`:
 
 ---
 
+## INC-003 — Empleados ausentes del dropdown de "Nueva asignación" por cap silencioso de paginación
+
+**Severidad:** P1 — funcionalidad crítica del módulo Capacity rota para un subset de empleados (los del final del alfabeto).
+**Fecha:** 2026-04-29.
+**Duración:** detectado el mismo día del reporte; primer fix aplicado al `notify` (INC-002) resultó adyacente; este fix corrige la causa real.
+**Reportado por:** Daniel Villa Camacho — incluso después del fix de INC-002, los 5 empleados (Alejandro Vertel, Andrés Vasquez, Samuel Solano, Lorenzo Reinso, Juan Uni) seguían sin poder ser asignados.
+
+### Síntoma
+
+En el formulario "Nueva asignación", al buscar a esos 5 empleados en el combobox de empleado, el resultado era **"Sin coincidencias"**. En la página `/empleados` aparecían normales, con status `active`. No había error en el backend — el frontend simplemente no los listaba como opciones.
+
+### Causa raíz
+
+`server/utils/sanitize.js → parsePagination()` define **`maxLimit = 100`** como default, y aplica:
+
+```js
+const limit = Math.min(Math.max(limitRaw, 1), maxLimit);
+```
+
+El frontend pedía `/api/employees?limit=500` esperando recibir todos los empleados, pero el server **silenciosamente** capaba el limit a 100 sin emitir warning ni bandera. La query corría con `LIMIT 100 ORDER BY last_name, first_name`, devolviendo solo el top 100 alfabético.
+
+Los 5 empleados afectados tienen apellidos **R**einso, **S**olano, **U**ni, **V**asquez, **V**ertel — todos al final de la lista ordenada — y por eso caían fuera del top 100. Con ~110-130 empleados en producción, ese era exactamente el corte. Mismo patrón con `/api/resource-requests?limit=500` para el dropdown de Solicitud.
+
+INC-002 (notify dentro de txn) era un bug **adyacente** real, pero no era la causa del síntoma reportado. El fix de INC-002 protege el sistema de un futuro fallo silencioso de FK pero no podía resolver INC-003.
+
+### Fix
+
+1. **Endpoints `/lookup` dedicados, sin paginación:**
+   - `GET /api/employees/lookup` — todos los empleados no eliminados; excluye `terminated` por default; `?include_terminated=true` para casos legítimos (reportes históricos).
+   - `GET /api/resource-requests/lookup` — todos los requests `open`/`partially_filled`; `?contract_id=` opcional para filtrar; `?include_all=true` levanta el filtro.
+2. **Frontend (`client/src/modules/Assignments.js`):** `loadLookups()` ahora llama a los nuevos endpoints. Comentario explica por qué — para que nadie regrese al endpoint paginado pensando que "subir el limit" basta.
+3. **Defense-in-depth:** se mantienen los filtros client-side `filter(filled/cancelled)` y `filter(terminated)` aunque el server ya filtra. Si un día se cambia el server, la UI no se rompe.
+
+### Aprendizajes
+
+- **Caps silenciosos son mentiras del API.** Si `limit=500` no devuelve 500, el endpoint debe (a) responder 400 "limit excede el máximo", (b) devolver el top N pero con un campo `pagination.capped: true` visible, o (c) ser explícito en docs. No "Math.min" callado.
+- **Lookups y listados son endpoints distintos.** Un dropdown necesita TODO el universo (id + label + un par de campos para filtrar). Una tabla necesita paginación. Mezclarlos en el mismo endpoint con un `limit` configurable lleva a esto.
+- **"El bug está donde más se siente"**: los 5 empleados afectados no estaban "rotos", estaban ordenados alfabéticamente al final. El patrón "5 personas específicas" debió hacer pensar más en *ordenamiento + cap* y no solo en *FK roto*. Pero el segundo era visible en el código del POST y el primero era invisible (en un util genérico). Lección: cuando hay un patrón de subset, mirar también qué los une **fuera del recurso afectado** (apellidos al final del alfabeto, IDs altos, fechas recientes, etc.).
+
+### Acciones derivadas
+
+- [ ] Migrar otros dropdowns con cap potencial a endpoints `/lookup`: `/api/clients` (en `Contracts.js`), `/api/contracts` (en `ResourceRequests.js`), `/api/resource-requests?contract_id=` (en `ContractDetail.js` — probablemente seguro porque está filtrado por contract, pero validar).
+- [ ] `parsePagination`: cambiar el `Math.min` callado por una respuesta explícita o un warning header (`X-Limit-Capped: true`).
+- [ ] Agregar a `docs/CONVENTIONS.md` la guía: "Endpoints de selector → `/<resource>/lookup`, no `/<resource>?limit=N`".
+- [ ] Lint custom o code review: detectar `apiGet(...?limit=NNN)` y sugerir migrar a `/lookup` si es para un selector.
+
+### Prevención
+
+- **Test de regresión** (`employees.test.js`, `resource_requests.test.js`): los nuevos tests "returns ALL ... no pagination cap" mockean 250 filas y verifican que el endpoint `/lookup` devuelve los 250. Si alguien aplica accidentalmente `parsePagination` al `/lookup`, esos tests rompen inmediatamente.
+
+---
+
 ## Cómo agregar un incidente a este registro
 
 Cuando ocurre algo que afecta usuarios reales (no un bug menor):
