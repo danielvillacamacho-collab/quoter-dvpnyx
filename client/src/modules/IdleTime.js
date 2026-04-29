@@ -24,9 +24,9 @@ const ds = {
   btn: { background: 'var(--ds-accent, var(--purple-dark))', color: '#fff', border: 'none', borderRadius: 'var(--ds-radius, 6px)', padding: '8px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600 },
   btnGhost: { background: 'transparent', color: 'var(--ds-accent)', border: '1px solid var(--ds-border)', borderRadius: 'var(--ds-radius, 6px)', padding: '7px 12px', cursor: 'pointer', fontSize: 13 },
   bar: { display: 'flex', height: 24, borderRadius: 4, overflow: 'hidden', marginBottom: 8 },
-  barSeg: (color, pct, label) => ({ background: color, flex: pct, minWidth: pct > 0 ? 2 : 0, color: '#fff', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', whiteSpace: 'nowrap' }),
+  barSeg: (color, pct) => ({ background: color, flex: pct, minWidth: pct > 0 ? 2 : 0, color: '#fff', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', whiteSpace: 'nowrap' }),
   legend: { display: 'flex', flexWrap: 'wrap', gap: 12, fontSize: 12, marginBottom: 16 },
-  legendItem: (color) => ({ display: 'flex', alignItems: 'center', gap: 6 }),
+  legendItem: () => ({ display: 'flex', alignItems: 'center', gap: 6 }),
   legendDot: (color) => ({ width: 10, height: 10, borderRadius: 2, background: color }),
 };
 

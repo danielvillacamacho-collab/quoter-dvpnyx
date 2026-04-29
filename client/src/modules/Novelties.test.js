@@ -29,13 +29,19 @@ beforeEach(() => {
 describe('Novelties', () => {
   it('renderiza header', async () => {
     mount();
-    expect(await screen.findByText(/Novedades/i)).toBeInTheDocument();
+    // h1 "🟢 Novedades" — único, usamos role heading para no chocar con
+    // el botón "+ Registrar novedad" ni con options del select.
+    expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
   it('lista novedades del API', async () => {
     mount();
-    expect(await screen.findByText(/Vacaciones/)).toBeInTheDocument();
-    expect(screen.getByText(/Diego M/)).toBeInTheDocument();
+    // Diego M es único (solo aparece en la card de la novedad listada).
+    expect(await screen.findByText(/Diego M/)).toBeInTheDocument();
+    // 'Vacaciones' aparece tanto en options del select como en la card,
+    // así que findAllByText es lo correcto.
+    const vacationMatches = await screen.findAllByText(/Vacaciones/);
+    expect(vacationMatches.length).toBeGreaterThan(0);
   });
 
   it('llama apiGet de _meta/types al montar', async () => {

@@ -23,7 +23,8 @@ beforeEach(() => {
 describe('InternalInitiatives', () => {
   it('renderiza header', async () => {
     mount();
-    expect(await screen.findByText(/Iniciativas Internas/i)).toBeInTheDocument();
+    // h1 es único; el subtitle también incluye "iniciativas internas".
+    expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
   });
 
   it('lista las iniciativas devueltas por API', async () => {
