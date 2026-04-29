@@ -783,14 +783,23 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
   );
 }
 
-function ProjectsView({ projects, weeks, onOpenCandidates, onOpen }) {
-  if (projects.length === 0) {
-    return <div style={s.empty}>No hay proyectos en el rango seleccionado.</div>;
+function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch }) {
+  // Filtro client-side por nombre de contrato o cliente.
+  const needle = (projectSearch || '').toLowerCase().trim();
+  const visible = needle
+    ? projects.filter((b) =>
+        (b.contract.name || '').toLowerCase().includes(needle) ||
+        (b.contract.client_name || '').toLowerCase().includes(needle)
+      )
+    : projects;
+
+  if (visible.length === 0) {
+    return <div style={s.empty}>{needle ? `Sin resultados para "${projectSearch}".` : 'No hay proyectos en el rango seleccionado.'}</div>;
   }
 
   // Leyenda de áreas: recoge las áreas únicas visibles en este viewport.
   const areaMap = new Map();
-  for (const bucket of projects) {
+  for (const bucket of visible) {
     for (const a of bucket.summary) {
       if (a.employee_area_id && !areaMap.has(a.employee_area_id)) {
         areaMap.set(a.employee_area_id, a.employee_area_name || `Área ${a.employee_area_id}`);
@@ -819,7 +828,7 @@ function ProjectsView({ projects, weeks, onOpenCandidates, onOpen }) {
           ))}
         </div>
       )}
-      {projects.map((bucket) => (
+      {visible.map((bucket) => (
         <React.Fragment key={bucket.contract.id}>
           <ContractRow bucket={bucket} weeks={weeks} onOpen={onOpen} />
           {bucket.requests.map((entry) => (
@@ -855,7 +864,8 @@ export default function CapacityPlanner() {
   const areaId     = searchParams.get('area_id')     || '';
   const levelMin   = searchParams.get('level_min')   || '';
   const levelMax   = searchParams.get('level_max')   || '';
-  const search     = searchParams.get('search')      || '';
+  const search        = searchParams.get('search')         || '';
+  const projectSearch = searchParams.get('project_search') || '';
   // US-PLN-4: view toggle. 'employees' (default) or 'projects'. The param
   // rides along with the other filters so sharing a link keeps the angle.
   const view       = searchParams.get('view') === 'projects' ? 'projects' : 'employees';
@@ -954,7 +964,7 @@ export default function CapacityPlanner() {
           <button
             type="button"
             style={s.toggleBtn(view === 'employees')}
-            onClick={() => patchParams({ view: '' })}
+            onClick={() => patchParams({ view: '', project_search: '' })}
             data-testid="view-toggle-employees"
             aria-pressed={view === 'employees'}
           >
@@ -1008,12 +1018,15 @@ export default function CapacityPlanner() {
           {['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => <option key={l} value={l}>{l}</option>)}
         </select>
 
-        {(contractId || areaId || levelMin || levelMax || search) && (
-          <button type="button" style={s.btn} onClick={() => patchParams({ contract_id: '', area_id: '', level_min: '', level_max: '', search: '' })}>Limpiar filtros</button>
+        {(contractId || areaId || levelMin || levelMax || search || projectSearch) && (
+          <button type="button" style={s.btn} onClick={() => patchParams({ contract_id: '', area_id: '', level_min: '', level_max: '', search: '', project_search: '' })}>Limpiar filtros</button>
         )}
 
         {view === 'employees' && (
           <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => patchParams({ search: e.target.value })} aria-label="Buscar empleado" />
+        )}
+        {view === 'projects' && (
+          <input style={s.input} type="search" placeholder="Buscar proyecto…" value={projectSearch} onChange={(e) => patchParams({ project_search: e.target.value })} aria-label="Buscar proyecto" />
         )}
       </div>
 
@@ -1063,6 +1076,7 @@ export default function CapacityPlanner() {
                   weeks={wks}
                   onOpenCandidates={(rid) => setOpenCandidatesFor(rid)}
                   onOpen={setEditingAssignmentId}
+                  projectSearch={projectSearch}
                 />
               )}
             </div>
