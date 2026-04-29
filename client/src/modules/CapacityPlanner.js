@@ -29,6 +29,28 @@ const LEFT_COL_WIDTH = 220;
  * fallback is kept so existing snapshots / downstream consumers that
  * predate the tokens don't silently break.
  */
+// Paleta de colores por área — usada en la vista Proyectos para distinguir
+// de un vistazo qué especialidad aporta cada persona a cada contrato.
+const AREA_PALETTE = [
+  '#2563EB', // azul    — Desarrollo
+  '#7C3AED', // violeta — Diseño / UX
+  '#059669', // verde   — QA / Testing
+  '#D97706', // ámbar   — Data / Analytics
+  '#DC2626', // rojo    — DevOps / Infra
+  '#0891B2', // cian    — Producto
+  '#9333EA', // púrpura — Mobile
+  '#65A30D', // lima    — Backend
+  '#EA580C', // naranja — Frontend
+  '#4F46E5', // índigo  — FullStack
+];
+function areaColorFor(areaId) {
+  if (!areaId) return '#6B7280'; // gris neutro para "sin área"
+  // IDs de área son enteros pequeños; offset de 3 para no coincidir
+  // con los colores de contrato en casos donde ambos aparecen juntos.
+  const idx = ((Number(areaId) - 1 + 3) % AREA_PALETTE.length + AREA_PALETTE.length) % AREA_PALETTE.length;
+  return AREA_PALETTE[idx];
+}
+
 const BUCKET_STYLES = {
   idle:       { bg: 'var(--ds-bg-soft, #f4f5f7)',  color: 'var(--ds-text-dim, #6b7280)' },
   light:      { bg: 'var(--ds-warn-soft, #fff4dd)', color: 'oklch(0.45 0.12 80)' },
@@ -566,7 +588,7 @@ function buildProjectsView(data) {
     for (const a of e.assignments || []) {
       const bucket = byId.get(a.contract_id);
       if (!bucket) continue;
-      const enriched = { ...a, employee_id: e.id, employee_name: e.full_name, employee_capacity: e.weekly_capacity_hours };
+      const enriched = { ...a, employee_id: e.id, employee_name: e.full_name, employee_capacity: e.weekly_capacity_hours, employee_area_id: e.area_id, employee_area_name: e.area_name };
       bucket.summary.push(enriched);
       const rid = a.resource_request_id;
       if (rid) {
@@ -631,17 +653,18 @@ function ContractRow({ bucket, weeks, onOpen }) {
               const cap = Number(a.employee_capacity) || 0;
               const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
               const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+              const barColor = areaColorFor(a.employee_area_id);
               return (
                 <div
                   key={`${a.id}-${i}`}
-                  style={{ ...s.bar(a.color || bucket.contract.color || '#6B5B95'), cursor: onOpen ? 'pointer' : 'default' }}
-                  title={`${a.employee_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
+                  style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name}${a.employee_area_name ? ` · ${a.employee_area_name}` : ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
                   role={onOpen ? 'button' : undefined}
                   tabIndex={onOpen ? 0 : undefined}
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  {a.employee_name} · {pctStr}
+                  {a.employee_name} · {a.weekly_hours}h · {pctStr}
                 </div>
               );
             })}
@@ -709,17 +732,18 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
               const cap = Number(a.employee_capacity) || 0;
               const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
               const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+              const barColor = areaColorFor(a.employee_area_id);
               return (
                 <div
                   key={`${a.id}-${i}`}
-                  style={{ ...s.bar(a.color || bucket.contract.color || '#6B5B95'), cursor: onOpen ? 'pointer' : 'default' }}
-                  title={`${a.employee_name} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
+                  style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name}${a.employee_area_name ? ` · ${a.employee_area_name}` : ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
                   role={onOpen ? 'button' : undefined}
                   tabIndex={onOpen ? 0 : undefined}
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  {a.employee_name} · {pctStr}
+                  {a.employee_name} · {a.weekly_hours}h · {pctStr}
                 </div>
               );
             })}
@@ -739,8 +763,38 @@ function ProjectsView({ projects, weeks, onOpenCandidates, onOpen }) {
   if (projects.length === 0) {
     return <div style={s.empty}>No hay proyectos en el rango seleccionado.</div>;
   }
+
+  // Leyenda de áreas: recoge las áreas únicas visibles en este viewport.
+  const areaMap = new Map();
+  for (const bucket of projects) {
+    for (const a of bucket.summary) {
+      if (a.employee_area_id && !areaMap.has(a.employee_area_id)) {
+        areaMap.set(a.employee_area_id, a.employee_area_name || `Área ${a.employee_area_id}`);
+      }
+    }
+    for (const entry of bucket.requests) {
+      for (const a of entry.assignments) {
+        if (a.employee_area_id && !areaMap.has(a.employee_area_id)) {
+          areaMap.set(a.employee_area_id, a.employee_area_name || `Área ${a.employee_area_id}`);
+        }
+      }
+    }
+  }
+  const areaLegend = Array.from(areaMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+
   return (
     <>
+      {areaLegend.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, padding: '6px 0 10px', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: 'var(--ds-text-dim, #888)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Áreas:</span>
+          {areaLegend.map(([areaId, areaName]) => (
+            <div key={areaId} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: areaColorFor(areaId), display: 'inline-block', flexShrink: 0 }} />
+              <span style={{ color: 'var(--ds-text, #1b1b1b)' }}>{areaName}</span>
+            </div>
+          ))}
+        </div>
+      )}
       {projects.map((bucket) => (
         <React.Fragment key={bucket.contract.id}>
           <ContractRow bucket={bucket} weeks={weeks} onOpen={onOpen} />
