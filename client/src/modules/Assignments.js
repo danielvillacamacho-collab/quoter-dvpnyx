@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 import AssignmentValidationModal from './AssignmentValidationModal';
 import AssignmentValidationInline from './AssignmentValidationInline';
@@ -13,16 +13,26 @@ const s = {
   card:   { background: '#fff', borderRadius: 12, border: '1px solid var(--border)', padding: 20, marginBottom: 16 },
   btn: (c = 'var(--purple-dark)') => ({ background: c, color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'Montserrat' }),
   btnOutline: { background: 'transparent', color: 'var(--purple-dark)', border: '1px solid var(--purple-dark)', borderRadius: 8, padding: '7px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
-  input:  { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, outline: 'none' },
+  input:  { width: '100%', padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 14, outline: 'none', boxSizing: 'border-box' },
   label:  { fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 4, display: 'block' },
-  // UI refresh Phase 2 — table styles come from the shared design-tokens
-  // helper so every list page adopts the same density + palette at once.
   th:     dsTh,
   td:     dsTd,
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 },
-  filters:{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'end' },
+  filters:{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap', alignItems: 'flex-end' },
   modalBg:{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200 },
   modal:  { background: '#fff', borderRadius: 12, padding: 24, width: 640, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' },
+  chip:   {
+    display: 'inline-flex', alignItems: 'center', gap: 4,
+    background: 'var(--ds-accent-soft, #ede9f6)',
+    color: 'var(--ds-text, #222)',
+    borderRadius: 20, padding: '2px 8px 2px 10px',
+    fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap',
+  },
+  chipBtn: {
+    background: 'transparent', border: 'none', cursor: 'pointer',
+    padding: '0 2px', color: 'var(--text-light)', fontSize: 15,
+    lineHeight: 1, display: 'flex', alignItems: 'center',
+  },
 };
 
 const STATUSES = [
@@ -32,10 +42,6 @@ const STATUSES = [
   { value: 'cancelled', label: 'Cancelada' },
 ];
 const STATUS_LABEL = Object.fromEntries(STATUSES.map((x) => [x.value, x.label]));
-const STATUS_COLOR = {
-  planned: 'var(--purple-dark)', active: 'var(--success)',
-  ended: 'var(--teal-mid)', cancelled: 'var(--text-light)',
-};
 
 const EMPTY = {
   resource_request_id: '', employee_id: '', contract_id: '',
@@ -43,12 +49,146 @@ const EMPTY = {
   role_title: '', notes: '', status: 'planned',
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EmployeeMultiSelect — SPEC-007 Spec 1
+//
+// Autocomplete multi-select para el filtro de empleados. Soporta:
+//   - Búsqueda por nombre en tiempo real
+//   - Selección múltiple con chips removibles (✕)
+//   - Empleados terminados visibles (para historial)
+//   - Cierre al click afuera y con Escape
+// ─────────────────────────────────────────────────────────────────────────────
+function EmployeeMultiSelect({ allEmployees, selectedIds, onChange }) {
+  const [query, setQuery]   = useState('');
+  const [open, setOpen]     = useState(false);
+  const wrapperRef          = useRef(null);
+  const inputRef            = useRef(null);
+
+  const selectedEmployees = useMemo(
+    () => allEmployees.filter((e) => selectedIds.includes(e.id)),
+    [allEmployees, selectedIds],
+  );
+
+  // Excluye ya-seleccionados; filtra por query si hay texto.
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase();
+    return allEmployees
+      .filter((e) => !selectedIds.includes(e.id))
+      .filter((e) => !q || `${e.first_name} ${e.last_name}`.toLowerCase().includes(q))
+      .slice(0, 60);
+  }, [allEmployees, selectedIds, query]);
+
+  // Cierra el dropdown al click afuera.
+  useEffect(() => {
+    if (!open) return undefined;
+    const handler = (ev) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(ev.target)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const add = (id) => {
+    onChange([...selectedIds, id]);
+    setQuery('');
+    // Keep open so the user can add more without re-focusing.
+    inputRef.current?.focus();
+  };
+
+  const remove = (id) => onChange(selectedIds.filter((x) => x !== id));
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') { setOpen(false); setQuery(''); }
+  };
+
+  return (
+    <div ref={wrapperRef} style={{ position: 'relative' }}>
+      {selectedEmployees.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 4 }}>
+          {selectedEmployees.map((emp) => (
+            <span key={emp.id} style={s.chip}>
+              {emp.first_name} {emp.last_name}
+              <button
+                type="button"
+                style={s.chipBtn}
+                onClick={() => remove(emp.id)}
+                aria-label={`Quitar ${emp.first_name} ${emp.last_name}`}
+              >×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
+        placeholder={selectedIds.length ? 'Agregar empleado…' : 'Buscar empleado…'}
+        aria-label="Filtro por empleado"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        autoComplete="off"
+        style={s.input}
+      />
+      {open && (
+        <ul
+          role="listbox"
+          aria-label="Empleados"
+          style={{
+            position: 'absolute', top: '100%', left: 0, right: 0,
+            zIndex: 50, margin: '4px 0 0', padding: 0, listStyle: 'none',
+            background: 'var(--ds-surface, #fff)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            boxShadow: '0 6px 20px rgba(0,0,0,0.12)',
+            maxHeight: 220, overflowY: 'auto',
+          }}
+        >
+          {filtered.length === 0 && (
+            <li style={{ padding: '8px 12px', fontSize: 13, color: 'var(--text-light)' }}>
+              {query.trim() ? 'Sin coincidencias' : 'Sin empleados disponibles'}
+            </li>
+          )}
+          {filtered.map((emp) => (
+            <li
+              key={emp.id}
+              role="option"
+              aria-selected={false}
+              // mousedown (no click) para que el blur del input no cierre el
+              // dropdown antes de que se procese la selección.
+              onMouseDown={(e) => { e.preventDefault(); add(emp.id); }}
+              style={{
+                padding: '7px 12px', fontSize: 13, cursor: 'pointer',
+                borderTop: '1px solid var(--border)',
+              }}
+            >
+              {emp.first_name} {emp.last_name}
+              {emp.status === 'terminated' && (
+                <span style={{ fontSize: 11, color: 'var(--text-light)', marginLeft: 6 }}>
+                  (terminado)
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AssignmentForm
+// ─────────────────────────────────────────────────────────────────────────────
 function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  // When the user picks a request, auto-fill contract_id.
   const selectedRequest = requests.find((r) => r.id === form.resource_request_id);
 
   /* --- US-VAL-4: live pre-validation --------------------------------
@@ -56,14 +196,8 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
    * inputs (employee, request, hours, start_date) are populated. The
    * response drives <AssignmentValidationInline /> so the user sees
    * area/level/capacity/date feedback before hitting Save.
-   *
-   * On edit we pass `ignore_assignment_id` so the endpoint excludes
-   * the current assignment from the committed-hours sum — otherwise
-   * we'd double-count the user's own hours and report false positives.
    */
-  const [preVal, setPreVal] = useState({
-    loading: false, validation: null, error: null,
-  });
+  const [preVal, setPreVal] = useState({ loading: false, validation: null, error: null });
   const hasInputs = Boolean(
     form.resource_request_id && form.employee_id &&
     Number(form.weekly_hours) > 0 && form.start_date,
@@ -76,10 +210,10 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
     let cancelled = false;
     setPreVal((p) => ({ ...p, loading: true, error: null }));
     const qs = new URLSearchParams({
-      employee_id: form.employee_id,
-      request_id:  form.resource_request_id,
+      employee_id:  form.employee_id,
+      request_id:   form.resource_request_id,
       weekly_hours: String(form.weekly_hours),
-      start_date: String(form.start_date).slice(0, 10),
+      start_date:   String(form.start_date).slice(0, 10),
     });
     if (form.end_date) qs.set('end_date', String(form.end_date).slice(0, 10));
     if (initial?.id) qs.set('ignore_assignment_id', initial.id);
@@ -88,11 +222,9 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
         const v = await apiGet(`/api/assignments/validate?${qs.toString()}`);
         if (!cancelled) setPreVal({ loading: false, validation: v, error: null });
       } catch (ex) {
-        if (!cancelled) {
-          setPreVal({ loading: false, validation: null, error: ex.message || 'Error' });
-        }
+        if (!cancelled) setPreVal({ loading: false, validation: null, error: ex.message || 'Error' });
       }
-    }, 350); // debounce
+    }, 350);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [
     hasInputs,
@@ -139,8 +271,6 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
             id: r.id,
             label: `${r.role_title} · ${r.contract_name}`,
             hint: `Nivel ${r.level} · ${r.quantity} cupos · ${r.active_assignments_count ?? 0} activos`,
-            // searchText: incluye contract+role+nivel para que el usuario
-            // pueda escribir "alpha", "L4" o "backend" indistintamente.
             searchText: `${r.role_title} ${r.contract_name} ${r.level}`,
           }))}
         />
@@ -213,22 +343,60 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Assignments — página principal
+// ─────────────────────────────────────────────────────────────────────────────
 export default function Assignments() {
-  const [state, setState] = useState({ data: [], loading: true, page: 1, total: 0, pages: 1 });
+  const [state, setState]               = useState({ data: [], loading: true, page: 1, total: 0, pages: 1 });
   const [statusFilter, setStatusFilter] = useState('');
-  const [requests, setRequests] = useState([]);
-  const [employees, setEmployees] = useState([]);
-  const [showForm, setShowForm] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [validationModal, setValidationModal] = useState(null); // { validation, advisories, pendingForm }
 
+  // SPEC-007: nuevos filtros
+  const [employeeIds, setEmployeeIds]   = useState([]);   // Spec 1: multi-empleado
+  const [dateFrom, setDateFrom]         = useState('');   // Spec 2: fecha desde
+  const [dateTo, setDateTo]             = useState('');   // Spec 2: fecha hasta
+  const [dateError, setDateError]       = useState('');
+
+  const [requests, setRequests]               = useState([]);
+  const [employees, setEmployees]             = useState([]);   // para el form (sin terminados)
+  const [filterEmployees, setFilterEmployees] = useState([]);   // para el filtro (todos, inc. terminados)
+  const [showForm, setShowForm]               = useState(false);
+  const [editing, setEditing]                 = useState(null);
+  const [saving, setSaving]                   = useState(false);
+  const [validationModal, setValidationModal] = useState(null);
+
+  // ── Validación de rango de fechas ─────────────────────────────────────────
+  const validateDateRange = useCallback((from, to) => {
+    if (from && to && from > to) {
+      setDateError('La fecha de inicio no puede ser posterior a la fecha de fin');
+      return false;
+    }
+    setDateError('');
+    return true;
+  }, []);
+
+  const handleDateFrom = (v) => {
+    setDateFrom(v);
+    validateDateRange(v, dateTo);
+  };
+
+  const handleDateTo = (v) => {
+    setDateTo(v);
+    validateDateRange(dateFrom, v);
+  };
+
+  // ── Carga de datos ────────────────────────────────────────────────────────
   const load = useCallback(async (page = 1) => {
+    // No ejecutar si el rango de fechas es inválido.
+    if (dateFrom && dateTo && dateFrom > dateTo) return;
+
     setState((x) => ({ ...x, loading: true }));
     const qs = new URLSearchParams();
     qs.set('page', String(page));
     qs.set('limit', '25');
-    if (statusFilter) qs.set('status', statusFilter);
+    if (statusFilter)         qs.set('status', statusFilter);
+    if (employeeIds.length)   qs.set('employee_ids', employeeIds.join(','));
+    if (dateFrom)             qs.set('date_from', dateFrom);
+    if (dateTo)               qs.set('date_to', dateTo);
     try {
       const r = await apiGet(`/api/assignments?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -237,38 +405,42 @@ export default function Assignments() {
       // eslint-disable-next-line no-alert
       alert('Error cargando asignaciones: ' + e.message);
     }
-  }, [statusFilter]);
+  }, [statusFilter, employeeIds, dateFrom, dateTo]);
 
+  // INC-003: usar /lookup (sin paginación) para los combobox del formulario
+  // y para la lista de empleados del filtro. Separamos ambos usos:
+  //   - filterEmployees → todos (inc. terminados) para consultar historial
+  //   - employees       → activos únicamente para el formulario de asignación
   const loadLookups = useCallback(async () => {
-    // INC-003: usar los endpoints /lookup (sin paginación). Los GET
-    // paginados siempre se capan a maxLimit=100 dentro de
-    // parsePagination, por lo que `?limit=500` se ignoraba en silencio
-    // y los empleados/solicitudes con apellido al final del alfabeto
-    // (Reinso, Solano, Uni, Vasquez, Vertel) nunca aparecían en los
-    // combobox del formulario de asignación.
     try {
       const [rr, re] = await Promise.all([
         apiGet('/api/resource-requests/lookup'),
         apiGet('/api/employees/lookup'),
       ]);
-      // /lookup ya excluye filled/cancelled (requests) y terminated
-      // (employees) en el server, pero conservamos el filtro client-side
-      // como defense-in-depth.
       setRequests((rr?.data || []).filter((r) => !['filled', 'cancelled'].includes(r.status)));
-      setEmployees((re?.data || []).filter((e) => e.status !== 'terminated'));
+      const allEmps = re?.data || [];
+      setFilterEmployees(allEmps);
+      setEmployees(allEmps.filter((e) => e.status !== 'terminated'));
     } catch {
-      setRequests([]); setEmployees([]);
+      setRequests([]); setEmployees([]); setFilterEmployees([]);
     }
   }, []);
 
   useEffect(() => { load(1); }, [load]);
   useEffect(() => { loadLookups(); }, [loadLookups]);
 
-  /**
-   * Submit the form. On a validation 409 we surface the modal with the
-   * structured checklist so the user can either close (non-overridable)
-   * or provide a justification (overridable → retry with override_reason).
-   */
+  // ── Limpiar todos los filtros ──────────────────────────────────────────────
+  const clearFilters = () => {
+    setStatusFilter('');
+    setEmployeeIds([]);
+    setDateFrom('');
+    setDateTo('');
+    setDateError('');
+  };
+
+  const hasActiveFilters = statusFilter || employeeIds.length || dateFrom || dateTo;
+
+  // ── Guardado / override ───────────────────────────────────────────────────
   const persist = useCallback(async (form, editingId) => {
     if (editingId) return apiPut(`/api/assignments/${editingId}`, form);
     return apiPost('/api/assignments', form);
@@ -285,7 +457,6 @@ export default function Assignments() {
     } catch (e) {
       const isValidation409 = e?.status === 409 && e?.body && Array.isArray(e.body.checks);
       if (isValidation409) {
-        // Derive a validation payload compatible with the modal.
         const validation = {
           valid: false,
           can_override: e.body.code === 'OVERRIDE_REQUIRED',
@@ -296,7 +467,7 @@ export default function Assignments() {
         setValidationModal({ validation, advisories: e.body.advisories || [], pendingForm: form });
         return;
       }
-      throw e; // Let the form surface the message
+      throw e;
     } finally { setSaving(false); }
   };
 
@@ -314,7 +485,7 @@ export default function Assignments() {
 
   const onDelete = async (a) => {
     // eslint-disable-next-line no-alert
-    if (!window.confirm(`¿Eliminar asignación? (si tiene time entries, se convertirá en cancelación + soft delete para preservar historia)`)) return;
+    if (!window.confirm('¿Eliminar asignación? (si tiene time entries, se convertirá en cancelación + soft delete para preservar historia)')) return;
     try {
       const res = await apiDelete(`/api/assignments/${a.id}`);
       // eslint-disable-next-line no-alert
@@ -326,6 +497,25 @@ export default function Assignments() {
     }
   };
 
+  // ── Descarga CSV: propaga los filtros activos ──────────────────────────────
+  const onExportCsv = async () => {
+    try {
+      const qs = new URLSearchParams();
+      if (statusFilter)       qs.set('status', statusFilter);
+      if (employeeIds.length) qs.set('employee_ids', employeeIds.join(','));
+      if (dateFrom)           qs.set('date_from', dateFrom);
+      if (dateTo)             qs.set('date_to', dateTo);
+      await apiDownload(
+        `/api/assignments/export.csv${qs.toString() ? `?${qs}` : ''}`,
+        'asignaciones.csv',
+      );
+    } catch (e) {
+      // eslint-disable-next-line no-alert
+      alert(`No se pudo descargar: ${e.message}`);
+    }
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div style={s.page}>
       <div style={s.header}>
@@ -343,16 +533,7 @@ export default function Assignments() {
               borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 600,
               cursor: 'pointer', fontFamily: 'Montserrat',
             }}
-            onClick={async () => {
-              try {
-                const qs = new URLSearchParams();
-                if (statusFilter) qs.set('status', statusFilter);
-                await apiDownload(`/api/assignments/export.csv${qs.toString() ? `?${qs}` : ''}`, 'asignaciones.csv');
-              } catch (e) {
-                // eslint-disable-next-line no-alert
-                alert(`No se pudo descargar: ${e.message}`);
-              }
-            }}
+            onClick={onExportCsv}
             data-testid="assignments-export-csv"
           >
             ⤓ Descargar CSV
@@ -364,16 +545,83 @@ export default function Assignments() {
       </div>
 
       <div style={s.card}>
+        {/* ── Barra de filtros ────────────────────────────────────────────── */}
         <div style={s.filters}>
-          <div style={{ minWidth: 160 }}>
+
+          {/* Filtro por estado (existente) */}
+          <div style={{ minWidth: 150 }}>
             <label style={s.label}>Estado</label>
-            <select style={s.input} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtro por estado">
+            <select
+              style={s.input}
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filtro por estado"
+            >
               <option value="">Todos</option>
               {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
             </select>
           </div>
+
+          {/* SPEC-007 Spec 1: Filtro por empleado (multi-select) */}
+          <div style={{ minWidth: 220, flex: 2 }}>
+            <label style={s.label}>Empleado</label>
+            <EmployeeMultiSelect
+              allEmployees={filterEmployees}
+              selectedIds={employeeIds}
+              onChange={setEmployeeIds}
+            />
+          </div>
+
+          {/* SPEC-007 Spec 2: Fecha desde */}
+          <div style={{ minWidth: 140 }}>
+            <label style={s.label}>Desde</label>
+            <input
+              type="date"
+              style={s.input}
+              value={dateFrom}
+              onChange={(e) => handleDateFrom(e.target.value)}
+              aria-label="Filtro fecha desde"
+            />
+          </div>
+
+          {/* SPEC-007 Spec 2: Fecha hasta */}
+          <div style={{ minWidth: 140 }}>
+            <label style={s.label}>Hasta</label>
+            <input
+              type="date"
+              style={s.input}
+              value={dateTo}
+              onChange={(e) => handleDateTo(e.target.value)}
+              aria-label="Filtro fecha hasta"
+            />
+          </div>
+
+          {/* Limpiar filtros */}
+          {hasActiveFilters && (
+            <div style={{ alignSelf: 'flex-end' }}>
+              <button
+                type="button"
+                style={{ ...s.btnOutline, fontSize: 12, padding: '7px 12px' }}
+                onClick={clearFilters}
+                aria-label="Limpiar filtros"
+              >
+                ✕ Limpiar filtros
+              </button>
+            </div>
+          )}
         </div>
 
+        {/* Error de rango de fechas */}
+        {dateError && (
+          <div
+            role="alert"
+            style={{ color: 'var(--danger)', fontSize: 12, marginBottom: 8 }}
+          >
+            {dateError}
+          </div>
+        )}
+
+        {/* ── Tabla ───────────────────────────────────────────────────────── */}
         <div style={{ overflowX: 'auto' }}>
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
@@ -388,9 +636,11 @@ export default function Assignments() {
                 <tr><td colSpan={8} style={{ ...s.td, textAlign: 'center', color: 'var(--text-light)' }}>Cargando…</td></tr>
               )}
               {!state.loading && state.data.length === 0 && (
-                <tr><td colSpan={8} style={{ ...s.td, textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>
-                  Sin asignaciones todavía.
-                </td></tr>
+                <tr>
+                  <td colSpan={8} style={{ ...s.td, textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>
+                    No se encontraron asignaciones con los filtros aplicados.
+                  </td>
+                </tr>
               )}
               {state.data.map((a) => (
                 <tr key={a.id}>
@@ -404,12 +654,16 @@ export default function Assignments() {
                     <StatusBadge domain="assignment" value={a.status} label={STATUS_LABEL[a.status]} />
                   </td>
                   <td style={{ ...s.td, whiteSpace: 'nowrap' }}>
-                    <button style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, marginRight: 4 }}
-                            onClick={() => { setEditing(a); setShowForm(true); }}
-                            aria-label={`Editar asignación de ${a.employee_first_name} ${a.employee_last_name}`}>Editar</button>
-                    <button style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }}
-                            onClick={() => onDelete(a)}
-                            aria-label={`Eliminar asignación de ${a.employee_first_name} ${a.employee_last_name}`}>Eliminar</button>
+                    <button
+                      style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, marginRight: 4 }}
+                      onClick={() => { setEditing(a); setShowForm(true); }}
+                      aria-label={`Editar asignación de ${a.employee_first_name} ${a.employee_last_name}`}
+                    >Editar</button>
+                    <button
+                      style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                      onClick={() => onDelete(a)}
+                      aria-label={`Eliminar asignación de ${a.employee_first_name} ${a.employee_last_name}`}
+                    >Eliminar</button>
                   </td>
                 </tr>
               ))}
@@ -417,6 +671,7 @@ export default function Assignments() {
           </table>
         </div>
 
+        {/* ── Paginación ─────────────────────────────────────────────────── */}
         {state.pages > 1 && (
           <div style={{ marginTop: 12, display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center' }}>
             <button style={s.btnOutline} disabled={state.page <= 1} onClick={() => load(state.page - 1)}>← Anterior</button>
@@ -428,6 +683,7 @@ export default function Assignments() {
         )}
       </div>
 
+      {/* ── Modal de formulario ──────────────────────────────────────────── */}
       {showForm && (
         <div style={s.modalBg} role="dialog" aria-modal="true">
           <div style={s.modal}>
@@ -443,6 +699,7 @@ export default function Assignments() {
         </div>
       )}
 
+      {/* ── Modal de validación con override ────────────────────────────── */}
       {validationModal && (
         <AssignmentValidationModal
           validation={validationModal.validation}

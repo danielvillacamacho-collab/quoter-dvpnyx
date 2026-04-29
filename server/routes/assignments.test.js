@@ -584,3 +584,165 @@ describe('GET /api/assignments/export.csv', () => {
     expect(res.status).toBe(500);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEC-007 — Filtros por empleado y rango de fechas
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('GET /api/assignments — SPEC-007 filtro por empleado', () => {
+  // Each paginated list call triggers two queries: COUNT then SELECT.
+  const pushList = (rows = []) => {
+    queryQueue.push({ rows: [{ total: rows.length }] });
+    queryQueue.push({ rows });
+  };
+
+  it('filters by single employee_id (backward-compat param)', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?employee_id=e1');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('e1');
+    expect(q.sql).toMatch(/a\.employee_id\s*=\s*\$\d+/);
+  });
+
+  it('filters by employee_ids (comma-separated, OR logic)', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?employee_ids=e1,e2');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('e1');
+    expect(q.params).toContain('e2');
+    expect(q.sql).toMatch(/a\.employee_id\s+IN\s*\(/);
+  });
+
+  it('deduplicates when employee_id and employee_ids overlap', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?employee_id=e1&employee_ids=e1,e2');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    // e1 must appear exactly once in the bound params
+    expect(q.params.filter((p) => p === 'e1')).toHaveLength(1);
+    expect(q.params).toContain('e2');
+  });
+
+  it('returns 200 with empty data when no assignments match the employee', async () => {
+    pushList([]);
+    const res = await client.call('GET', '/api/assignments?employee_ids=nobody');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+    expect(res.body.pagination.total).toBe(0);
+  });
+});
+
+describe('GET /api/assignments — SPEC-007 filtro por rango de fechas', () => {
+  const pushList = (rows = []) => {
+    queryQueue.push({ rows: [{ total: rows.length }] });
+    queryQueue.push({ rows });
+  };
+
+  it('returns 400 for an invalid date_from value', async () => {
+    const res = await client.call('GET', '/api/assignments?date_from=not-a-date');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/date_from/);
+  });
+
+  it('returns 400 for an invalid date_to value', async () => {
+    const res = await client.call('GET', '/api/assignments?date_to=31-13-2026');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/date_to/);
+  });
+
+  it('returns 400 for a logically impossible date (e.g. Feb 30)', async () => {
+    const res = await client.call('GET', '/api/assignments?date_from=2026-02-30');
+    expect(res.status).toBe(400);
+  });
+
+  it('date_from only → end_date IS NULL OR end_date >= date_from', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?date_from=2026-05-01');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('2026-05-01');
+    // The generated SQL must check NULL or >= bound
+    expect(q.sql).toMatch(/end_date IS NULL OR a\.end_date >= \$\d+::date/);
+  });
+
+  it('date_to only → start_date <= date_to', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?date_to=2026-12-31');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('2026-12-31');
+    expect(q.sql).toMatch(/a\.start_date <= \$\d+::date/);
+  });
+
+  it('both dates → full intersection (start_date <= date_to AND end_date >= date_from)', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?date_from=2026-05-01&date_to=2026-08-31');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('2026-05-01');
+    expect(q.params).toContain('2026-08-31');
+    expect(q.sql).toMatch(/end_date IS NULL OR a\.end_date >= \$\d+::date/);
+    expect(q.sql).toMatch(/a\.start_date <= \$\d+::date/);
+  });
+
+  it('returns 200 empty list when no assignment intersects the range', async () => {
+    pushList([]);
+    const res = await client.call('GET', '/api/assignments?date_from=2030-01-01&date_to=2030-12-31');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+  });
+});
+
+describe('GET /api/assignments — SPEC-007 filtros combinados', () => {
+  const pushList = (rows = []) => {
+    queryQueue.push({ rows: [{ total: rows.length }] });
+    queryQueue.push({ rows });
+  };
+
+  it('combines status + employee_ids + date range (AND logic)', async () => {
+    pushList();
+    const res = await client.call(
+      'GET',
+      '/api/assignments?status=active&employee_ids=e1,e2&date_from=2026-05-01&date_to=2026-08-31',
+    );
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('active');
+    expect(q.params).toContain('e1');
+    expect(q.params).toContain('e2');
+    expect(q.params).toContain('2026-05-01');
+    expect(q.params).toContain('2026-08-31');
+  });
+
+  it('employee_ids filter is respected in CSV export', async () => {
+    queryQueue.push({ rows: [
+      { id: 'a1', status: 'active', weekly_hours: 40,
+        start_date: '2026-05-01', end_date: '2026-08-01', role_title: 'Dev', notes: null,
+        created_at: '2026-05-01T00:00:00Z',
+        employee_name: 'Ana García', contract_name: 'Acme', request_role_title: 'Senior Dev' },
+    ] });
+    const res = await client.call('GET', '/api/assignments/export.csv?employee_ids=e1,e2');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT 10000/.test(r.sql));
+    expect(q.params).toContain('e1');
+    expect(q.params).toContain('e2');
+    expect(q.sql).toMatch(/IN\s*\(/);
+  });
+
+  it('date_from + date_to filters are respected in CSV export', async () => {
+    queryQueue.push({ rows: [] });
+    const res = await client.call('GET', '/api/assignments/export.csv?date_from=2026-05-01&date_to=2026-08-31');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT 10000/.test(r.sql));
+    expect(q.params).toContain('2026-05-01');
+    expect(q.params).toContain('2026-08-31');
+  });
+
+  it('CSV export returns 400 for invalid date_from', async () => {
+    const res = await client.call('GET', '/api/assignments/export.csv?date_from=bad-date');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/date_from/);
+  });
+});
