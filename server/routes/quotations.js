@@ -410,7 +410,10 @@ router.post('/:id/duplicate', async (req, res) => {
  *   POST /api/quotations/:id/export?format=xlsx|pdf
  *
  * Reglas comunes:
- *  - Solo `creado_por` o roles admin/superadmin pueden exportar.
+ *  - Pueden exportar: el creador, roles admin/superadmin, o usuarios cuya
+ *    `function` sea comercial / preventa / admin (son justamente quienes
+ *    envían la propuesta al cliente). Cualquier otro perfil (viewer,
+ *    fte_tecnico, capacity, delivery, etc.) sólo puede exportar las suyas.
  *  - Ambos formatos requieren ≥1 recurso / perfil.
  *  - El XLSX incluye desglose interno (costo/hora, buffer, margen) para
  *    fixed_scope (ops / finanzas). Para staff_aug solo muestra la
@@ -433,10 +436,22 @@ router.post('/:id/export', async (req, res) => {
     const { rows: [quot] } = await pool.query('SELECT * FROM quotations WHERE id=$1', [req.params.id]);
     if (!quot) return res.status(404).json({ error: 'Cotización no encontrada' });
 
-    // Ownership: creator, admin, superadmin. Preventa puede exportar la suya.
+    // Permisos: creador, role admin/superadmin, o function comercial/preventa/admin.
+    // El JWT puede no traer `function` si fue emitido antes de incluirlo en el
+    // payload de login — en ese caso lo resolvemos en BD para no obligar a
+    // todos los usuarios activos a re-loguearse tras el deploy del hotfix.
     const isOwner = quot.created_by === req.user.id;
-    const isAdmin = req.user.role === 'admin' || req.user.role === 'superadmin';
-    if (!isOwner && !isAdmin) {
+    const isAdminRole = req.user.role === 'admin' || req.user.role === 'superadmin';
+    let canExport = isOwner || isAdminRole;
+    if (!canExport) {
+      let userFunction = req.user.function || null;
+      if (!userFunction) {
+        const { rows: ur } = await pool.query('SELECT function FROM users WHERE id=$1', [req.user.id]);
+        userFunction = ur[0]?.function || null;
+      }
+      canExport = userFunction === 'comercial' || userFunction === 'preventa' || userFunction === 'admin';
+    }
+    if (!canExport) {
       return res.status(403).json({ error: 'Sin permiso para exportar esta cotización' });
     }
 
