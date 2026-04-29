@@ -522,12 +522,21 @@ router.post('/', adminOnly, async (req, res) => {
       });
     }
 
-    // ---- Notifications (best-effort, never blocks the mutation) ----
-    // Notify the assigned employee (if they have a linked user account)
-    // that they have a new assignment. Looks up employee.user_id +
-    // contract.name in a single join.
+    await conn.query('COMMIT');
+    res.status(201).json({ ...asg, warnings, validation });
+
+    // ---- Notifications (best-effort, AFTER commit) ----
+    // INC-002: notify() and notifyMany() must run on the pool, NOT the
+    // transaction client. If a notification INSERT throws (e.g. FK
+    // violation because employees.user_id points to a user that no
+    // longer exists), notify()'s internal try/catch swallows the JS
+    // error — but Postgres has already marked the txn ABORTED, so the
+    // subsequent COMMIT fails with "current transaction is aborted",
+    // killing the whole assignment creation. Running these *after*
+    // COMMIT against `pool` keeps notifications best-effort and
+    // prevents the txn from being poisoned.
     try {
-      const { rows: ctx } = await conn.query(
+      const { rows: ctx } = await pool.query(
         `SELECT e.user_id AS employee_user_id,
                 (e.first_name || ' ' || e.last_name) AS employee_name,
                 k.name AS contract_name,
@@ -541,7 +550,7 @@ router.post('/', adminOnly, async (req, res) => {
       if (c) {
         // The assignee — only notify if different from the actor.
         if (c.employee_user_id && c.employee_user_id !== req.user.id) {
-          await notify(conn, {
+          await notify(pool, {
             user_id: c.employee_user_id,
             type: 'assignment.created',
             title: 'Te asignaron a un proyecto',
@@ -555,7 +564,7 @@ router.post('/', adminOnly, async (req, res) => {
         // override was exercised against a request under their remit.
         if (isOverride) {
           await notifyMany(
-            conn,
+            pool,
             [c.delivery_manager_id, c.capacity_manager_id].filter((id) => id && id !== req.user.id),
             {
               type: 'assignment.overridden',
@@ -572,9 +581,6 @@ router.post('/', adminOnly, async (req, res) => {
       // eslint-disable-next-line no-console
       console.error('notify producers failed (non-fatal):', notifyErr.message);
     }
-
-    await conn.query('COMMIT');
-    res.status(201).json({ ...asg, warnings, validation });
   } catch (err) {
     await safeRollback(conn, 'transaction');
     // eslint-disable-next-line no-console
