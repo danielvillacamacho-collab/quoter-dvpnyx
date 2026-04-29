@@ -115,13 +115,25 @@ const s = {
     display: 'flex', flexDirection: 'column', gap: 3, justifyContent: 'flex-start',
     background: bg,
   }),
-  bar: (color, left, width) => ({
+  bar: (color) => ({
     background: color, color: '#fff',
-    borderRadius: 4, padding: '3px 6px',
+    borderRadius: 4, padding: '4px 6px',
     fontSize: 10, fontWeight: 600,
-    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    display: 'flex', flexDirection: 'column', gap: 1,
+    overflow: 'hidden',
     boxShadow: 'var(--ds-shadow-sm, 0 1px 2px rgba(0,0,0,.1))',
   }),
+  barName: {
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    lineHeight: 1.3,
+  },
+  barMeta: {
+    fontSize: 9, fontWeight: 400, opacity: 0.88,
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    lineHeight: 1.3,
+    fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
+    fontFeatureSettings: "'tnum'",
+  },
   chip: (bucket) => ({
     marginTop: 'auto',
     alignSelf: 'flex-start',
@@ -379,17 +391,16 @@ function AssignmentBar({ a, onOpen, capacity }) {
   const cap = Number(capacity) || 0;
   const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
   const pctStr = pctVal !== null ? `${pctVal}%` : '—';
-  const label = `${a.contract_name}${a.weekly_hours ? ` · ${a.weekly_hours}h` : ''} · ${pctStr}`;
   return (
     <div
       style={{ ...s.bar(a.color), cursor: onOpen ? 'pointer' : 'default' }}
-      title={`${a.contract_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
       role={onOpen ? 'button' : undefined}
       tabIndex={onOpen ? 0 : undefined}
       onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
     >
-      {label}
+      <span style={s.barName}>{a.contract_name}</span>
+      <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
     </div>
   );
 }
@@ -658,13 +669,13 @@ function ContractRow({ bucket, weeks, onOpen }) {
                 <div
                   key={`${a.id}-${i}`}
                   style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
-                  title={`${a.employee_name}${a.employee_area_name ? ` · ${a.employee_area_name}` : ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
                   role={onOpen ? 'button' : undefined}
                   tabIndex={onOpen ? 0 : undefined}
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  {a.employee_name} · {a.weekly_hours}h · {pctStr}
+                  <span style={s.barName}>{a.employee_name}</span>
+                  <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
                 </div>
               );
             })}
@@ -737,13 +748,13 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
                 <div
                   key={`${a.id}-${i}`}
                   style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
-                  title={`${a.employee_name}${a.employee_area_name ? ` · ${a.employee_area_name}` : ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
                   role={onOpen ? 'button' : undefined}
                   tabIndex={onOpen ? 0 : undefined}
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  {a.employee_name} · {a.weekly_hours}h · {pctStr}
+                  <span style={s.barName}>{a.employee_name}</span>
+                  <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
                 </div>
               );
             })}
