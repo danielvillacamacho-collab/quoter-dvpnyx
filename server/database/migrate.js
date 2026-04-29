@@ -1802,6 +1802,18 @@ const migrate = async () => {
     await client.query(V2_SEEDS_SQL);
     await client.query(SPEC_II_00_SQL);
     await client.query(SPEC_II_00_HOLIDAY_SEED_SQL);
+
+    // Normalizar nombres de empleados a Title Case (primera letra de cada
+    // palabra en mayúscula, resto en minúscula). Idempotente: initcap(lower())
+    // sobre un nombre ya en Title Case produce el mismo resultado.
+    await client.query(`
+      UPDATE employees
+         SET first_name = initcap(lower(first_name)),
+             last_name  = initcap(lower(last_name))
+       WHERE first_name <> initcap(lower(first_name))
+          OR last_name  <> initcap(lower(last_name))
+    `);
+
     await client.query('COMMIT');
 
     // Embeddings se aplican fuera de la transacción principal: si fallan

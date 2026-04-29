@@ -88,7 +88,7 @@ const s = {
 
   headRow: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     position: 'sticky', top: 0, zIndex: 3,
     background: 'var(--ds-bg-soft, #f4f5f7)',
     color: 'var(--ds-text-dim, #6b7280)',
@@ -100,7 +100,7 @@ const s = {
 
   row: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     borderTop: '1px solid var(--ds-border, #eee)',
     minHeight: 72,
   }),
@@ -124,15 +124,21 @@ const s = {
     boxShadow: 'var(--ds-shadow-sm, 0 1px 2px rgba(0,0,0,.1))',
   }),
   barName: {
-    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-    lineHeight: 1.3,
+    // Permite hasta 2 renglones; si el nombre es más largo se recorta.
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
+    overflow: 'hidden',
+    whiteSpace: 'normal',
+    lineHeight: 1.25,
+    wordBreak: 'break-word',
   },
   barMeta: {
-    fontSize: 9, fontWeight: 400, opacity: 0.88,
+    fontSize: 10.5, fontWeight: 500, opacity: 0.92,
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
     lineHeight: 1.3,
-    fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
-    fontFeatureSettings: "'tnum'",
+    fontFamily: 'var(--font-ui, inherit)',
+    fontVariantNumeric: 'tabular-nums',
   },
   chip: (bucket) => ({
     marginTop: 'auto',
@@ -147,7 +153,7 @@ const s = {
 
   unassignedRow: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     borderTop: '2px dashed var(--ds-border, #ddd)',
     background: 'var(--ds-warn-soft, #fffbea)',
     minHeight: 56,
@@ -199,7 +205,7 @@ const s = {
   }),
   contractRow: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     borderTop: '2px solid var(--ds-accent-border, var(--purple-dark, #3b1d52))',
     minHeight: 60,
     background: 'var(--ds-accent-soft, #faf7ff)',
@@ -209,7 +215,7 @@ const s = {
   contractClient: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
   requestSubRow: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     borderTop: '1px solid var(--ds-border, #eee)',
     minHeight: 52,
   }),
@@ -387,6 +393,13 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   );
 }
 
+// Fuente adaptativa: nombres > 20 chars encogen para caber en 2 renglones.
+function adaptiveFontSize(name = '') {
+  if (name.length > 26) return 7.5;
+  if (name.length > 18) return 9;
+  return 10;
+}
+
 function AssignmentBar({ a, onOpen, capacity }) {
   const cap = Number(capacity) || 0;
   const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
@@ -399,7 +412,7 @@ function AssignmentBar({ a, onOpen, capacity }) {
       tabIndex={onOpen ? 0 : undefined}
       onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
     >
-      <span style={s.barName}>{a.contract_name}</span>
+      <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.contract_name) }}>{a.contract_name}</span>
       <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
     </div>
   );
@@ -674,7 +687,7 @@ function ContractRow({ bucket, weeks, onOpen }) {
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  <span style={s.barName}>{a.employee_name}</span>
+                  <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
                   <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
                 </div>
               );
@@ -753,7 +766,7 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  <span style={s.barName}>{a.employee_name}</span>
+                  <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
                   <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
                 </div>
               );
