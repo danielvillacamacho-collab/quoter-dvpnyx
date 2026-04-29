@@ -1230,6 +1230,534 @@ const V2_SEEDS_SQL = `
   ON CONFLICT (category, key) DO NOTHING;
 `;
 
+/* ==================================================================
+ * SPEC-II-00 — Internal Initiatives, Novelties & Idle Time
+ * ==================================================================
+ *
+ * Adds three coupled modules and one infra catalogue:
+ *   1. Internal initiatives (paralelo a contracts; presupuesto USD)
+ *   2. Novedades (vacaciones, incapacidades, capacitaciones, etc.)
+ *   3. Idle Time engine (snapshots mensuales, inmutables al finalizar)
+ *   + country_holidays como infraestructura compartida.
+ *
+ * Adaptaciones vs spec original:
+ *   - Sin tenant_id (single-tenant operativo, igual que el resto del repo).
+ *   - Las nuevas tablas usan employee_id + weekly_hours (no user_id +
+ *     allocation_pct) para coherencia con assignments existente.
+ *   - assignments y resource_requests NO se refactorizan a XOR. Las
+ *     asignaciones internas viven exclusivamente en
+ *     internal_initiative_assignments. El idle engine suma ambas.
+ *   - hourly_rate_usd se deriva del último employee_costs.cost_usd con
+ *     valor / horas mensuales estimadas (weekly_capacity_hours × 52/12).
+ *     Si falta → idle_cost_usd = 0 con flag missing_rate.
+ *   - country_id ISO-2 se backfill-ea desde employees.country (nombre
+ *     en español) mediante CASE WHEN.
+ *   - S3 attachments en novedades quedan como URL externa (Drive/SP) en
+ *     attachment_url; sin presigned upload en MVP.
+ * ================================================================== */
+const SPEC_II_00_SQL = `
+  /* ----- Catálogos ------------------------------------------------ */
+  CREATE TABLE IF NOT EXISTS business_areas (
+    id          TEXT PRIMARY KEY,
+    label_es    TEXT NOT NULL,
+    label_en    TEXT NOT NULL,
+    sort_order  INTEGER NOT NULL,
+    is_active   BOOLEAN NOT NULL DEFAULT true,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  INSERT INTO business_areas (id, label_es, label_en, sort_order) VALUES
+    ('product',     'Producto',    'Product',    1),
+    ('operations',  'Operaciones', 'Operations', 2),
+    ('hr',          'RRHH',        'HR',         3),
+    ('finance',     'Finanzas',    'Finance',    4),
+    ('commercial',  'Comercial',   'Commercial', 5),
+    ('technology', 'Tecnología',   'Technology', 6)
+  ON CONFLICT (id) DO NOTHING;
+
+  CREATE TABLE IF NOT EXISTS novelty_types (
+    id                              TEXT PRIMARY KEY,
+    label_es                        TEXT NOT NULL,
+    label_en                        TEXT NOT NULL,
+    is_paid_time                    BOOLEAN NOT NULL DEFAULT true,
+    requires_attachment_recommended BOOLEAN NOT NULL DEFAULT false,
+    -- counts_in_capacity = true  → las horas se cuentan como asignadas (training).
+    -- counts_in_capacity = false → las horas se restan del available (vacación, etc).
+    counts_in_capacity              BOOLEAN NOT NULL DEFAULT false,
+    sort_order                      INTEGER NOT NULL,
+    is_active                       BOOLEAN NOT NULL DEFAULT true,
+    created_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  INSERT INTO novelty_types (id, label_es, label_en, is_paid_time, requires_attachment_recommended, counts_in_capacity, sort_order) VALUES
+    ('vacation',          'Vacaciones',                 'Vacation',                  true,  false, false, 1),
+    ('sick_leave',        'Incapacidad médica',         'Sick Leave',                true,  true,  false, 2),
+    ('parental_leave',    'Licencia maternidad/pat.',   'Parental Leave',            true,  true,  false, 3),
+    ('unpaid_leave',      'Permiso sin goce',           'Unpaid Leave',              false, false, false, 4),
+    ('bereavement',       'Calamidad doméstica',        'Bereavement',               true,  false, false, 5),
+    ('legal_leave',       'Licencia de ley',            'Legal Leave',               true,  false, false, 6),
+    ('corporate_training','Capacitación corporativa',   'Corporate Training',        true,  false, true,  7),
+    ('unavailable_other', 'No disponible (otro)',       'Unavailable (Other)',       true,  false, false, 8)
+  ON CONFLICT (id) DO NOTHING;
+
+  CREATE TABLE IF NOT EXISTS countries (
+    id                          TEXT PRIMARY KEY CHECK (length(id) = 2),
+    label_es                    TEXT NOT NULL,
+    label_en                    TEXT NOT NULL,
+    standard_workday_hours      INTEGER NOT NULL DEFAULT 8,
+    standard_workdays_per_week  INTEGER NOT NULL DEFAULT 5,
+    is_active                   BOOLEAN NOT NULL DEFAULT true,
+    created_at                  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  INSERT INTO countries (id, label_es, label_en, standard_workday_hours, standard_workdays_per_week) VALUES
+    ('CO','Colombia','Colombia',8,5),
+    ('MX','México','Mexico',8,5),
+    ('GT','Guatemala','Guatemala',8,5),
+    ('EC','Ecuador','Ecuador',8,5),
+    ('PA','Panamá','Panama',8,5),
+    ('PE','Perú','Peru',8,5),
+    ('US','EE.UU.','USA',8,5)
+  ON CONFLICT (id) DO NOTHING;
+
+  /* ----- employees.country_id (ISO-2) backfill -------------------- */
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS country_id TEXT NULL REFERENCES countries(id);
+
+  -- Backfill best-effort. La columna 'country' legacy es VARCHAR(100) con
+  -- el nombre en español/inglés según vino de RRHH; mapeamos los nombres
+  -- conocidos. Si no matchea ningún país, queda NULL y el idle engine usa
+  -- 'CO' como fallback (la mayoría del staff es colombiano). Nuevos
+  -- empleados deben setear country_id explícitamente desde la UI.
+  UPDATE employees SET country_id = CASE
+    WHEN country ILIKE 'colombia%'                                           THEN 'CO'
+    WHEN country ILIKE 'm%xico%' OR country ILIKE 'mexico%'                  THEN 'MX'
+    WHEN country ILIKE 'guatemala%'                                          THEN 'GT'
+    WHEN country ILIKE 'ecuador%'                                            THEN 'EC'
+    WHEN country ILIKE 'panam%' OR country ILIKE 'panama%'                   THEN 'PA'
+    WHEN country ILIKE 'per%' OR country ILIKE 'peru%'                       THEN 'PE'
+    WHEN country ILIKE 'estados unidos%' OR country ILIKE 'usa%'
+      OR country ILIKE 'us%' OR country ILIKE 'united states%'               THEN 'US'
+    ELSE country_id
+  END WHERE country_id IS NULL;
+
+  CREATE INDEX IF NOT EXISTS employees_country_id_idx ON employees(country_id) WHERE deleted_at IS NULL;
+
+  /* ----- country_holidays ---------------------------------------- */
+  CREATE TABLE IF NOT EXISTS country_holidays (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    country_id    TEXT NOT NULL REFERENCES countries(id),
+    holiday_date  DATE NOT NULL,
+    label         TEXT NOT NULL,
+    holiday_type  TEXT NOT NULL DEFAULT 'national'
+                  CHECK (holiday_type IN ('national','regional','optional','company')),
+    year          INTEGER NOT NULL,
+    notes         TEXT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_by    UUID NULL REFERENCES users(id),
+    UNIQUE (country_id, holiday_date)
+  );
+  CREATE INDEX IF NOT EXISTS holidays_country_year_idx ON country_holidays(country_id, year);
+  CREATE INDEX IF NOT EXISTS holidays_date_idx         ON country_holidays(holiday_date);
+
+  /* ----- internal_initiatives ------------------------------------ */
+  CREATE TABLE IF NOT EXISTS internal_initiatives (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    initiative_code     TEXT NOT NULL UNIQUE,  -- II-{AREA}-{YYYY}-{SEQ5}
+    name                TEXT NOT NULL CHECK (length(name) >= 5 AND length(name) <= 255),
+    description         TEXT NULL,
+    business_area_id    TEXT NOT NULL REFERENCES business_areas(id),
+    status              TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active','completed','cancelled','paused')),
+    budget_usd          NUMERIC(18,2) NOT NULL CHECK (budget_usd >= 0),
+    hours_estimated     NUMERIC(10,2) NOT NULL DEFAULT 0,
+    start_date          DATE NOT NULL,
+    target_end_date     DATE NULL,
+    actual_end_date     DATE NULL,
+    operations_owner_id UUID NOT NULL REFERENCES users(id),
+    source_system       TEXT NOT NULL DEFAULT 'ui'
+                        CHECK (source_system IN ('ui','api','migration','ai_suggestion')),
+    deleted_at          TIMESTAMPTZ NULL,
+    deletion_reason     TEXT NULL,
+    created_by          UUID NOT NULL REFERENCES users(id),
+    updated_by          UUID NOT NULL REFERENCES users(id),
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS ii_status_idx ON internal_initiatives(status) WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS ii_area_idx   ON internal_initiatives(business_area_id) WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS ii_owner_idx  ON internal_initiatives(operations_owner_id) WHERE deleted_at IS NULL;
+
+  /* ----- internal_initiative_assignments ------------------------- */
+  -- Convención: employee_id + weekly_hours (NO user_id + allocation_pct),
+  -- coherente con la tabla 'assignments' existente. Si en el futuro hay
+  -- que homologar reportería entre ambas, se hace via VIEW.
+  CREATE TABLE IF NOT EXISTS internal_initiative_assignments (
+    id                       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    internal_initiative_id   UUID NOT NULL REFERENCES internal_initiatives(id) ON DELETE RESTRICT,
+    employee_id              UUID NOT NULL REFERENCES employees(id),
+    start_date               DATE NOT NULL,
+    end_date                 DATE NULL,
+    weekly_hours             NUMERIC(5,2) NOT NULL CHECK (weekly_hours > 0 AND weekly_hours <= 80),
+    -- Snapshot de la tarifa interna del empleado al momento de asignar.
+    -- Evita que cambios futuros de costo afecten cálculos retroactivos.
+    -- Puede ser NULL si el empleado no tenía employee_cost al asignar:
+    -- el idle_engine lo verá como missing_rate y costeará en 0.
+    hourly_rate_usd          NUMERIC(18,4) NULL,
+    status                   TEXT NOT NULL DEFAULT 'planned'
+                             CHECK (status IN ('planned','active','ended','cancelled')),
+    role_description         TEXT NULL,
+    notes                    TEXT NULL,
+    deleted_at               TIMESTAMPTZ NULL,
+    created_by               UUID NOT NULL REFERENCES users(id),
+    updated_by               UUID NULL REFERENCES users(id),
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (end_date IS NULL OR end_date >= start_date)
+  );
+  CREATE INDEX IF NOT EXISTS iia_initiative_idx ON internal_initiative_assignments(internal_initiative_id) WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS iia_employee_dates_idx ON internal_initiative_assignments(employee_id, start_date, end_date) WHERE deleted_at IS NULL AND status IN ('planned','active');
+  CREATE INDEX IF NOT EXISTS iia_status_idx ON internal_initiative_assignments(status) WHERE deleted_at IS NULL;
+
+  /* ----- employee_novelties -------------------------------------- */
+  CREATE TABLE IF NOT EXISTS employee_novelties (
+    id                       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id              UUID NOT NULL REFERENCES employees(id),
+    novelty_type_id          TEXT NOT NULL REFERENCES novelty_types(id),
+    start_date               DATE NOT NULL,
+    end_date                 DATE NOT NULL,
+    status                   TEXT NOT NULL DEFAULT 'approved'
+                             CHECK (status IN ('approved','cancelled')),
+    reason                   TEXT NULL,
+    -- Adjuntos: en MVP guardamos URL externa (Drive/SP) + nota; sin S3.
+    attachment_url           TEXT NULL,
+    attachment_note          TEXT NULL,
+    -- En MVP approved_at/by = created_at/by (sin workflow).
+    approved_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    approved_by              UUID NOT NULL REFERENCES users(id),
+    cancelled_at             TIMESTAMPTZ NULL,
+    cancelled_by             UUID NULL REFERENCES users(id),
+    cancellation_reason      TEXT NULL,
+    created_by               UUID NOT NULL REFERENCES users(id),
+    updated_by               UUID NULL REFERENCES users(id),
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (end_date >= start_date),
+    CHECK (cancelled_at IS NULL OR status = 'cancelled')
+  );
+  CREATE INDEX IF NOT EXISTS novelties_employee_dates_idx ON employee_novelties(employee_id, start_date, end_date) WHERE status = 'approved';
+  CREATE INDEX IF NOT EXISTS novelties_period_idx ON employee_novelties(start_date, end_date);
+  CREATE INDEX IF NOT EXISTS novelties_type_idx ON employee_novelties(novelty_type_id);
+
+  -- Trigger: prevenir overlap de novedades aprobadas para el mismo empleado.
+  -- Usamos daterange + && (overlap operator) — funciona con cualquier postgres
+  -- moderno sin necesidad de btree_gist.
+  CREATE OR REPLACE FUNCTION prevent_novelty_overlap()
+  RETURNS TRIGGER AS $$
+  DECLARE
+    overlap_count INTEGER;
+  BEGIN
+    IF NEW.status <> 'approved' THEN
+      RETURN NEW;
+    END IF;
+    SELECT COUNT(*) INTO overlap_count
+      FROM employee_novelties
+     WHERE employee_id = NEW.employee_id
+       AND status = 'approved'
+       AND id <> COALESCE(NEW.id, '00000000-0000-0000-0000-000000000000'::uuid)
+       AND daterange(start_date, end_date, '[]') && daterange(NEW.start_date, NEW.end_date, '[]');
+    IF overlap_count > 0 THEN
+      RAISE EXCEPTION 'novelty_overlap: employee % ya tiene novedad aprobada en el rango %..%',
+        NEW.employee_id, NEW.start_date, NEW.end_date
+        USING HINT = 'Cancelar la novedad existente antes de crear otra que se solape.',
+              ERRCODE = 'unique_violation';
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  DROP TRIGGER IF EXISTS trg_novelty_no_overlap ON employee_novelties;
+  CREATE TRIGGER trg_novelty_no_overlap
+    BEFORE INSERT OR UPDATE ON employee_novelties
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_novelty_overlap();
+
+  /* ----- idle_time_calculations ---------------------------------- */
+  -- Snapshots inmutables al pasar a 'final'. Recalcular un mes 'final'
+  -- requiere endpoint admin que crea un audit_log explícito.
+  CREATE TABLE IF NOT EXISTS idle_time_calculations (
+    id                        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id               UUID NOT NULL REFERENCES employees(id),
+    period_yyyymm             CHAR(7) NOT NULL CHECK (period_yyyymm ~ '^[0-9]{4}-[0-9]{2}$'),
+    total_capacity_hours      NUMERIC(10,2) NOT NULL,
+    holiday_hours             NUMERIC(10,2) NOT NULL DEFAULT 0,
+    novelty_hours             NUMERIC(10,2) NOT NULL DEFAULT 0,
+    available_hours           NUMERIC(10,2) NOT NULL,
+    assigned_hours_contract   NUMERIC(10,2) NOT NULL DEFAULT 0,
+    assigned_hours_internal   NUMERIC(10,2) NOT NULL DEFAULT 0,
+    assigned_hours_total      NUMERIC(10,2) NOT NULL DEFAULT 0,
+    idle_hours                NUMERIC(10,2) NOT NULL,
+    idle_pct                  NUMERIC(7,4) NOT NULL CHECK (idle_pct >= 0 AND idle_pct <= 1),
+    hourly_rate_usd_at_calc   NUMERIC(18,4) NULL,  -- NULL = missing_rate
+    idle_cost_usd             NUMERIC(18,2) NOT NULL DEFAULT 0,
+    calculation_status        TEXT NOT NULL DEFAULT 'preliminary'
+                              CHECK (calculation_status IN ('preliminary','final')),
+    breakdown                 JSONB NULL,  -- holidays_used / novelties_used / contract_assignments / internal_assignments / flags
+    calculated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    calculated_by             UUID NULL REFERENCES users(id),
+    created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (employee_id, period_yyyymm)
+  );
+  CREATE INDEX IF NOT EXISTS itc_period_idx ON idle_time_calculations(period_yyyymm);
+  CREATE INDEX IF NOT EXISTS itc_employee_idx ON idle_time_calculations(employee_id);
+  CREATE INDEX IF NOT EXISTS itc_status_idx ON idle_time_calculations(calculation_status);
+
+  -- Inmutabilidad: una vez calculation_status='final', ningún campo numérico
+  -- ni el status puede cambiar. UPDATE silenciosos al breakdown sí permitidos
+  -- (para enriquecer metadata). Cambios reales requieren admin endpoint que
+  -- crea un nuevo row con status='preliminary' para el siguiente período.
+  CREATE OR REPLACE FUNCTION enforce_idle_time_immutability()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    IF OLD.calculation_status = 'final' THEN
+      IF (
+        NEW.total_capacity_hours    IS DISTINCT FROM OLD.total_capacity_hours OR
+        NEW.holiday_hours           IS DISTINCT FROM OLD.holiday_hours        OR
+        NEW.novelty_hours           IS DISTINCT FROM OLD.novelty_hours        OR
+        NEW.available_hours         IS DISTINCT FROM OLD.available_hours      OR
+        NEW.assigned_hours_contract IS DISTINCT FROM OLD.assigned_hours_contract OR
+        NEW.assigned_hours_internal IS DISTINCT FROM OLD.assigned_hours_internal OR
+        NEW.assigned_hours_total    IS DISTINCT FROM OLD.assigned_hours_total    OR
+        NEW.idle_hours              IS DISTINCT FROM OLD.idle_hours              OR
+        NEW.idle_pct                IS DISTINCT FROM OLD.idle_pct                OR
+        NEW.idle_cost_usd           IS DISTINCT FROM OLD.idle_cost_usd           OR
+        NEW.calculation_status      IS DISTINCT FROM OLD.calculation_status
+      ) THEN
+        RAISE EXCEPTION 'idle_time_calculation % es final e inmutable', NEW.id
+          USING HINT = 'Para correcciones, usa el endpoint admin POST /api/idle-time/recalculate.',
+                ERRCODE = 'check_violation';
+      END IF;
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  DROP TRIGGER IF EXISTS trg_itc_immutability ON idle_time_calculations;
+  CREATE TRIGGER trg_itc_immutability
+    BEFORE UPDATE ON idle_time_calculations
+    FOR EACH ROW
+    EXECUTE FUNCTION enforce_idle_time_immutability();
+`;
+
+/* ==================================================================
+ * SPEC-II-00 — Holiday seed (Colombia / México / Guatemala / Ecuador
+ * / Panamá / Perú / EE.UU., 2026 + 2027). Idempotente vía ON CONFLICT.
+ *
+ * Fuente: leyes laborales vigentes a abril 2026. Festivos trasladables
+ * de Colombia ya están aplicados al lunes correspondiente. Para 2027
+ * los trasladables se recalcularán cuando se publique el calendario
+ * oficial; los aquí cargados son una proyección razonable.
+ * ================================================================== */
+const SPEC_II_00_HOLIDAY_SEED_SQL = `
+  INSERT INTO country_holidays (country_id, holiday_date, label, holiday_type, year) VALUES
+    -- COLOMBIA 2026 (18 festivos, trasladables al lunes)
+    ('CO','2026-01-01','Año Nuevo','national',2026),
+    ('CO','2026-01-12','Día de los Reyes Magos','national',2026),
+    ('CO','2026-03-23','Día de San José','national',2026),
+    ('CO','2026-04-02','Jueves Santo','national',2026),
+    ('CO','2026-04-03','Viernes Santo','national',2026),
+    ('CO','2026-05-01','Día del Trabajo','national',2026),
+    ('CO','2026-05-18','Día de la Ascensión','national',2026),
+    ('CO','2026-06-08','Corpus Christi','national',2026),
+    ('CO','2026-06-15','Sagrado Corazón','national',2026),
+    ('CO','2026-06-29','San Pedro y San Pablo','national',2026),
+    ('CO','2026-07-20','Día de la Independencia','national',2026),
+    ('CO','2026-08-07','Batalla de Boyacá','national',2026),
+    ('CO','2026-08-17','Asunción de la Virgen','national',2026),
+    ('CO','2026-10-12','Día de la Raza','national',2026),
+    ('CO','2026-11-02','Todos los Santos','national',2026),
+    ('CO','2026-11-16','Independencia de Cartagena','national',2026),
+    ('CO','2026-12-08','Inmaculada Concepción','national',2026),
+    ('CO','2026-12-25','Navidad','national',2026),
+    -- COLOMBIA 2027
+    ('CO','2027-01-01','Año Nuevo','national',2027),
+    ('CO','2027-01-11','Día de los Reyes Magos','national',2027),
+    ('CO','2027-03-22','Día de San José','national',2027),
+    ('CO','2027-03-25','Jueves Santo','national',2027),
+    ('CO','2027-03-26','Viernes Santo','national',2027),
+    ('CO','2027-05-01','Día del Trabajo','national',2027),
+    ('CO','2027-05-10','Día de la Ascensión','national',2027),
+    ('CO','2027-05-31','Corpus Christi','national',2027),
+    ('CO','2027-06-07','Sagrado Corazón','national',2027),
+    ('CO','2027-07-05','San Pedro y San Pablo','national',2027),
+    ('CO','2027-07-20','Día de la Independencia','national',2027),
+    ('CO','2027-08-07','Batalla de Boyacá','national',2027),
+    ('CO','2027-08-16','Asunción de la Virgen','national',2027),
+    ('CO','2027-10-18','Día de la Raza','national',2027),
+    ('CO','2027-11-01','Todos los Santos','national',2027),
+    ('CO','2027-11-15','Independencia de Cartagena','national',2027),
+    ('CO','2027-12-08','Inmaculada Concepción','national',2027),
+    ('CO','2027-12-25','Navidad','national',2027),
+
+    -- MÉXICO 2026 (festivos oficiales LFT art. 74)
+    ('MX','2026-01-01','Año Nuevo','national',2026),
+    ('MX','2026-02-02','Día de la Constitución','national',2026),
+    ('MX','2026-03-16','Natalicio de Benito Juárez','national',2026),
+    ('MX','2026-05-01','Día del Trabajo','national',2026),
+    ('MX','2026-09-16','Día de la Independencia','national',2026),
+    ('MX','2026-11-02','Día de los Muertos','national',2026),
+    ('MX','2026-11-16','Día de la Revolución','national',2026),
+    ('MX','2026-12-25','Navidad','national',2026),
+    -- MÉXICO 2027
+    ('MX','2027-01-01','Año Nuevo','national',2027),
+    ('MX','2027-02-01','Día de la Constitución','national',2027),
+    ('MX','2027-03-15','Natalicio de Benito Juárez','national',2027),
+    ('MX','2027-05-01','Día del Trabajo','national',2027),
+    ('MX','2027-09-16','Día de la Independencia','national',2027),
+    ('MX','2027-11-02','Día de los Muertos','national',2027),
+    ('MX','2027-11-15','Día de la Revolución','national',2027),
+    ('MX','2027-12-25','Navidad','national',2027),
+
+    -- GUATEMALA 2026
+    ('GT','2026-01-01','Año Nuevo','national',2026),
+    ('GT','2026-04-02','Jueves Santo','national',2026),
+    ('GT','2026-04-03','Viernes Santo','national',2026),
+    ('GT','2026-04-04','Sábado de Gloria','national',2026),
+    ('GT','2026-05-01','Día del Trabajo','national',2026),
+    ('GT','2026-06-30','Día del Ejército','national',2026),
+    ('GT','2026-09-15','Día de la Independencia','national',2026),
+    ('GT','2026-10-20','Revolución de 1944','national',2026),
+    ('GT','2026-11-01','Día de Todos los Santos','national',2026),
+    ('GT','2026-12-24','Nochebuena','national',2026),
+    ('GT','2026-12-25','Navidad','national',2026),
+    ('GT','2026-12-31','Fin de Año','national',2026),
+    -- GUATEMALA 2027
+    ('GT','2027-01-01','Año Nuevo','national',2027),
+    ('GT','2027-03-25','Jueves Santo','national',2027),
+    ('GT','2027-03-26','Viernes Santo','national',2027),
+    ('GT','2027-03-27','Sábado de Gloria','national',2027),
+    ('GT','2027-05-01','Día del Trabajo','national',2027),
+    ('GT','2027-06-30','Día del Ejército','national',2027),
+    ('GT','2027-09-15','Día de la Independencia','national',2027),
+    ('GT','2027-10-20','Revolución de 1944','national',2027),
+    ('GT','2027-11-01','Día de Todos los Santos','national',2027),
+    ('GT','2027-12-24','Nochebuena','national',2027),
+    ('GT','2027-12-25','Navidad','national',2027),
+    ('GT','2027-12-31','Fin de Año','national',2027),
+
+    -- ECUADOR 2026
+    ('EC','2026-01-01','Año Nuevo','national',2026),
+    ('EC','2026-02-16','Carnaval','national',2026),
+    ('EC','2026-02-17','Carnaval','national',2026),
+    ('EC','2026-04-03','Viernes Santo','national',2026),
+    ('EC','2026-05-01','Día del Trabajo','national',2026),
+    ('EC','2026-05-24','Batalla de Pichincha','national',2026),
+    ('EC','2026-08-10','Primer Grito de Independencia','national',2026),
+    ('EC','2026-10-09','Independencia de Guayaquil','national',2026),
+    ('EC','2026-11-02','Día de los Difuntos','national',2026),
+    ('EC','2026-11-03','Independencia de Cuenca','national',2026),
+    ('EC','2026-12-25','Navidad','national',2026),
+    -- ECUADOR 2027
+    ('EC','2027-01-01','Año Nuevo','national',2027),
+    ('EC','2027-02-08','Carnaval','national',2027),
+    ('EC','2027-02-09','Carnaval','national',2027),
+    ('EC','2027-03-26','Viernes Santo','national',2027),
+    ('EC','2027-05-01','Día del Trabajo','national',2027),
+    ('EC','2027-05-24','Batalla de Pichincha','national',2027),
+    ('EC','2027-08-10','Primer Grito de Independencia','national',2027),
+    ('EC','2027-10-09','Independencia de Guayaquil','national',2027),
+    ('EC','2027-11-02','Día de los Difuntos','national',2027),
+    ('EC','2027-11-03','Independencia de Cuenca','national',2027),
+    ('EC','2027-12-25','Navidad','national',2027),
+
+    -- PANAMÁ 2026
+    ('PA','2026-01-01','Año Nuevo','national',2026),
+    ('PA','2026-01-09','Día de los Mártires','national',2026),
+    ('PA','2026-02-17','Carnaval','national',2026),
+    ('PA','2026-04-03','Viernes Santo','national',2026),
+    ('PA','2026-05-01','Día del Trabajo','national',2026),
+    ('PA','2026-11-03','Separación de Colombia','national',2026),
+    ('PA','2026-11-04','Día de los Símbolos Patrios','national',2026),
+    ('PA','2026-11-05','Día de Colón','national',2026),
+    ('PA','2026-11-10','Primer Grito de Independencia','national',2026),
+    ('PA','2026-11-28','Independencia de España','national',2026),
+    ('PA','2026-12-08','Día de las Madres','national',2026),
+    ('PA','2026-12-25','Navidad','national',2026),
+    -- PANAMÁ 2027
+    ('PA','2027-01-01','Año Nuevo','national',2027),
+    ('PA','2027-01-09','Día de los Mártires','national',2027),
+    ('PA','2027-02-09','Carnaval','national',2027),
+    ('PA','2027-03-26','Viernes Santo','national',2027),
+    ('PA','2027-05-01','Día del Trabajo','national',2027),
+    ('PA','2027-11-03','Separación de Colombia','national',2027),
+    ('PA','2027-11-04','Día de los Símbolos Patrios','national',2027),
+    ('PA','2027-11-05','Día de Colón','national',2027),
+    ('PA','2027-11-10','Primer Grito de Independencia','national',2027),
+    ('PA','2027-11-28','Independencia de España','national',2027),
+    ('PA','2027-12-08','Día de las Madres','national',2027),
+    ('PA','2027-12-25','Navidad','national',2027),
+
+    -- PERÚ 2026
+    ('PE','2026-01-01','Año Nuevo','national',2026),
+    ('PE','2026-04-02','Jueves Santo','national',2026),
+    ('PE','2026-04-03','Viernes Santo','national',2026),
+    ('PE','2026-05-01','Día del Trabajo','national',2026),
+    ('PE','2026-06-29','San Pedro y San Pablo','national',2026),
+    ('PE','2026-07-23','Batalla de Junín','national',2026),
+    ('PE','2026-07-28','Día de la Independencia','national',2026),
+    ('PE','2026-07-29','Día de la Independencia','national',2026),
+    ('PE','2026-08-06','Batalla de Ayacucho','national',2026),
+    ('PE','2026-08-30','Santa Rosa de Lima','national',2026),
+    ('PE','2026-10-08','Combate de Angamos','national',2026),
+    ('PE','2026-11-01','Día de Todos los Santos','national',2026),
+    ('PE','2026-12-08','Inmaculada Concepción','national',2026),
+    ('PE','2026-12-09','Batalla de Ayacucho','national',2026),
+    ('PE','2026-12-25','Navidad','national',2026),
+    -- PERÚ 2027
+    ('PE','2027-01-01','Año Nuevo','national',2027),
+    ('PE','2027-03-25','Jueves Santo','national',2027),
+    ('PE','2027-03-26','Viernes Santo','national',2027),
+    ('PE','2027-05-01','Día del Trabajo','national',2027),
+    ('PE','2027-06-29','San Pedro y San Pablo','national',2027),
+    ('PE','2027-07-23','Batalla de Junín','national',2027),
+    ('PE','2027-07-28','Día de la Independencia','national',2027),
+    ('PE','2027-07-29','Día de la Independencia','national',2027),
+    ('PE','2027-08-06','Batalla de Ayacucho','national',2027),
+    ('PE','2027-08-30','Santa Rosa de Lima','national',2027),
+    ('PE','2027-10-08','Combate de Angamos','national',2027),
+    ('PE','2027-11-01','Día de Todos los Santos','national',2027),
+    ('PE','2027-12-08','Inmaculada Concepción','national',2027),
+    ('PE','2027-12-09','Batalla de Ayacucho','national',2027),
+    ('PE','2027-12-25','Navidad','national',2027),
+
+    -- USA 2026 (federal)
+    ('US','2026-01-01','New Year''s Day','national',2026),
+    ('US','2026-01-19','MLK Day','national',2026),
+    ('US','2026-02-16','Presidents'' Day','national',2026),
+    ('US','2026-05-25','Memorial Day','national',2026),
+    ('US','2026-06-19','Juneteenth','national',2026),
+    ('US','2026-07-03','Independence Day (observed)','national',2026),
+    ('US','2026-09-07','Labor Day','national',2026),
+    ('US','2026-10-12','Columbus Day','national',2026),
+    ('US','2026-11-11','Veterans Day','national',2026),
+    ('US','2026-11-26','Thanksgiving','national',2026),
+    ('US','2026-12-25','Christmas Day','national',2026),
+    -- USA 2027
+    ('US','2027-01-01','New Year''s Day','national',2027),
+    ('US','2027-01-18','MLK Day','national',2027),
+    ('US','2027-02-15','Presidents'' Day','national',2027),
+    ('US','2027-05-31','Memorial Day','national',2027),
+    ('US','2027-06-18','Juneteenth (observed)','national',2027),
+    ('US','2027-07-05','Independence Day (observed)','national',2027),
+    ('US','2027-09-06','Labor Day','national',2027),
+    ('US','2027-10-11','Columbus Day','national',2027),
+    ('US','2027-11-11','Veterans Day','national',2027),
+    ('US','2027-11-25','Thanksgiving','national',2027),
+    ('US','2027-12-24','Christmas Day (observed)','national',2027)
+  ON CONFLICT (country_id, holiday_date) DO NOTHING;
+`;
+
 /**
  * Intenta crear la extensión pgvector. Si no está disponible (no instalada
  * en la imagen postgres, o falta privilegio), captura el error y devuelve
@@ -1272,6 +1800,8 @@ const migrate = async () => {
     await client.query(V2_ALTERS);
     await client.query(AI_READINESS_SQL);
     await client.query(V2_SEEDS_SQL);
+    await client.query(SPEC_II_00_SQL);
+    await client.query(SPEC_II_00_HOLIDAY_SEED_SQL);
     await client.query('COMMIT');
 
     // Embeddings se aplican fuera de la transacción principal: si fallan
@@ -1288,7 +1818,7 @@ const migrate = async () => {
     }
 
     // eslint-disable-next-line no-console
-    console.log(`Migration completed successfully (V1 + V2 + AI-readiness${hasPgVector ? ' + pgvector' : ''}).`);
+    console.log(`Migration completed successfully (V1 + V2 + AI-readiness + SPEC-II-00${hasPgVector ? ' + pgvector' : ''}).`);
   } catch (err) {
     if (client) await client.query('ROLLBACK');
     // eslint-disable-next-line no-console
