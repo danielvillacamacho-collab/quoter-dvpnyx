@@ -240,16 +240,22 @@ export default function Assignments() {
   }, [statusFilter]);
 
   const loadLookups = useCallback(async () => {
-    // Lookup grande para que el combobox de búsqueda tenga el universo
-    // completo (>100 empleados / solicitudes en producción) y el filtrado
-    // se haga client-side sin pegarle a la API por cada tecla.
+    // INC-003: usar los endpoints /lookup (sin paginación). Los GET
+    // paginados siempre se capan a maxLimit=100 dentro de
+    // parsePagination, por lo que `?limit=500` se ignoraba en silencio
+    // y los empleados/solicitudes con apellido al final del alfabeto
+    // (Reinso, Solano, Uni, Vasquez, Vertel) nunca aparecían en los
+    // combobox del formulario de asignación.
     try {
       const [rr, re] = await Promise.all([
-        apiGet('/api/resource-requests?limit=500'),
-        apiGet('/api/employees?limit=500'),
+        apiGet('/api/resource-requests/lookup'),
+        apiGet('/api/employees/lookup'),
       ]);
+      // /lookup ya excluye filled/cancelled (requests) y terminated
+      // (employees) en el server, pero conservamos el filtro client-side
+      // como defense-in-depth.
       setRequests((rr?.data || []).filter((r) => !['filled', 'cancelled'].includes(r.status)));
-      setEmployees(re?.data || []);
+      setEmployees((re?.data || []).filter((e) => e.status !== 'terminated'));
     } catch {
       setRequests([]); setEmployees([]);
     }

@@ -339,3 +339,33 @@ describe('GET /api/resource-requests/:id/candidates (US-RR-2)', () => {
     expect(res.body.candidates).toHaveLength(0);
   });
 });
+
+
+describe('GET /api/resource-requests/lookup — INC-003 (unpaginated dropdown source)', () => {
+  it('returns ALL open / partially_filled requests, no pagination cap', async () => {
+    const many = Array.from({ length: 250 }, (_, i) => ({
+      id: 'rr' + i, role_title: 'Role ' + i, level: 'L4', weekly_hours: 20,
+      start_date: '2026-05-01', end_date: '2026-08-01', status: 'open', priority: 'medium',
+      contract_id: 'ct1', contract_name: 'C', area_id: 1, area_name: 'Dev',
+    }));
+    queryQueue.push({ rows: many });
+    const res = await client.call('GET', '/api/resource-requests/lookup');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(250);
+  });
+
+  it('excludes filled and cancelled by default', async () => {
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/resource-requests/lookup');
+    const sql = issuedQueries[issuedQueries.length - 1].sql;
+    expect(sql).toMatch(/NOT IN \('filled','cancelled'\)/);
+  });
+
+  it('filters by contract_id with a parameterized query (no SQL injection)', async () => {
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/resource-requests/lookup?contract_id=ct-123');
+    const last = issuedQueries[issuedQueries.length - 1];
+    expect(last.sql).toMatch(/contract_id = \$\d+/); // parameterized, not string-interpolated
+    expect(last.params).toContain('ct-123');
+  });
+});

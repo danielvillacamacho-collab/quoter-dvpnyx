@@ -50,6 +50,49 @@ function computeStatus(stored, activeAssignments, quantity) {
   return 'filled';
 }
 
+/* -------- LOOKUP (unpaginated) — INC-003
+ *
+ * Returns ALL open / partially_filled resource_requests with the
+ * minimal fields needed by the assignment form's selector. NOT
+ * paginated — see employees.lookup for the rationale (parsePagination
+ * silently caps at 100 and hides legitimate options).
+ *
+ * Excludes filled and cancelled by default since you can't make new
+ * assignments against those. Pass `?include_all=true` to override.
+ */
+router.get('/lookup', async (req, res) => {
+  try {
+    const includeAll = String(req.query.include_all || '').toLowerCase() === 'true';
+    const wheres = ['rr.deleted_at IS NULL'];
+    const params = [];
+    if (!includeAll) wheres.push(`rr.status NOT IN ('filled','cancelled')`);
+    if (req.query.contract_id) {
+      params.push(req.query.contract_id);
+      wheres.push(`rr.contract_id = $${params.length}`);
+    }
+    const where = `WHERE ${wheres.join(' AND ')}`;
+    const { rows } = await pool.query(
+      `SELECT rr.id, rr.role_title, rr.level, rr.weekly_hours,
+              rr.start_date, rr.end_date, rr.status, rr.priority,
+              rr.contract_id, c.name AS contract_name,
+              rr.area_id, a.name AS area_name
+         FROM resource_requests rr
+         LEFT JOIN contracts c ON c.id = rr.contract_id
+         LEFT JOIN areas     a ON a.id = rr.area_id
+         ${where}
+         ORDER BY
+           CASE rr.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+           rr.created_at DESC`,
+      params
+    );
+    res.json({ data: rows });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /resource-requests/lookup failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {

@@ -49,6 +49,46 @@ function validateEmploymentType(et) {
   return VALID_EMPLOYMENT_TYPES.includes(String(et));
 }
 
+/* -------- LOOKUP (unpaginated) — INC-003
+ *
+ * Returns ALL non-deleted, non-terminated employees with the minimal
+ * fields needed by selector dropdowns (assignment form, capacity
+ * planner, etc.). Crucially, this endpoint is NOT paginated — the
+ * paginated GET '/' silently caps `limit` at 100 (parsePagination's
+ * maxLimit), which means employees whose last_name sorts past the
+ * top 100 (Reinso, Solano, Uni, Vasquez, Vertel, ...) never appear
+ * in dropdowns even though they're active and assignable.
+ *
+ * Sorted by last_name, first_name so the picker shows a predictable
+ * alphabetical list. Includes weekly_capacity_hours and area so the
+ * client can render capacity hints without a second round-trip.
+ *
+ * Authn-gated like the rest of the module — read access for any
+ * logged-in user.
+ */
+router.get('/lookup', async (req, res) => {
+  try {
+    const includeTerminated = String(req.query.include_terminated || '').toLowerCase() === 'true';
+    const wheres = ['e.deleted_at IS NULL'];
+    if (!includeTerminated) wheres.push(`e.status <> 'terminated'`);
+    const where = `WHERE ${wheres.join(' AND ')}`;
+    const { rows } = await pool.query(
+      `SELECT e.id, e.first_name, e.last_name, e.level, e.status,
+              e.area_id, a.name AS area_name,
+              e.weekly_capacity_hours
+         FROM employees e
+         LEFT JOIN areas a ON a.id = e.area_id
+         ${where}
+         ORDER BY e.last_name, e.first_name`
+    );
+    res.json({ data: rows });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('GET /employees/lookup failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
   try {
