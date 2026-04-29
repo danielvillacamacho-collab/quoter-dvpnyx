@@ -15,6 +15,83 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ## [Unreleased] — entregas en curso
 
+### feat(spec-ii-00): Iniciativas Internas, Novedades e Idle Time (Abril 2026)
+
+Tres módulos acoplados + un catálogo de festivos por país. El idle time
+deja de ser una estimación y pasa a ser un indicador defendible (capacity
+total − festivos − novedades − asignaciones).
+
+**Schema** (todo dentro del bloque `SPEC_II_00_SQL` en `migrate.js`,
+idempotente igual que el resto del repo):
+- Catálogos: `business_areas`, `novelty_types`, `countries`.
+- `country_holidays` + seed embebido CO/MX/GT/EC/PA/PE/US para 2026 + 2027.
+- `internal_initiatives` (presupuesto USD, status, business_area, owner).
+- `internal_initiative_assignments` (employee_id + weekly_hours, snapshot
+  de hourly_rate_usd al asignar).
+- `employee_novelties` con trigger DB que bloquea overlaps usando
+  `daterange && daterange` (sin requerir btree_gist).
+- `idle_time_calculations` con trigger de inmutabilidad (status=`final`
+  no se puede modificar — se recalcula via DELETE+recalculate).
+- `employees.country_id` agregado con backfill best-effort desde
+  `employees.country` (VARCHAR legacy).
+
+**Decisiones de diseño** (documentadas en migrate.js):
+- Sin `tenant_id` (single-tenant operativo, alineado con el resto del repo).
+- assignments NO se refactoriza a XOR. Las asignaciones internas viven
+  exclusivamente en `internal_initiative_assignments`. El idle engine
+  suma ambas tablas para producir el snapshot mensual.
+- `hourly_rate_usd` se deriva de `employee_costs.cost_usd` ÷ horas
+  mensuales estimadas (`weekly_capacity_hours × 52/12`). Si un empleado
+  no tiene `employee_cost`, el snapshot mantiene `idle_cost_usd = 0` con
+  `flag missing_rate=true` en breakdown — no falla la calculación.
+- Sin S3: las novedades aceptan URL externa (Drive/SharePoint) en
+  `attachment_url`. Sin presigned upload en MVP.
+- Sin cron real: admin/finance corren `POST /api/idle-time/calculate`
+  manualmente o desde el botón "↻ Calcular período" del dashboard. La
+  idempotencia está garantizada (UPSERT por `employee_id, period_yyyymm`).
+
+**Server**:
+- `utils/idle_time_engine.js` — motor puro con 22+ tests cubriendo todos
+  los edge cases del spec §7.1 (vacaciones full-month, sobre-asignación,
+  contratado mid-mes, festivo en sábado, corporate_training, missing_rate).
+- `utils/initiative_code.js` — generación `II-{AREA}-{YYYY}-{SEQ5}` bajo
+  advisory lock para evitar colisiones.
+- `routes/internal_initiatives.js` — CRUD admin/owner + transitions
+  (active ↔ paused, → completed/cancelled terminal). Soft-delete bloqueado
+  si hay asignaciones activas. Sub-resource `/assignments` lookup
+  automático de tarifa snapshot.
+- `routes/novelties.js` — CRUD con scoping por `employees.user_id` y
+  `employees.manager_user_id`. Trigger overlap → 422 con mensaje claro.
+  `GET /calendar/:employee_id` consolida festivos + novedades + ambas
+  asignaciones para el modal "Registrar novedad".
+- `routes/holidays.js` — CRUD admin (lectura libre).
+- `routes/idle_time.js` — endpoints individual / aggregate / calculate /
+  finalize / recalculate / capacity-utilization / initiative-cost-summary.
+
+**Cliente**:
+- Nuevos módulos: `InternalInitiatives`, `InternalInitiativeDetail`,
+  `Novelties`, `IdleTime`, `CountryHolidays`.
+- Sidebar agrega grupo "Iniciativas internas" con 3 entries y entry de
+  Festivos en Configuración (admin).
+- `IdleTime` dashboard: 4 KPIs (idle %, costo bench, utilización facturable,
+  inversión interna) + barra apilada de capacidad + tabla de idle por país +
+  botón admin "↻ Calcular período" / "🔒 Finalizar".
+
+**Cumplimiento del spec original**:
+- ✅ 4 entidades nuevas (initiatives, iia, novelties, idle_calculations) +
+  catálogos.
+- ✅ Idle time engine con todos los edge cases del spec §7.1.
+- ✅ Inmutabilidad de cálculos final via trigger.
+- ✅ State machine de iniciativas (active ↔ paused, → completed/cancelled).
+- ✅ Distinción visual morado=internal vs azul=contract en dashboard.
+- ⚠ **Adaptaciones**: convención JS+CRA del repo (no TS+Zod+RQ5 del spec
+  original); sin tenant_id; sin XOR refactor en assignments; sin S3;
+  cron manual via endpoint admin. Razones documentadas en migrate.js.
+- 🔜 Pendientes para iteración futura: rollout gradual con feature flags,
+  e2e Playwright, performance test k6, time_entries específicos a
+  iniciativas internas (consumed_usd hoy es proxy basado en horas
+  planeadas × tarifa snapshot × semanas transcurridas).
+
 ---
 
 ## Phase 16.1 — Proyección de costos a futuro (2026-04-28)

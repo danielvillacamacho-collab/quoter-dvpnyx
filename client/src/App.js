@@ -43,6 +43,12 @@ import Users from './modules/Users';
 import Preferencias from './modules/Preferencias';
 import EmployeeCosts from './modules/EmployeeCosts';
 import EmployeeCostsImport from './modules/EmployeeCostsImport';
+// SPEC-II-00 — Internal Initiatives, Novelties & Idle Time
+import InternalInitiatives from './modules/InternalInitiatives';
+import InternalInitiativeDetail from './modules/InternalInitiativeDetail';
+import Novelties from './modules/Novelties';
+import IdleTime from './modules/IdleTime';
+import CountryHolidays from './modules/CountryHolidays';
 import './theme.css';
 import './App.css';
 
@@ -190,6 +196,12 @@ function Layout() {
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           {isAdmin && <Route path="/admin/employee-costs" element={<EmployeeCosts />} />}
           {isAdmin && <Route path="/admin/employee-costs/import" element={<EmployeeCostsImport />} />}
+          {/* SPEC-II-00 */}
+          <Route path="/internal-initiatives"        element={<InternalInitiatives />} />
+          <Route path="/internal-initiatives/:id"    element={<InternalInitiativeDetail />} />
+          <Route path="/novelties"                    element={<Novelties />} />
+          <Route path="/idle-time"                    element={<IdleTime />} />
+          <Route path="/admin/holidays"               element={<CountryHolidays />} />
           <Route path="/preferencias" element={<Preferencias />} />
         </Routes>
         </ErrorBoundary>

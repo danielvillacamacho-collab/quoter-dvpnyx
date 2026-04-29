@@ -5,7 +5,7 @@ import {
   Home, UserPlus, FileText, Building2, Briefcase, FileCheck2,
   ClipboardList, CalendarDays, LayoutGrid, Users, Layers, Tag,
   Clock, TrendingUp, BarChart3, BookOpen, Settings, UserCog, Upload,
-  Palette, LogOut, DollarSign,
+  Palette, LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
 } from 'lucide-react';
 
 /**
@@ -59,6 +59,10 @@ const ICONS = {
   '/admin/employee-costs':    DollarSign,
   '/admin/users':             UserCog,
   '/admin/bulk-import':       Upload,
+  '/admin/holidays':          Globe,
+  '/internal-initiatives':    Rocket,
+  '/novelties':               CalendarOff,
+  '/idle-time':               Activity,
   '/preferencias':            Palette,
 };
 
@@ -103,6 +107,13 @@ export function buildGroups(isAdmin) {
       ],
     },
     {
+      title: 'Iniciativas internas', items: [
+        { path: '/internal-initiatives', label: 'Iniciativas' },
+        { path: '/novelties',            label: 'Novedades' },
+        { path: '/idle-time',            label: 'Capacidad y bench' },
+      ],
+    },
+    {
       title: 'Finanzas', items: [
         { path: '/revenue', label: 'Reconocimiento' },
       ],
@@ -121,6 +132,7 @@ export function buildGroups(isAdmin) {
         { path: '/admin/params',          label: 'Parámetros'      },
         { path: '/admin/exchange-rates',  label: 'Tasas de cambio' },
         { path: '/admin/employee-costs',  label: 'Costos del equipo' },
+        { path: '/admin/holidays',        label: 'Festivos'        },
         { path: '/admin/users',           label: 'Usuarios'        },
         { path: '/admin/bulk-import',     label: 'Carga masiva'    },
       ],
