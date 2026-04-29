@@ -238,6 +238,29 @@ describe('CapacityPlanner module', () => {
     });
   });
 
+  it('SPEC-006/Spec3 — range selector defaults to 4 weeks and updates URL on change', async () => {
+    mount();
+    await screen.findByTestId('emp-row-e1');
+
+    const sel = screen.getByLabelText('Rango de semanas');
+    // Default value
+    expect(sel).toHaveValue('4');
+    // All four options present
+    expect(within(sel).getByRole('option', { name: '1 semana' })).toBeInTheDocument();
+    expect(within(sel).getByRole('option', { name: '8 semanas' })).toBeInTheDocument();
+
+    // Change to 8 weeks → URL and API call updated
+    fireEvent.change(sel, { target: { value: '8' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('loc').getAttribute('data-search')).toMatch(/weeks=8/);
+    });
+    await waitFor(() => {
+      expect(apiV2.apiGet.mock.calls.some((c) => String(c[0]).includes('weeks=8'))).toBe(true);
+    });
+    // Arrow aria-labels update to reflect new range
+    expect(screen.getByRole('button', { name: /8 semanas adelante/i })).toBeInTheDocument();
+  });
+
   it('renders the alerts strip with severity counts (US-PLN-6)', async () => {
     mount();
     const strip = await screen.findByTestId('alerts-strip');
