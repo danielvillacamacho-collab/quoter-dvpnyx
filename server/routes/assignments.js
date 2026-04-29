@@ -34,7 +34,7 @@ const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { notify, notifyMany } = require('../utils/notifications');
 const { runAllChecks } = require('../utils/assignment_validation');
 const { stringifyCsv } = require('../utils/csv');
-const { parsePagination } = require('../utils/sanitize');
+const { parsePagination, isValidISODate } = require('../utils/sanitize');
 const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
@@ -74,6 +74,73 @@ async function sumOverlappingHours(conn, employeeId, start, end, ignoreAssignmen
     params
   );
   return Number(rows[0].total || 0);
+}
+
+/* -------- FILTER HELPERS — SPEC-007 --------
+ *
+ * buildAssignmentFilters(query) → { wheres, params, error }
+ *
+ * Single source of truth for WHERE-clause construction shared by the
+ * paginated list and the CSV export. Both routes apply the same set of
+ * filters so any addition here automatically lands in both.
+ *
+ * Employee filter (Spec 1):
+ *   ?employee_id=<uuid>              single (backward-compat)
+ *   ?employee_ids=<uuid>,<uuid>,...  multi (OR logic)
+ *   Both params can be present simultaneously; the Set deduplicates.
+ *
+ * Date-range filter (Spec 2 — intersection logic):
+ *   ?date_from=YYYY-MM-DD  → assignments that end on/after this date
+ *   ?date_to=YYYY-MM-DD    → assignments that start on/before this date
+ *   Together they match any assignment whose window intersects the range.
+ *   Open assignments (end_date IS NULL) are treated as ongoing forever.
+ */
+function buildEmployeeIds(query) {
+  const ids = new Set();
+  if (query.employee_id) ids.add(String(query.employee_id).trim());
+  if (query.employee_ids) {
+    String(query.employee_ids)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((id) => ids.add(id));
+  }
+  return [...ids];
+}
+
+function buildAssignmentFilters(query) {
+  const wheres = ['a.deleted_at IS NULL'];
+  const params = [];
+  const add = (v) => { params.push(v); return `$${params.length}`; };
+
+  if (query.contract_id)         wheres.push(`a.contract_id = ${add(query.contract_id)}`);
+  if (query.resource_request_id) wheres.push(`a.resource_request_id = ${add(query.resource_request_id)}`);
+  if (query.status)              wheres.push(`a.status = ${add(query.status)}`);
+
+  const empIds = buildEmployeeIds(query);
+  if (empIds.length === 1) {
+    wheres.push(`a.employee_id = ${add(empIds[0])}`);
+  } else if (empIds.length > 1) {
+    wheres.push(`a.employee_id IN (${empIds.map((id) => add(id)).join(', ')})`);
+  }
+
+  if (query.date_from) {
+    if (!isValidISODate(query.date_from)) {
+      return { wheres, params, error: 'date_from debe ser una fecha válida (YYYY-MM-DD)' };
+    }
+    // Open assignments (end_date IS NULL) are always included when date_from
+    // is provided — they are treated as ongoing with no end.
+    wheres.push(`(a.end_date IS NULL OR a.end_date >= ${add(query.date_from)}::date)`);
+  }
+
+  if (query.date_to) {
+    if (!isValidISODate(query.date_to)) {
+      return { wheres, params, error: 'date_to debe ser una fecha válida (YYYY-MM-DD)' };
+    }
+    wheres.push(`a.start_date <= ${add(query.date_to)}::date`);
+  }
+
+  return { wheres, params, error: null };
 }
 
 /* -------- VALIDATE (read-only pre-check) — US-BK-2 --------
@@ -226,21 +293,14 @@ router.get('/validate', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { page, limit, offset } = parsePagination(req.query);
-
-    const wheres = ['a.deleted_at IS NULL'];
-    const filterParams = [];
-    const add = (v) => { filterParams.push(v); return `$${filterParams.length}`; };
-
-    if (req.query.employee_id)         wheres.push(`a.employee_id = ${add(req.query.employee_id)}`);
-    if (req.query.contract_id)         wheres.push(`a.contract_id = ${add(req.query.contract_id)}`);
-    if (req.query.resource_request_id) wheres.push(`a.resource_request_id = ${add(req.query.resource_request_id)}`);
-    if (req.query.status)              wheres.push(`a.status = ${add(req.query.status)}`);
+    const { wheres, params, error } = buildAssignmentFilters(req.query);
+    if (error) return res.status(400).json({ error });
 
     const where = `WHERE ${wheres.join(' AND ')}`;
-    const limitIdx = filterParams.length + 1;
-    const offsetIdx = filterParams.length + 2;
+    const limitIdx = params.length + 1;
+    const offsetIdx = params.length + 2;
     const [countRes, rowsRes] = await Promise.all([
-      pool.query(`SELECT COUNT(*)::int AS total FROM assignments a ${where}`, filterParams),
+      pool.query(`SELECT COUNT(*)::int AS total FROM assignments a ${where}`, params),
       pool.query(
         `SELECT a.*,
            e.first_name AS employee_first_name, e.last_name AS employee_last_name,
@@ -253,18 +313,14 @@ router.get('/', async (req, res) => {
            ${where}
            ORDER BY a.start_date DESC
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-        [...filterParams, limit, offset]
+        [...params, limit, offset]
       ),
     ]);
     res.json({
       data: rowsRes.rows,
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /assignments failed:', err);
-    res.status(500).json({ error: 'Error interno' });
-  }
+  } catch (err) { serverError(res, 'GET /assignments', err); }
 });
 
 /* -------- EXPORT CSV --------
@@ -277,14 +333,8 @@ router.get('/', async (req, res) => {
 const EXPORT_LIMIT = 10000;
 router.get('/export.csv', async (req, res) => {
   try {
-    const wheres = ['a.deleted_at IS NULL'];
-    const params = [];
-    const add = (v) => { params.push(v); return `$${params.length}`; };
-
-    if (req.query.employee_id)         wheres.push(`a.employee_id = ${add(req.query.employee_id)}`);
-    if (req.query.contract_id)         wheres.push(`a.contract_id = ${add(req.query.contract_id)}`);
-    if (req.query.resource_request_id) wheres.push(`a.resource_request_id = ${add(req.query.resource_request_id)}`);
-    if (req.query.status)              wheres.push(`a.status = ${add(req.query.status)}`);
+    const { wheres, params, error } = buildAssignmentFilters(req.query);
+    if (error) return res.status(400).json({ error });
 
     const where = `WHERE ${wheres.join(' AND ')}`;
     const { rows } = await pool.query(
