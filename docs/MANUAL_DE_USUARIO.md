@@ -779,7 +779,61 @@ Cada contrato ahora se clasifica con un **Subtipo** además del Tipo. Esto permi
 
 **Contratos antiguos sin subtipo:** se pueden seguir editando (otros campos) sin forzar a clasificarlos. Pero si cambias el Tipo, te exige Subtipo nuevo. Recomendamos completarlos progresivamente.
 
-### 7. Asignar líder directo a un empleado
+### 7. Costos del equipo (admin/superadmin)
+
+**Datos sensibles — solo admin/superadmin.**
+
+#### En la ficha del empleado
+
+1. Abre cualquier empleado desde Gente → Empleados.
+2. Si eres admin, ves una sección nueva **"Costos"** con:
+   - Tarjeta del costo actual (último período registrado).
+   - Tabla histórica con todos los períodos.
+   - Formulario inline para registrar uno nuevo (período, moneda, costo bruto, notas).
+3. Los períodos cerrados (🔒) requieren superadmin para editar.
+4. Si la moneda no es USD, el sistema calcula automáticamente el equivalente USD usando la tasa del período. Si no hay tasa registrada, te avisa con warning amarillo.
+
+#### En la vista masiva (Configuración → Costos del equipo)
+
+Esta es la vista que finanzas usa cada mes para cargar los costos de todo el equipo.
+
+**Flujo típico (5 minutos):**
+1. Selecciona el mes en el dropdown arriba.
+2. Click en **"📋 Copiar del mes anterior"** → trae los costos del mes anterior al actual (sin guardar todavía — los verás con badge "Sin guardar").
+3. Ajusta los 3-5 empleados que cambiaron (ascensos, ajustes, nuevos ingresos).
+4. Click en **"💾 Guardar todo"** → se guardan en transacción atómica.
+5. Al final del mes: **"🔒 Cerrar período"** → bloquea futuras ediciones (excepto superadmin).
+
+**Otros botones:**
+- **🔄 Recalcular USD**: si cambiaste la tasa de cambio del período después de cargar costos, este botón recalcula los USD de los costos abiertos (los cerrados no se tocan).
+- **📈 Proyectar a futuro**: abre un modal para crear costos automáticamente en los próximos meses (3, 6, 9 ó 12). Útil para presupuestar el gasto del semestre/año sin cargar mes por mes.
+   - Toma como base el último período con costos (o uno que elijas).
+   - Permite aplicar un crecimiento anual opcional (ej: +5% YoY) que se reparte mensualmente.
+   - **Respeta cargas manuales**: si finanzas ya cargó un mes específico a mano, la proyección no lo toca.
+   - **Respeta períodos cerrados**: rows locked no se modifican.
+   - **Reproyectable**: se puede correr varias veces; sólo crea/actualiza rows con source `projected`.
+   - Las filas proyectadas aparecen con badge violeta **📈 Proyectado** para distinguirlas; se pueden editar manualmente y entonces dejan de ser "proyectadas".
+- **🔓 Reabrir período**: solo superadmin. Revierte el cierre.
+- **⤓ Importar CSV**: carga masiva con preview + commit. Columnas: `employee_id, currency, gross_cost, notes`.
+
+**Indicadores arriba de la tabla:**
+- Empleados con costo / total (con barra de progreso verde).
+- Costo total USD del equipo en el período.
+- Costo promedio USD por empleado.
+- Cuántos costos están cerrados (🔒).
+
+**Lista de "Empleados sin costo":** colapsable, te dice a quién le falta — útil para no perder a nadie.
+
+**Δ vs teórico:** cada fila tiene una columna de delta porcentual contra el costo teórico del nivel del empleado. Color:
+- ✓ Verde: dentro de ±5%
+- ⚠ Amarillo: ±5 a ±15%
+- ✕ Rojo: más de ±15% de diferencia
+
+**Empleados nuevos (sin historial):** aparecen con badge azul "Nuevo" y el costo teórico como placeholder gris (no guardado). Tú decides cuándo cargarlo.
+
+**Empleados terminados:** no aparecen en la vista del mes actual. Sí aparecen en períodos pasados donde estuvieron activos.
+
+### 8. Asignar líder directo a un empleado
 
 Para que la visibilidad de equipo funcione:
 

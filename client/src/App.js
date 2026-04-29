@@ -41,6 +41,8 @@ import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import BulkImport from './modules/BulkImport';
 import Users from './modules/Users';
 import Preferencias from './modules/Preferencias';
+import EmployeeCosts from './modules/EmployeeCosts';
+import EmployeeCostsImport from './modules/EmployeeCostsImport';
 import './theme.css';
 import './App.css';
 
@@ -186,6 +188,8 @@ function Layout() {
           <Route path="/dashboard/me" element={<DashboardMe />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
+          {isAdmin && <Route path="/admin/employee-costs" element={<EmployeeCosts />} />}
+          {isAdmin && <Route path="/admin/employee-costs/import" element={<EmployeeCostsImport />} />}
           <Route path="/preferencias" element={<Preferencias />} />
         </Routes>
         </ErrorBoundary>

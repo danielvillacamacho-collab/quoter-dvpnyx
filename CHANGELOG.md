@@ -17,6 +17,145 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ---
 
+## Phase 16.1 — Proyección de costos a futuro (2026-04-28)
+
+### feat(employee-costs): "Proyectar a futuro" para planear gasto sin cargar mes por mes
+
+Refinamiento solicitado tras Phase 16: finanzas necesita proyectar el gasto a los próximos meses sin tener que entrar manualmente cada uno.
+
+**Schema:**
+- Extiende `employee_costs.source` CHECK con valor `'projected'` (idempotente: dropea+recrea constraint en DBs ya migradas, sin perder datos).
+
+**Util:**
+- `addMonths(period, n)` y `periodsForward(start, count)` en `cost_calc.js` con tests (incluye rollovers de año, valores negativos, edge cases).
+
+**Server:**
+- `POST /api/employee-costs/project-to-future` con body `{ base_period?, months_ahead, growth_pct?, dry_run? }`.
+  - `months_ahead` 1..12 (cap duro).
+  - `growth_pct` opcional, repartido mensualmente vía `(1+r)^(1/12)`.
+  - `dry_run` para preview con `details` antes de aplicar.
+  - **No sobreescribe entradas manuales** (source != projected gana).
+  - **No toca períodos cerrados** (locked).
+  - **Reproyectable**: rows con source=projected se actualizan; idempotencia garantizada.
+  - Skip empleados terminados/inactivos en el período destino.
+  - Recalcula FX con la tasa del período destino (no asume base).
+- Evento `employee_cost.projected_to_future` con resumen completo.
+
+**Cliente:**
+- Nuevo botón **"📈 Proyectar a futuro"** en `/admin/employee-costs`.
+- Modal de 2 fases (preview → apply) con:
+  - Selector de período base (default: auto-detectar último con costos).
+  - Selector de meses (3/6/9/12).
+  - Input de growth anual %.
+  - Preview con conteos: a crear, a actualizar, preservados (manuales), saltados (locked), saltados (inactivos), warnings FX.
+- Badge violeta **"📈 Proyectado"** en filas con source='projected' (mass view + EmployeeDetail). Editable: editar a mano transforma la fila en source='manual' y la respeta en proyecciones futuras.
+- Badge azul claro **"📋 Copiado"** para `copy_from_prev` (visualmente distinguible).
+
+**Tests:** +22 server (10 del endpoint nuevo, 12 de helpers `addMonths`/`periodsForward`). Total **774/774 server, 353/353 cliente**, build limpio.
+
+**Casos cubiertos:**
+✓ Rechaza months_ahead fuera de 1..12.
+✓ Rechaza growth_pct fuera de -50..200.
+✓ 400 con code accionable si DB vacía o base_period sin rows.
+✓ Dry_run no escribe.
+✓ Growth_pct anual aplicado mes a mes correctamente.
+✓ Preserva manuales (skipped_existing).
+✓ No toca locked.
+✓ Actualiza projected anteriores (idempotente).
+✓ Skip empleados terminados antes del período destino.
+✓ Commit real ejecuta INSERTs.
+
+---
+
+## Phase 16 — Employee Costs (2026-04-28)
+
+### feat(employee-costs): módulo de costos empresa mensual por empleado
+
+Respuesta a `spec_costos_empleado.docx` (operaciones, prioridad ALTA). Habilita
+cálculo de márgenes reales y prerequisito del módulo de billing. **PII salarial
+— acceso restringido a admin/superadmin.**
+
+**Schema (idempotente, aditivo):**
+- Nueva tabla `employee_costs` con UNIQUE `(employee_id, period)`, CHECKs
+  para currency/period/gross_cost, indexes en period/employee/(period,locked).
+- FK `ON DELETE RESTRICT` para preservar historial financiero.
+- COMMENT ON TABLE/COLUMN documentando PII:high y semánticas.
+- Deprecación de columnas legacy en `employees.company_monthly_cost/...`
+  con COMMENT (no se borran — preservación de schema).
+
+**Helpers:**
+- `server/utils/cost_calc.js`: validatePeriod (CHAR(6) + YYYY-MM input),
+  previousPeriod, periodWithinAllowedFuture (default +1 mes), validateCurrency
+  (USD/COP/MXN/GTQ/EUR), convertToUsd, validateEmployeePeriod (start_date /
+  end_date check), deltaVsTheoretical (semáforo on_target/warn/alert por ±5/±15%).
+- `client/src/utils/cost.js`: formatPeriod (YYYYMM↔YYYY-MM), formatMoney
+  (Intl), defaultCurrencyForCountry (heurística CO/MX/GT/ES), recentPeriods,
+  deltaZoneColor/Label.
+
+**Server (`routes/employee_costs.js`, 11 endpoints):**
+- `GET /api/employee-costs?period=YYYYMM` — mass view con summary
+- `GET /employee/:id` — histórico DESC del empleado
+- `GET /employee/:id/:period` — detalle puntual
+- `GET /summary/:period` — KPIs ligeros
+- `POST /` — UPSERT por (employee_id, period) con validación FX
+- `PUT /:id` — edita por id; recalcula FX si cambia currency/gross
+- `DELETE /:id` — admin si abierta, superadmin si locked
+- `POST /bulk/preview` y `POST /bulk/commit` — patrón 2-fases con
+  atomicidad (cualquier error → ROLLBACK completo). Cap 5000 items.
+- `POST /copy-from-previous` — copia rows del período N-1 al N
+  (skip activos sólo + skip ya en N). Recalcula FX con tasa nueva.
+- `POST /lock/:period` — admin marca período como cerrado
+- `POST /unlock/:period` — SOLO superadmin
+- `POST /recalculate-usd/:period` — recalcula rows abiertos tras cambio FX
+
+**Eventos emitidos** (audit log):
+- employee_cost.created / updated / deleted
+- .locked / .unlocked
+- .recalculated_after_fx_change
+- .bulk_committed / .copied_from_previous
+
+**UI:**
+- **EmployeeDetail (`/employees/:id`)**: nueva sección "Costos" admin-only
+  con card del costo actual, tabla histórica, formulario inline para
+  registrar/editar (period picker, currency dropdown según país, costo
+  bruto, notas) + warnings FX + soporte para edit/delete con disabled
+  para rows locked si no eres superadmin.
+- **Mass view (`/admin/employee-costs`)**: tabla en pantalla con todos los
+  empleados activos del período, inputs editables in-place con tracking
+  de "drafts" sin guardar (badge naranja), 4 metric cards arriba (with_cost
+  / total_usd / avg_usd / locked_count), botones "Copiar mes anterior",
+  "Recalcular USD", "Cerrar período", "Reabrir (superadmin)", "Importar
+  CSV" + "Guardar todo (N)" prominente. Lista colapsable de empleados sin
+  costo. Δ vs teórico con semáforo de color por fila.
+- **CSV Import (`/admin/employee-costs/import`)**: upload o paste de CSV,
+  preview con tabla de errores/warnings/applied antes de aplicar, botón
+  "Aplicar" deshabilitado si hay errores.
+- **Sidebar**: nueva entrada "Costos del equipo" (admin-only, ícono dollar)
+  en sección Configuración.
+
+**Tests:**
+- Server: 78 nuevos (utils/cost_calc.test.js + routes/employee_costs.test.js).
+  Cubren todos los códigos de error, todas las reglas de coherencia con
+  empleados (start/end), FX directo + fallback + missing, lock/unlock por
+  rol, bulk con atomicidad, copy-from-previous con skip, recalc-USD respeta
+  locked, permisos por rol (member/lead/viewer reciben 403, admin OK,
+  superadmin extra).
+- Cliente: 22 nuevos en `utils/cost.test.js` (formato monetario, períodos,
+  default currency by country, semáforo).
+- Totales post-implementación: **752 server** (era 674, +78 nuevos), **353 client** (era 331, +22 nuevos).
+
+**Decisiones técnicas** (ver [`docs/DECISIONS.md :: EMPLOYEE-COSTS`](docs/DECISIONS.md#employee-costs)):
+1. Period CHAR(6) alineado con resto del sistema.
+2. Deprecación de columnas en employees.
+3. ON DELETE RESTRICT (no CASCADE) — historial inmutable.
+4. Empleados nuevos sin costo no bloquean la carga.
+5. Recálculo FX manual (endpoint dedicado, no auto).
+6. Encryption at rest diferida (requiere infra).
+7. Permitir +1 mes hacia adelante.
+8. Patrón preview+commit con atomicidad real.
+
+---
+
 ## Phase 15 — Subtipo de contrato (2026-04-28)
 
 ### feat(contracts): contract_subtype field con catálogo controlado

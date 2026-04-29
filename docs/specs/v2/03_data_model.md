@@ -442,6 +442,39 @@ PK compuesta: `(contract_id, yyyymm)`.
 
 > **Inmutabilidad pendiente:** rows con `status='closed'` deberían ser inmutables (NIIF 15). Hoy depende del código no permitir UPDATE a closed — sin trigger DB.
 
+### `employee_costs`
+
+Costo empresa mensual real por empleado. Spec original: `spec_costos_empleado.docx` (Abril 2026). PII salarial, acceso restringido a admin/superadmin.
+
+| Columna | Tipo | Notas |
+|---|---|---|
+| `id` | UUID PK | |
+| `employee_id` | UUID NOT NULL → employees | **`ON DELETE RESTRICT`** — historial financiero inmutable |
+| `period` | CHAR(6) | `^[0-9]{6}$` (YYYYMM, alineado con exchange_rates / revenue_periods) |
+| `currency` | VARCHAR(3) | CHECK: `USD` \| `COP` \| `MXN` \| `GTQ` \| `EUR` |
+| `gross_cost` | NUMERIC(14,2) | CHECK: `>= 0`. Costo total en moneda original |
+| `cost_usd` | NUMERIC(14,2) NULL | calculado vía `cost_usd = gross_cost / usd_rate(period, currency)`. NULL si no hay tasa |
+| `exchange_rate_used` | NUMERIC(18,8) NULL | snapshot de la tasa usada (auditoría). NO se actualiza automáticamente cuando cambia exchange_rates |
+| `locked` | BOOLEAN DEFAULT false | true = período cerrado contablemente |
+| `locked_at`, `locked_by` | | quien cerró el período |
+| `source` | VARCHAR(20) | CHECK: `manual` \| `payroll_sync` \| `csv_import` \| `copy_from_prev` \| `projected` |
+| `notes` | TEXT NULL | |
+| `created_by`, `updated_by`, `created_at`, `updated_at` | | |
+
+UNIQUE: `(employee_id, period)`. Indexes: `period`, `employee_id`, `(period, locked)`, parcial `WHERE locked = false`.
+
+**Conversión USD:** convención compartida con `exchange_rates` — `1 USD = N <currency>`, por lo tanto `cost_usd = gross_cost / usd_rate`. Para `currency='USD'`, `usd_rate=1.0` implícito y `cost_usd = gross_cost`.
+
+**Reglas de coherencia:**
+- Period >= mes de inicio del empleado.
+- Period <= mes de fin (si está terminado).
+- Period dentro del rango permitido (default ≤ +1 mes hacia adelante).
+- Row `locked=true` requiere superadmin para editar/borrar.
+
+**Eventos emitidos:** `employee_cost.created` / `.updated` / `.deleted` / `.locked` / `.unlocked` / `.recalculated_after_fx_change` / `.bulk_committed` / `.copied_from_previous`.
+
+> **Deprecación**: `employees.company_monthly_cost`, `hourly_cost`, `cost_currency`, `cost_updated_at`, `cost_updated_by` quedan deprecadas (COMMENT ON COLUMN). La fuente de verdad es `employee_costs`.
+
 ### `exchange_rates`
 
 Tasas mensuales tipo "USD<currency>". Convención: `usd_rate = N` ⟹ `1 USD = N <currency>`.
