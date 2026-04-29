@@ -48,10 +48,14 @@ describe('IdleTime dashboard', () => {
 
   it('muestra KPIs principales', async () => {
     mount();
-    await screen.findByText(/Idle Total/);
-    expect(screen.getByText(/Costo del Bench/i)).toBeInTheDocument();
-    expect(screen.getByText(/Utilización Facturable/i)).toBeInTheDocument();
-    expect(screen.getByText(/Inversión Interna/i)).toBeInTheDocument();
+    // Strings exactos: el subtitle del módulo menciona "costo del bench"
+    // del CFO (entre comillas), por lo que un regex /Costo del Bench/i
+    // matchea KPI + subtitle. getByText con string exacto matchea solo
+    // el textContent literal del KPI label.
+    await screen.findByText('Idle Total');
+    expect(screen.getByText('Costo del Bench')).toBeInTheDocument();
+    expect(screen.getByText('Utilización Facturable')).toBeInTheDocument();
+    expect(screen.getByText('Inversión Interna')).toBeInTheDocument();
   });
 
   it('muestra tabla de idle por país', async () => {
