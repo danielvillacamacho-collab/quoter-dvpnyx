@@ -353,12 +353,15 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   );
 }
 
-function AssignmentBar({ a, onOpen }) {
-  const label = `${a.contract_name}${a.weekly_hours ? ` · ${a.weekly_hours}h` : ''}`;
+function AssignmentBar({ a, onOpen, capacity }) {
+  const cap = Number(capacity) || 0;
+  const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+  const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+  const label = `${a.contract_name}${a.weekly_hours ? ` · ${a.weekly_hours}h` : ''} · ${pctStr}`;
   return (
     <div
       style={{ ...s.bar(a.color), cursor: onOpen ? 'pointer' : 'default' }}
-      title={`${a.contract_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem`}
+      title={`${a.contract_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
       role={onOpen ? 'button' : undefined}
       tabIndex={onOpen ? 0 : undefined}
@@ -404,7 +407,7 @@ function EmployeeRow({ emp, weeks, onOpen }) {
         const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : '#fff';
         return (
           <div key={w.index} style={s.weekCell(cellBg)} data-testid={`cell-${emp.id}-${i}`}>
-            {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} />)}
+            {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} />)}
             <div style={s.chip(weekInfo.bucket)}>
               {weekInfo.hours > 0 ? `${weekInfo.utilization_pct}%` : '—'}
             </div>
@@ -563,7 +566,7 @@ function buildProjectsView(data) {
     for (const a of e.assignments || []) {
       const bucket = byId.get(a.contract_id);
       if (!bucket) continue;
-      const enriched = { ...a, employee_id: e.id, employee_name: e.full_name };
+      const enriched = { ...a, employee_id: e.id, employee_name: e.full_name, employee_capacity: e.weekly_capacity_hours };
       bucket.summary.push(enriched);
       const rid = a.resource_request_id;
       if (rid) {
@@ -624,19 +627,24 @@ function ContractRow({ bucket, weeks, onOpen }) {
         const items = byWeek.get(i) || [];
         return (
           <div key={w.index} style={s.weekCell('transparent')} data-testid={`contract-cell-${bucket.contract.id}-${i}`}>
-            {items.map((a) => (
-              <div
-                key={`${a.id}-${i}`}
-                style={{ ...s.bar(a.color || bucket.contract.color || '#6B5B95'), cursor: onOpen ? 'pointer' : 'default' }}
-                title={`${a.employee_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem`}
-                role={onOpen ? 'button' : undefined}
-                tabIndex={onOpen ? 0 : undefined}
-                onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
-                onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
-              >
-                {a.employee_name}
-              </div>
-            ))}
+            {items.map((a) => {
+              const cap = Number(a.employee_capacity) || 0;
+              const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+              const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+              return (
+                <div
+                  key={`${a.id}-${i}`}
+                  style={{ ...s.bar(a.color || bucket.contract.color || '#6B5B95'), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
+                  role={onOpen ? 'button' : undefined}
+                  tabIndex={onOpen ? 0 : undefined}
+                  onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
+                  onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
+                >
+                  {a.employee_name} · {pctStr}
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -697,19 +705,24 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
           : s.weekCell('transparent');
         return (
           <div key={w.index} style={cellStyle}>
-            {items.map((a) => (
-              <div
-                key={`${a.id}-${i}`}
-                style={{ ...s.bar(a.color || bucket.contract.color || '#6B5B95'), cursor: onOpen ? 'pointer' : 'default' }}
-                title={`${a.employee_name} · ${a.weekly_hours}h/sem`}
-                role={onOpen ? 'button' : undefined}
-                tabIndex={onOpen ? 0 : undefined}
-                onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
-                onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
-              >
-                {a.employee_name}
-              </div>
-            ))}
+            {items.map((a) => {
+              const cap = Number(a.employee_capacity) || 0;
+              const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+              const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+              return (
+                <div
+                  key={`${a.id}-${i}`}
+                  style={{ ...s.bar(a.color || bucket.contract.color || '#6B5B95'), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
+                  role={onOpen ? 'button' : undefined}
+                  tabIndex={onOpen ? 0 : undefined}
+                  onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
+                  onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
+                >
+                  {a.employee_name} · {pctStr}
+                </div>
+              );
+            })}
             {showUnassigned && (
               <div style={s.unassignedBar(request.color || bucket.contract.color || '#e98b3f')} title={`Sin asignar · ${title}`}>
                 Sin asignar
