@@ -766,13 +766,13 @@ export default function CapacityPlanner() {
   // US-PLN-3: the URL is the single source of truth for the planner view.
   // That makes the page shareable ("mándame el link con esos filtros") and
   // keeps Back/Forward working naturally. `start` defaults to this week's
-  // Monday; `weeks` defaults to 12.
+  // Monday; `weeks` defaults to 4 (SPEC-006 / Spec 3).
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
 
   const start      = searchParams.get('start')     || todayMondayIso();
   const weeksParam = Number(searchParams.get('weeks'));
-  const weeks      = Number.isFinite(weeksParam) && weeksParam > 0 ? Math.min(26, Math.trunc(weeksParam)) : 12;
+  const weeks      = Number.isFinite(weeksParam) && weeksParam > 0 ? Math.min(26, Math.trunc(weeksParam)) : 4;
   const contractId = searchParams.get('contract_id') || '';
   const areaId     = searchParams.get('area_id')     || '';
   const levelMin   = searchParams.get('level_min')   || '';
@@ -893,9 +893,23 @@ export default function CapacityPlanner() {
           </button>
         </div>
 
-        <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, -28) })} aria-label="4 semanas atrás">← 4 sem</button>
+        {/* SPEC-006 / Spec 3: selector de rango + flechas dinámicas */}
+        <select
+          style={s.select}
+          value={weeks}
+          onChange={(e) => patchParams({ weeks: e.target.value })}
+          aria-label="Rango de semanas"
+          data-testid="weeks-range-select"
+        >
+          <option value="1">1 semana</option>
+          <option value="2">2 semanas</option>
+          <option value="4">4 semanas</option>
+          <option value="8">8 semanas</option>
+        </select>
+
+        <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, -(weeks * 7)) })} aria-label={`${weeks} semanas atrás`}>←</button>
         <button type="button" style={s.btn} onClick={() => patchParams({ start: todayMondayIso() })}>Hoy</button>
-        <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, 28) })} aria-label="4 semanas adelante">4 sem →</button>
+        <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, weeks * 7) })} aria-label={`${weeks} semanas adelante`}>→</button>
 
         <select style={s.select} value={contractId} onChange={(e) => patchParams({ contract_id: e.target.value })} aria-label="Filtro contrato">
           <option value="">Todos los contratos</option>
