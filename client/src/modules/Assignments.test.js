@@ -381,17 +381,22 @@ describe('Assignments module', () => {
   it('SPEC-007: date_from > date_to shows an error and does NOT fetch', async () => {
     mount();
     await screen.findByText('Ana García');
+
+    // Set a valid date_to first — this WILL trigger a fetch (expected)
+    fireEvent.change(screen.getByLabelText('Filtro fecha hasta'), { target: { value: '2026-04-01' } });
+    // Wait for that valid fetch to complete, then clear the mock
+    await waitFor(() => {
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].includes('date_to=2026-04-01'))).toBe(true);
+    });
     apiV2.apiGet.mockClear();
 
-    // First set a valid date_to
-    fireEvent.change(screen.getByLabelText('Filtro fecha hasta'), { target: { value: '2026-04-01' } });
-    // Then set date_from AFTER date_to — invalid range
+    // Now set date_from AFTER date_to — invalid range — must NOT trigger a fetch
     fireEvent.change(screen.getByLabelText('Filtro fecha desde'), { target: { value: '2026-06-01' } });
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'La fecha de inicio no puede ser posterior a la fecha de fin',
     );
-    // No extra assignment fetch should have been dispatched
+    // No assignment fetch should have been dispatched after the invalid range was set
     expect(apiV2.apiGet.mock.calls.map((c) => c[0]).some((u) => u.includes('/api/assignments?'))).toBe(false);
   });
 
