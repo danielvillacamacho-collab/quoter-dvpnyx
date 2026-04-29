@@ -491,3 +491,32 @@ describe('DELETE /api/employees/:id (admin+)', () => {
     expect(call).toBeTruthy();
   });
 });
+
+
+describe('GET /api/employees/lookup — INC-003 (unpaginated dropdown source)', () => {
+  it('returns ALL non-terminated employees, no pagination cap', async () => {
+    // Simulate >100 employees: pre-fix the paginated GET / would cap at 100.
+    const many = Array.from({ length: 250 }, (_, i) => ({
+      id: 'e' + i, first_name: 'F' + i, last_name: 'L' + String(i).padStart(3, '0'),
+      level: 'L4', status: 'active', area_id: 1, area_name: 'Dev', weekly_capacity_hours: 40,
+    }));
+    queryQueue.push({ rows: many });
+    const res = await client.call('GET', '/api/employees/lookup');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(250);
+  });
+
+  it('excludes terminated employees by default', async () => {
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/employees/lookup');
+    const sql = issuedQueries[issuedQueries.length - 1].sql;
+    expect(sql).toMatch(/status <> 'terminated'/);
+  });
+
+  it('honors include_terminated=true', async () => {
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/employees/lookup?include_terminated=true');
+    const sql = issuedQueries[issuedQueries.length - 1].sql;
+    expect(sql).not.toMatch(/status <> 'terminated'/);
+  });
+});
