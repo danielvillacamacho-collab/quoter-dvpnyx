@@ -256,4 +256,188 @@ describe('Assignments module', () => {
     expect(url).toContain('status=active');
     expect(filename).toBe('asignaciones.csv');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SPEC-007 Spec 1 — Filtro por empleado
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('SPEC-007: renders the employee filter input', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    expect(screen.getByLabelText('Filtro por empleado')).toBeInTheDocument();
+  });
+
+  it('SPEC-007: selecting an employee adds employee_ids to the API call', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/employees'))).toBe(true),
+    );
+    apiV2.apiGet.mockClear();
+
+    const filterInput = screen.getByLabelText('Filtro por empleado');
+    fireEvent.focus(filterInput);
+
+    // Wait for the listbox to appear and find Ana García
+    const listbox = await screen.findByRole('listbox', { name: 'Empleados' });
+    const option = await within(listbox).findByText(/Ana García/);
+    fireEvent.mouseDown(option);
+
+    await waitFor(() => {
+      const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
+      expect(urls.some((u) => u.includes('employee_ids=e1'))).toBe(true);
+    });
+  });
+
+  it('SPEC-007: selected employee renders as a removable chip', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/employees'))).toBe(true),
+    );
+
+    fireEvent.focus(screen.getByLabelText('Filtro por empleado'));
+    const listbox = await screen.findByRole('listbox', { name: 'Empleados' });
+    fireEvent.mouseDown(await within(listbox).findByText(/Ana García/));
+
+    // Chip with remove button must appear
+    expect(await screen.findByLabelText('Quitar Ana García')).toBeInTheDocument();
+  });
+
+  it('SPEC-007: removing a chip clears that employee from the filter', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/employees'))).toBe(true),
+    );
+
+    fireEvent.focus(screen.getByLabelText('Filtro por empleado'));
+    const listbox = await screen.findByRole('listbox', { name: 'Empleados' });
+    fireEvent.mouseDown(await within(listbox).findByText(/Ana García/));
+    await screen.findByLabelText('Quitar Ana García');
+
+    apiV2.apiGet.mockClear();
+    fireEvent.click(screen.getByLabelText('Quitar Ana García'));
+
+    await waitFor(() => {
+      const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
+      // After removing, the call must NOT include employee_ids
+      expect(urls.some((u) => u.includes('employee_ids='))).toBe(false);
+    });
+  });
+
+  it('SPEC-007: terminated employees appear in the filter dropdown but not in the form', async () => {
+    mount();
+    // Wait for table to load
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/employees'))).toBe(true),
+    );
+
+    // Filter dropdown — should include terminated
+    fireEvent.focus(screen.getByLabelText('Filtro por empleado'));
+    const filterListbox = await screen.findByRole('listbox', { name: 'Empleados' });
+    expect(within(filterListbox).getByText(/Terminated Person/)).toBeInTheDocument();
+
+    // Form combobox — should exclude terminated
+    fireEvent.click(screen.getByRole('button', { name: /Nueva Asignación/i }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.focus(within(dialog).getByLabelText('Empleado'));
+    const formListbox = within(dialog).getByRole('listbox');
+    await within(formListbox).findByText('Ana García');
+    expect(within(formListbox).queryByText(/Terminated Person/)).toBeNull();
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // SPEC-007 Spec 2 — Filtro por rango de fechas
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('SPEC-007: date_from filter adds date_from to API call', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    apiV2.apiGet.mockClear();
+
+    fireEvent.change(screen.getByLabelText('Filtro fecha desde'), { target: { value: '2026-05-01' } });
+
+    await waitFor(() => {
+      const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
+      expect(urls.some((u) => u.includes('date_from=2026-05-01'))).toBe(true);
+    });
+  });
+
+  it('SPEC-007: date_to filter adds date_to to API call', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    apiV2.apiGet.mockClear();
+
+    fireEvent.change(screen.getByLabelText('Filtro fecha hasta'), { target: { value: '2026-08-31' } });
+
+    await waitFor(() => {
+      const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
+      expect(urls.some((u) => u.includes('date_to=2026-08-31'))).toBe(true);
+    });
+  });
+
+  it('SPEC-007: date_from > date_to shows an error and does NOT fetch', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    apiV2.apiGet.mockClear();
+
+    // First set a valid date_to
+    fireEvent.change(screen.getByLabelText('Filtro fecha hasta'), { target: { value: '2026-04-01' } });
+    // Then set date_from AFTER date_to — invalid range
+    fireEvent.change(screen.getByLabelText('Filtro fecha desde'), { target: { value: '2026-06-01' } });
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'La fecha de inicio no puede ser posterior a la fecha de fin',
+    );
+    // No extra assignment fetch should have been dispatched
+    expect(apiV2.apiGet.mock.calls.map((c) => c[0]).some((u) => u.includes('/api/assignments?'))).toBe(false);
+  });
+
+  it('SPEC-007: clear-filters button resets all filters and reloads', async () => {
+    mount();
+    await screen.findByText('Ana García');
+
+    // Apply a status filter to make "Limpiar filtros" appear
+    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'active' } });
+    const clearBtn = await screen.findByLabelText('Limpiar filtros');
+
+    apiV2.apiGet.mockClear();
+    fireEvent.click(clearBtn);
+
+    await waitFor(() => {
+      // Should have re-fetched without any filter params
+      const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
+      const assignmentCalls = urls.filter((u) => u.startsWith('/api/assignments?'));
+      expect(assignmentCalls.length).toBeGreaterThan(0);
+      expect(assignmentCalls.every((u) => !u.includes('status=') && !u.includes('employee_ids=') && !u.includes('date_from=') && !u.includes('date_to='))).toBe(true);
+    });
+  });
+
+  it('SPEC-007: CSV export includes employee_ids and date range params', async () => {
+    apiV2.apiDownload.mockResolvedValue();
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/employees'))).toBe(true),
+    );
+
+    // Select an employee
+    fireEvent.focus(screen.getByLabelText('Filtro por empleado'));
+    const listbox = await screen.findByRole('listbox', { name: 'Empleados' });
+    fireEvent.mouseDown(await within(listbox).findByText(/Ana García/));
+
+    // Set date range
+    fireEvent.change(screen.getByLabelText('Filtro fecha desde'), { target: { value: '2026-05-01' } });
+    fireEvent.change(screen.getByLabelText('Filtro fecha hasta'), { target: { value: '2026-08-31' } });
+
+    fireEvent.click(screen.getByTestId('assignments-export-csv'));
+
+    await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));
+    const [url] = apiV2.apiDownload.mock.calls[0];
+    expect(url).toContain('employee_ids=e1');
+    expect(url).toContain('date_from=2026-05-01');
+    expect(url).toContain('date_to=2026-08-31');
+  });
 });
