@@ -733,7 +733,7 @@ export default function CapacityPlanner() {
           <button
             type="button"
             style={s.toggleBtn(view === 'projects')}
-            onClick={() => patchParams({ view: 'projects' })}
+            onClick={() => patchParams({ view: 'projects', search: '' })}
             data-testid="view-toggle-projects"
             aria-pressed={view === 'projects'}
           >
@@ -768,7 +768,9 @@ export default function CapacityPlanner() {
           <button type="button" style={s.btn} onClick={() => patchParams({ contract_id: '', area_id: '', level_min: '', level_max: '', search: '' })}>Limpiar filtros</button>
         )}
 
-        <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => patchParams({ search: e.target.value })} aria-label="Buscar empleado" />
+        {view === 'employees' && (
+          <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => patchParams({ search: e.target.value })} aria-label="Buscar empleado" />
+        )}
       </div>
 
       {err && <div style={s.error} role="alert">{err}</div>}
