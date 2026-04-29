@@ -88,7 +88,7 @@ const s = {
 
   headRow: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     position: 'sticky', top: 0, zIndex: 3,
     background: 'var(--ds-bg-soft, #f4f5f7)',
     color: 'var(--ds-text-dim, #6b7280)',
@@ -100,7 +100,7 @@ const s = {
 
   row: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     borderTop: '1px solid var(--ds-border, #eee)',
     minHeight: 72,
   }),
@@ -134,11 +134,11 @@ const s = {
     wordBreak: 'break-word',
   },
   barMeta: {
-    fontSize: 9, fontWeight: 400, opacity: 0.88,
+    fontSize: 10.5, fontWeight: 500, opacity: 0.92,
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
     lineHeight: 1.3,
-    fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)',
-    fontFeatureSettings: "'tnum'",
+    fontFamily: 'var(--font-ui, inherit)',
+    fontVariantNumeric: 'tabular-nums',
   },
   chip: (bucket) => ({
     marginTop: 'auto',
@@ -153,7 +153,7 @@ const s = {
 
   unassignedRow: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     borderTop: '2px dashed var(--ds-border, #ddd)',
     background: 'var(--ds-warn-soft, #fffbea)',
     minHeight: 56,
@@ -205,7 +205,7 @@ const s = {
   }),
   contractRow: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     borderTop: '2px solid var(--ds-accent-border, var(--purple-dark, #3b1d52))',
     minHeight: 60,
     background: 'var(--ds-accent-soft, #faf7ff)',
@@ -215,7 +215,7 @@ const s = {
   contractClient: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
   requestSubRow: (weeksLen) => ({
     display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, ${WEEK_COL_WIDTH}px)`,
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
     borderTop: '1px solid var(--ds-border, #eee)',
     minHeight: 52,
   }),
