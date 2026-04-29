@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { apiGet, apiPost } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut } from '../utils/apiV2';
 import CandidatesModal from './CandidatesModal';
 
 /**
@@ -232,10 +232,141 @@ function MetricCard({ label, value, hint, accent }) {
   );
 }
 
-function AssignmentBar({ a }) {
-  const label = `${a.contract_name}${a.weekly_hours ? ` · ${a.weekly_hours}h` : ''}`;
+/* ── SPEC-006 / Spec 2.2: modal inline para editar asignación ────── */
+const ASSIGNMENT_STATUSES = [
+  { value: 'planned',   label: 'Planeada' },
+  { value: 'active',    label: 'Activa' },
+  { value: 'ended',     label: 'Finalizada' },
+  { value: 'cancelled', label: 'Cancelada' },
+];
+
+function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
+  const [asg, setAsg]         = useState(null);
+  const [form, setForm]       = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving]   = useState(false);
+  const [err, setErr]         = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setErr('');
+    apiGet(`/api/assignments/${assignmentId}`)
+      .then((data) => {
+        if (cancelled) return;
+        setAsg(data);
+        setForm({
+          weekly_hours: data.weekly_hours ?? '',
+          start_date:   data.start_date   ? data.start_date.slice(0, 10)  : '',
+          end_date:     data.end_date     ? data.end_date.slice(0, 10)    : '',
+          role_title:   data.role_title   || '',
+          notes:        data.notes        || '',
+          status:       data.status       || 'planned',
+        });
+      })
+      .catch((e) => { if (!cancelled) setErr(e.message || 'Error cargando asignación'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [assignmentId]);
+
+  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  const save = async (e) => {
+    e.preventDefault();
+    setSaving(true); setErr('');
+    try {
+      await apiPut(`/api/assignments/${assignmentId}`, {
+        weekly_hours: Number(form.weekly_hours),
+        start_date:   form.start_date || undefined,
+        end_date:     form.end_date   || undefined,
+        role_title:   form.role_title || undefined,
+        notes:        form.notes      || undefined,
+        status:       form.status,
+      });
+      onSaved();
+      onClose();
+    } catch (ex) {
+      setErr(ex.message || 'Error al guardar');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const ms = {
+    overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 },
+    box:     { background: 'var(--ds-surface, #fff)', borderRadius: 'var(--ds-radius, 10px)', border: '1px solid var(--ds-border)', padding: 24, width: 420, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' },
+    title:   { fontSize: 15, fontWeight: 700, marginBottom: 16, color: 'var(--ds-text)' },
+    label:   { fontSize: 12, fontWeight: 600, color: 'var(--ds-text-soft, var(--text-light))', marginBottom: 4, display: 'block' },
+    input:   { width: '100%', padding: '7px 10px', border: '1px solid var(--ds-border)', borderRadius: 'var(--ds-radius, 6px)', fontSize: 13, background: 'var(--ds-surface)', color: 'var(--ds-text)', boxSizing: 'border-box' },
+    row:     { marginBottom: 12 },
+    foot:    { display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 },
+    btnPrimary: { background: 'var(--ds-accent, var(--purple-dark))', color: '#fff', border: 'none', borderRadius: 'var(--ds-radius, 6px)', padding: '8px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' },
+    btnGhost:   { background: 'transparent', color: 'var(--ds-text)', border: '1px solid var(--ds-border)', borderRadius: 'var(--ds-radius, 6px)', padding: '7px 14px', fontSize: 13, cursor: 'pointer' },
+  };
+
   return (
-    <div style={s.bar(a.color)} title={`${a.contract_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem`}>
+    <div style={ms.overlay} role="dialog" aria-modal="true" aria-label="Editar asignación" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={ms.box}>
+        <div style={ms.title}>
+          Editar asignación
+          {asg && <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--ds-text-soft, var(--text-light))', marginLeft: 8 }}>{asg.contract_name} · {asg.employee_first_name} {asg.employee_last_name}</span>}
+        </div>
+        {loading && <div style={{ fontSize: 13 }}>Cargando…</div>}
+        {err && <div style={{ color: 'var(--ds-bad, #ef4444)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
+        {form && (
+          <form onSubmit={save}>
+            <div style={ms.row}>
+              <label style={ms.label}>Horas / semana</label>
+              <input style={ms.input} type="number" min="1" max="80" step="0.5" value={form.weekly_hours} onChange={(e) => set('weekly_hours', e.target.value)} required />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 }}>
+              <div>
+                <label style={ms.label}>Inicio</label>
+                <input style={ms.input} type="date" value={form.start_date} onChange={(e) => set('start_date', e.target.value)} />
+              </div>
+              <div>
+                <label style={ms.label}>Fin</label>
+                <input style={ms.input} type="date" value={form.end_date} onChange={(e) => set('end_date', e.target.value)} />
+              </div>
+            </div>
+            <div style={ms.row}>
+              <label style={ms.label}>Rol</label>
+              <input style={ms.input} type="text" value={form.role_title} onChange={(e) => set('role_title', e.target.value)} />
+            </div>
+            <div style={ms.row}>
+              <label style={ms.label}>Estado</label>
+              <select style={ms.input} value={form.status} onChange={(e) => set('status', e.target.value)}>
+                {ASSIGNMENT_STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
+              </select>
+            </div>
+            <div style={ms.row}>
+              <label style={ms.label}>Notas</label>
+              <textarea style={{ ...ms.input, minHeight: 56, resize: 'vertical' }} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
+            </div>
+            <div style={ms.foot}>
+              <button type="button" style={ms.btnGhost} onClick={onClose}>Cancelar</button>
+              <button type="submit" style={ms.btnPrimary} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssignmentBar({ a, onOpen, capacity }) {
+  const cap = Number(capacity) || 0;
+  const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+  const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+  const label = `${a.contract_name}${a.weekly_hours ? ` · ${a.weekly_hours}h` : ''} · ${pctStr}`;
+  return (
+    <div
+      style={{ ...s.bar(a.color), cursor: onOpen ? 'pointer' : 'default' }}
+      title={`${a.contract_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
+      onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
+      role={onOpen ? 'button' : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
+    >
       {label}
     </div>
   );
@@ -249,7 +380,7 @@ function UnassignedBar({ r }) {
   );
 }
 
-function EmployeeRow({ emp, weeks }) {
+function EmployeeRow({ emp, weeks, onOpen }) {
   // Index assignments by week for O(1) lookup when rendering.
   const byWeek = useMemo(() => {
     const map = new Map();
@@ -276,7 +407,7 @@ function EmployeeRow({ emp, weeks }) {
         const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : '#fff';
         return (
           <div key={w.index} style={s.weekCell(cellBg)} data-testid={`cell-${emp.id}-${i}`}>
-            {asgs.map((a) => <AssignmentBar key={a.id} a={a} />)}
+            {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} />)}
             <div style={s.chip(weekInfo.bucket)}>
               {weekInfo.hours > 0 ? `${weekInfo.utilization_pct}%` : '—'}
             </div>
@@ -435,7 +566,7 @@ function buildProjectsView(data) {
     for (const a of e.assignments || []) {
       const bucket = byId.get(a.contract_id);
       if (!bucket) continue;
-      const enriched = { ...a, employee_id: e.id, employee_name: e.full_name };
+      const enriched = { ...a, employee_id: e.id, employee_name: e.full_name, employee_capacity: e.weekly_capacity_hours };
       bucket.summary.push(enriched);
       const rid = a.resource_request_id;
       if (rid) {
@@ -473,7 +604,7 @@ function buildProjectsView(data) {
  * One row per contract. Shows every assigned employee in its week range; a
  * single bar per assignment labeled with the employee's name.
  */
-function ContractRow({ bucket, weeks }) {
+function ContractRow({ bucket, weeks, onOpen }) {
   const byWeek = useMemo(() => {
     const m = new Map();
     for (const a of bucket.summary) {
@@ -496,15 +627,24 @@ function ContractRow({ bucket, weeks }) {
         const items = byWeek.get(i) || [];
         return (
           <div key={w.index} style={s.weekCell('transparent')} data-testid={`contract-cell-${bucket.contract.id}-${i}`}>
-            {items.map((a) => (
-              <div
-                key={`${a.id}-${i}`}
-                style={s.bar(a.color || bucket.contract.color || '#6B5B95')}
-                title={`${a.employee_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem`}
-              >
-                {a.employee_name}
-              </div>
-            ))}
+            {items.map((a) => {
+              const cap = Number(a.employee_capacity) || 0;
+              const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+              const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+              return (
+                <div
+                  key={`${a.id}-${i}`}
+                  style={{ ...s.bar(a.color || bucket.contract.color || '#6B5B95'), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name} · ${a.role_title || ''} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
+                  role={onOpen ? 'button' : undefined}
+                  tabIndex={onOpen ? 0 : undefined}
+                  onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
+                  onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
+                >
+                  {a.employee_name} · {pctStr}
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -516,7 +656,7 @@ function ContractRow({ bucket, weeks }) {
  * Sub-row per resource_request: either shows the employee(s) filling it, or
  * a dashed "Sin asignar" bar across the request's week range.
  */
-function RequestSubRow({ bucket, entry, weeks, onOpenCandidates }) {
+function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
   const { request, assignments } = entry;
   const assignByWeek = useMemo(() => {
     const m = new Map();
@@ -565,15 +705,24 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates }) {
           : s.weekCell('transparent');
         return (
           <div key={w.index} style={cellStyle}>
-            {items.map((a) => (
-              <div
-                key={`${a.id}-${i}`}
-                style={s.bar(a.color || bucket.contract.color || '#6B5B95')}
-                title={`${a.employee_name} · ${a.weekly_hours}h/sem`}
-              >
-                {a.employee_name}
-              </div>
-            ))}
+            {items.map((a) => {
+              const cap = Number(a.employee_capacity) || 0;
+              const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+              const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+              return (
+                <div
+                  key={`${a.id}-${i}`}
+                  style={{ ...s.bar(a.color || bucket.contract.color || '#6B5B95'), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name} · ${a.weekly_hours}h/sem · ${pctStr} de capacidad`}
+                  role={onOpen ? 'button' : undefined}
+                  tabIndex={onOpen ? 0 : undefined}
+                  onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
+                  onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
+                >
+                  {a.employee_name} · {pctStr}
+                </div>
+              );
+            })}
             {showUnassigned && (
               <div style={s.unassignedBar(request.color || bucket.contract.color || '#e98b3f')} title={`Sin asignar · ${title}`}>
                 Sin asignar
@@ -586,7 +735,7 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates }) {
   );
 }
 
-function ProjectsView({ projects, weeks, onOpenCandidates }) {
+function ProjectsView({ projects, weeks, onOpenCandidates, onOpen }) {
   if (projects.length === 0) {
     return <div style={s.empty}>No hay proyectos en el rango seleccionado.</div>;
   }
@@ -594,7 +743,7 @@ function ProjectsView({ projects, weeks, onOpenCandidates }) {
     <>
       {projects.map((bucket) => (
         <React.Fragment key={bucket.contract.id}>
-          <ContractRow bucket={bucket} weeks={weeks} />
+          <ContractRow bucket={bucket} weeks={weeks} onOpen={onOpen} />
           {bucket.requests.map((entry) => (
             <RequestSubRow
               key={entry.request?.id || entry.assignments[0]?.id}
@@ -602,6 +751,7 @@ function ProjectsView({ projects, weeks, onOpenCandidates }) {
               entry={entry}
               weeks={weeks}
               onOpenCandidates={onOpenCandidates}
+              onOpen={onOpen}
             />
           ))}
         </React.Fragment>
@@ -641,6 +791,8 @@ export default function CapacityPlanner() {
   const [openCandidatesFor, setOpenCandidatesFor] = useState(null);
   const [assignBusy, setAssignBusy] = useState(false);
   const [assignToast, setAssignToast] = useState(null); // { ok, msg }
+  // SPEC-006 / Spec 2.2: clic en barra de asignación → modal de edición
+  const [editingAssignmentId, setEditingAssignmentId] = useState(null);
 
   // Small helper so every control mutates the URL, not component state.
   // Passing '' removes the key (keeps the URL tidy when a filter is cleared).
@@ -733,7 +885,7 @@ export default function CapacityPlanner() {
           <button
             type="button"
             style={s.toggleBtn(view === 'projects')}
-            onClick={() => patchParams({ view: 'projects' })}
+            onClick={() => patchParams({ view: 'projects', search: '' })}
             data-testid="view-toggle-projects"
             aria-pressed={view === 'projects'}
           >
@@ -768,7 +920,9 @@ export default function CapacityPlanner() {
           <button type="button" style={s.btn} onClick={() => patchParams({ contract_id: '', area_id: '', level_min: '', level_max: '', search: '' })}>Limpiar filtros</button>
         )}
 
-        <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => patchParams({ search: e.target.value })} aria-label="Buscar empleado" />
+        {view === 'employees' && (
+          <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => patchParams({ search: e.target.value })} aria-label="Buscar empleado" />
+        )}
       </div>
 
       {err && <div style={s.error} role="alert">{err}</div>}
@@ -799,7 +953,7 @@ export default function CapacityPlanner() {
                   {data.employees.length === 0 && (
                     <div style={s.empty}>No hay empleados que cumplan los filtros.</div>
                   )}
-                  {data.employees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} />)}
+                  {data.employees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />)}
 
                   {/* Unassigned requests (US-PLN-5 + US-RR-3: click → candidates modal) */}
                   {data.open_requests.map((r) => (
@@ -816,6 +970,7 @@ export default function CapacityPlanner() {
                   projects={projects}
                   weeks={wks}
                   onOpenCandidates={(rid) => setOpenCandidatesFor(rid)}
+                  onOpen={setEditingAssignmentId}
                 />
               )}
             </div>
@@ -873,6 +1028,15 @@ export default function CapacityPlanner() {
               setAssignBusy(false);
             }
           }}
+        />
+      )}
+
+      {/* SPEC-006 / Spec 2.2: modal de edición de asignación */}
+      {editingAssignmentId && (
+        <AssignmentEditModal
+          assignmentId={editingAssignmentId}
+          onClose={() => setEditingAssignmentId(null)}
+          onSaved={() => { setEditingAssignmentId(null); load(); }}
         />
       )}
     </div>
