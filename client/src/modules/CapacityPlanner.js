@@ -105,9 +105,9 @@ const s = {
     minHeight: 72,
   }),
   empCell: { padding: '10px 12px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-bg-soft, #fafafa)', position: 'sticky', left: 0, zIndex: 2 },
-  empName: { fontSize: 13, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)' },
-  empMeta: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
-  empCap: { fontSize: 10, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 4, fontFamily: 'var(--font-mono, inherit)' },
+  empName: { fontSize: 14.5, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  empMeta: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  empCap: { fontSize: 10.5, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 4, fontFamily: 'var(--font-mono, inherit)' },
 
   weekCell: (bg) => ({
     borderLeft: '1px solid var(--ds-border, #f0f0f0)',
@@ -118,13 +118,12 @@ const s = {
   bar: (color) => ({
     background: color, color: '#fff',
     borderRadius: 4, padding: '4px 6px',
-    fontSize: 10, fontWeight: 600,
+    fontWeight: 600,
     display: 'flex', flexDirection: 'column', gap: 1,
     overflow: 'hidden',
     boxShadow: 'var(--ds-shadow-sm, 0 1px 2px rgba(0,0,0,.1))',
   }),
   barName: {
-    // Permite hasta 2 renglones; si el nombre es más largo se recorta.
     display: '-webkit-box',
     WebkitLineClamp: 2,
     WebkitBoxOrient: 'vertical',
@@ -134,7 +133,7 @@ const s = {
     wordBreak: 'break-word',
   },
   barMeta: {
-    fontSize: 10.5, fontWeight: 500, opacity: 0.92,
+    fontSize: 9.5, fontWeight: 500, opacity: 0.85,
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
     lineHeight: 1.3,
     fontFamily: 'var(--font-ui, inherit)',
@@ -159,7 +158,7 @@ const s = {
     minHeight: 56,
   }),
   unassignedCell: { padding: '8px 12px', borderRight: '1px solid var(--ds-border, #eee)', position: 'sticky', left: 0, background: 'var(--ds-warn-soft, #fff8e6)', zIndex: 2 },
-  unassignedTitle: { fontSize: 12, fontWeight: 600, color: 'oklch(0.45 0.12 80)' },
+  unassignedTitle: { fontSize: 13, fontWeight: 600, color: 'oklch(0.45 0.12 80)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   unassignedMeta: { fontSize: 10, color: 'oklch(0.5 0.1 80)', marginTop: 2 },
   unassignedBar: (color) => ({
     background: 'transparent',
@@ -211,7 +210,7 @@ const s = {
     background: 'var(--ds-accent-soft, #faf7ff)',
   }),
   contractCell: { padding: '10px 12px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-accent-soft, #faf7ff)', position: 'sticky', left: 0, zIndex: 2 },
-  contractName: { fontSize: 13, fontWeight: 600, color: 'var(--ds-accent-text, var(--purple-dark))', fontFamily: 'var(--font-ui, inherit)', letterSpacing: '-0.005em' },
+  contractName: { fontSize: 14.5, fontWeight: 600, color: 'var(--ds-accent-text, var(--purple-dark))', fontFamily: 'var(--font-ui, inherit)', letterSpacing: '-0.005em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   contractClient: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
   requestSubRow: (weeksLen) => ({
     display: 'grid',
@@ -220,7 +219,7 @@ const s = {
     minHeight: 52,
   }),
   requestSubCell: { padding: '8px 12px 8px 28px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-surface, #fff)', position: 'sticky', left: 0, zIndex: 2 },
-  requestTitle: { fontSize: 12, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)' },
+  requestTitle: { fontSize: 13, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   requestMeta: { fontSize: 10, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
 };
 
@@ -393,11 +392,13 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   );
 }
 
-// Fuente adaptativa: nombres > 20 chars encogen para caber en 2 renglones.
+// Fuente adaptativa: nombres más largos encogen para caber en 2 renglones.
+// SPEC-008: tiers aumentados +1.5px respecto a la línea base anterior para
+// mejorar legibilidad sin romper el layout de 110px de columna semanal.
 function adaptiveFontSize(name = '') {
-  if (name.length > 26) return 7.5;
-  if (name.length > 18) return 9;
-  return 10;
+  if (name.length > 26) return 9;
+  if (name.length > 18) return 10.5;
+  return 11.5;
 }
 
 function AssignmentBar({ a, onOpen, capacity }) {
@@ -443,7 +444,7 @@ function EmployeeRow({ emp, weeks, onOpen }) {
   return (
     <div style={s.row(weeks.length)} data-testid={`emp-row-${emp.id}`}>
       <div style={s.empCell}>
-        <div style={s.empName}>{emp.full_name}</div>
+        <div style={s.empName} title={emp.full_name}>{emp.full_name}</div>
         <div style={s.empMeta}>{emp.level} · {emp.area_name || '—'}</div>
         <div style={s.empCap}>{emp.weekly_capacity_hours}h/sem</div>
       </div>
@@ -481,7 +482,7 @@ function UnassignedRow({ request, weeks, onOpen }) {
       title="Ir a Solicitudes"
     >
       <div style={s.unassignedCell}>
-        <div style={s.unassignedTitle}>{request.role_title} <span style={{ opacity: 0.6 }}>(faltan {request.missing})</span></div>
+        <div style={s.unassignedTitle} title={request.role_title}>{request.role_title} <span style={{ opacity: 0.6 }}>(faltan {request.missing})</span></div>
         <div style={s.unassignedMeta}>{request.contract_name} · {request.level} · {request.area_name || '—'}</div>
       </div>
       {weeks.map((w, i) => {
@@ -666,7 +667,7 @@ function ContractRow({ bucket, weeks, onOpen }) {
   return (
     <div style={s.contractRow(weeks.length)} data-testid={`contract-row-${bucket.contract.id}`}>
       <div style={s.contractCell}>
-        <div style={s.contractName}>{bucket.contract.name}</div>
+        <div style={s.contractName} title={bucket.contract.name}>{bucket.contract.name}</div>
         <div style={s.contractClient}>{bucket.contract.client_name || '—'}</div>
       </div>
       {weeks.map((w, i) => {
@@ -737,7 +738,7 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
       onKeyDown={(e) => { if (missing > 0 && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); open(); } }}
     >
       <div style={s.requestSubCell}>
-        <div style={s.requestTitle}>
+        <div style={s.requestTitle} title={title}>
           {title}
           {missing > 0 && <span style={{ opacity: 0.6, fontWeight: 400 }}> · faltan {missing}</span>}
         </div>
