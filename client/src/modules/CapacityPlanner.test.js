@@ -408,13 +408,15 @@ describe('CapacityPlanner module', () => {
       expect(within(pedroRow).getByTitle('Pedro Zúñiga')).toBeInTheDocument();
     });
 
-    it('los bars de asignación tienen fontSize mayor a 10px (legibilidad en celdas semanales)', async () => {
+    it('los bars de asignación tienen fontSize 11.5px fijo y title con nombre completo', async () => {
       mount();
       await screen.findByTestId('emp-row-e1');
-      // AssignmentBar renders contract name; grab the first one in week 0
       const cell = screen.getByTestId('cell-e1-0');
-      const bar = within(cell).getByText(/Contrato Alpha/);
-      expect(parseFloat(bar.style.fontSize)).toBeGreaterThan(10);
+      // barName span tiene fontSize 11.5 sin reducción por longitud
+      const barNameSpan = within(cell).getByText(/Contrato Alpha/);
+      expect(parseFloat(barNameSpan.style.fontSize)).toBe(11.5);
+      // El contenedor del bar tiene title para nombres truncados
+      expect(barNameSpan.closest('[title]').title).toMatch(/Contrato Alpha/);
     });
 
     it('contractName en vista proyectos tiene title y overflow ellipsis', async () => {
