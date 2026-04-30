@@ -214,6 +214,8 @@ const s = {
   contractCell: { padding: '10px 12px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-accent-soft, #faf7ff)', position: 'sticky', left: 0, zIndex: 2 },
   contractName: { fontSize: 14.5, fontWeight: 600, color: 'var(--ds-accent-text, var(--purple-dark))', fontFamily: 'var(--font-ui, inherit)', letterSpacing: '-0.005em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   contractClient: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
+  contractChevron: { fontSize: 10, color: 'var(--ds-accent-text, var(--purple-dark))', flexShrink: 0, lineHeight: 1 },
+  emptyRequests: { padding: '8px 12px 8px 28px', fontSize: 12, color: 'var(--ds-text-dim, #888)', fontStyle: 'italic' },
   requestSubRow: (weeksLen) => ({
     display: 'grid',
     gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
@@ -223,36 +225,6 @@ const s = {
   requestSubCell: { padding: '8px 12px 8px 28px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-surface, #fff)', position: 'sticky', left: 0, zIndex: 2 },
   requestTitle: { fontSize: 13, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   requestMeta: { fontSize: 10, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
-
-  // SPEC-009: accordion expand/collapse
-  contractChevron: {
-    fontSize: 10,
-    color: 'var(--ds-accent-text, var(--purple-dark))',
-    flexShrink: 0,
-    lineHeight: 1,
-    width: 14,
-    textAlign: 'center',
-  },
-  contractAggChip: {
-    background: 'var(--ds-accent-soft, #ede9fe)',
-    color: 'var(--ds-accent-text, var(--purple-dark))',
-    borderRadius: 10,
-    padding: '2px 8px',
-    fontSize: 10,
-    fontWeight: 700,
-    fontFamily: 'var(--font-mono, inherit)',
-    fontFeatureSettings: "'tnum'",
-    alignSelf: 'center',
-    display: 'inline-block',
-  },
-  emptyRequests: {
-    padding: '10px 12px 10px 40px',
-    fontSize: 12,
-    color: 'var(--ds-text-dim, #6b7280)',
-    borderTop: '1px solid var(--ds-border, #eee)',
-    background: 'var(--ds-surface, #fff)',
-    fontStyle: 'italic',
-  },
 };
 
 const ALERT_TYPE_LABELS = {
@@ -424,15 +396,6 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   );
 }
 
-// Fuente adaptativa: nombres más largos encogen para caber en 2 renglones.
-// SPEC-008: tiers aumentados +1.5px respecto a la línea base anterior para
-// mejorar legibilidad sin romper el layout de 110px de columna semanal.
-function adaptiveFontSize(name = '') {
-  if (name.length > 26) return 9;
-  if (name.length > 18) return 10.5;
-  return 11.5;
-}
-
 function AssignmentBar({ a, onOpen, capacity }) {
   const cap = Number(capacity) || 0;
   const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
@@ -440,12 +403,13 @@ function AssignmentBar({ a, onOpen, capacity }) {
   return (
     <div
       style={{ ...s.bar(a.color), cursor: onOpen ? 'pointer' : 'default' }}
+      title={`${a.contract_name} · ${a.weekly_hours}h/sem`}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
       role={onOpen ? 'button' : undefined}
       tabIndex={onOpen ? 0 : undefined}
       onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
     >
-      <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.contract_name) }}>{a.contract_name}</span>
+      <span style={s.barName}>{a.contract_name}</span>
       <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
     </div>
   );
@@ -680,16 +644,10 @@ function buildProjectsView(data) {
 }
 
 /**
- * SPEC-009: accordion header row per contract.
- *
- * Collapsed → chevron ▶ + project name + client + aggregate people-count chip per week.
- * Expanded  → chevron ▼ + project name + client + individual employee bars per week
- *             (same detail as before). Sub-rows rendered by ProjectsView.
- *
- * Clicking anywhere on the row toggles the accordion.
+ * One row per contract. Always shows assigned employee bars; the chevron
+ * controls whether the RequestSubRow breakdown below is visible.
  */
 function ContractRow({ bucket, weeks, onOpen, isExpanded, onToggle }) {
-  // Employee bars indexed by week (used only in expanded state).
   const byWeek = useMemo(() => {
     const m = new Map();
     for (const a of bucket.summary) {
@@ -700,21 +658,6 @@ function ContractRow({ bucket, weeks, onOpen, isExpanded, onToggle }) {
       }
     }
     return m;
-  }, [bucket.summary]);
-
-  // Unique-employee count per week (used only in collapsed state).
-  const aggregateByWeek = useMemo(() => {
-    const map = new Map();
-    for (const a of bucket.summary) {
-      if (!a.week_range) continue;
-      for (let i = a.week_range[0]; i <= a.week_range[1]; i += 1) {
-        if (!map.has(i)) map.set(i, new Set());
-        map.get(i).add(a.employee_id);
-      }
-    }
-    const counts = new Map();
-    for (const [k, v] of map.entries()) counts.set(k, v.size);
-    return counts;
   }, [bucket.summary]);
 
   const handleToggle = () => onToggle(bucket.contract.id);
@@ -740,45 +683,28 @@ function ContractRow({ bucket, weeks, onOpen, isExpanded, onToggle }) {
         <div style={s.contractClient}>{bucket.contract.client_name || '—'}</div>
       </div>
       {weeks.map((w, i) => {
-        if (isExpanded) {
-          const items = byWeek.get(i) || [];
-          return (
-            <div key={w.index} style={s.weekCell('transparent')} data-testid={`contract-cell-${bucket.contract.id}-${i}`}>
-              {items.map((a) => {
-                const cap = Number(a.employee_capacity) || 0;
-                const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
-                const pctStr = pctVal !== null ? `${pctVal}%` : '—';
-                const barColor = areaColorFor(a.employee_area_id);
-                return (
-                  <div
-                    key={`${a.id}-${i}`}
-                    style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
-                    role={onOpen ? 'button' : undefined}
-                    tabIndex={onOpen ? 0 : undefined}
-                    onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
-                    onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
-                  >
-                    <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
-                    <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        }
-        // Collapsed: show aggregate people-count chip (or nothing when 0).
-        const count = aggregateByWeek.get(i) || 0;
+        const items = byWeek.get(i) || [];
         return (
           <div key={w.index} style={s.weekCell('transparent')} data-testid={`contract-cell-${bucket.contract.id}-${i}`}>
-            {count > 0 && (
-              <div
-                style={s.contractAggChip}
-                title={`${count} ${count === 1 ? 'persona asignada' : 'personas asignadas'}`}
-                data-testid={`contract-agg-${bucket.contract.id}-${i}`}
-              >
-                {count}
-              </div>
-            )}
+            {items.map((a) => {
+              const cap = Number(a.employee_capacity) || 0;
+              const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+              const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+              const barColor = areaColorFor(a.employee_area_id);
+              return (
+                <div
+                  key={`${a.id}-${i}`}
+                  style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
+                  role={onOpen ? 'button' : undefined}
+                  tabIndex={onOpen ? 0 : undefined}
+                  onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
+                  onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
+                >
+                  <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
+                  <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
+                </div>
+              );
+            })}
           </div>
         );
       })}
@@ -870,16 +796,8 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
   );
 }
 
-/**
- * SPEC-009: projects view with accordion expand/collapse per contract.
- *
- * Each contract starts collapsed (only header visible). Clicking the header
- * expands it to show per-cargo RequestSubRows. Multiple projects can be
- * open simultaneously. When a single contract filter is active the
- * effectiveExpandedProjects memo (in the parent) forces that project open.
- */
 function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch, expandedProjects, onToggleProject }) {
-  // Client-side filter by contract/client name.
+  // Filtro client-side por nombre de contrato o cliente.
   const needle = (projectSearch || '').toLowerCase().trim();
   const visible = needle
     ? projects.filter((b) =>
@@ -892,7 +810,7 @@ function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch
     return <div style={s.empty}>{needle ? `Sin resultados para "${projectSearch}".` : 'No hay proyectos en el rango seleccionado.'}</div>;
   }
 
-  // Area legend: collected from all visible assignments for colour reference.
+  // Leyenda de áreas: recoge las áreas únicas visibles en este viewport.
   const areaMap = new Map();
   for (const bucket of visible) {
     for (const a of bucket.summary) {
@@ -925,7 +843,6 @@ function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch
       )}
       {visible.map((bucket) => {
         const isExpanded = !!(expandedProjects && expandedProjects[bucket.contract.id]);
-        const hasRequests = bucket.requests.length > 0;
         return (
           <React.Fragment key={bucket.contract.id}>
             <ContractRow
@@ -935,21 +852,24 @@ function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch
               isExpanded={isExpanded}
               onToggle={onToggleProject}
             />
-            {isExpanded && !hasRequests && (
-              <div style={s.emptyRequests} data-testid={`project-empty-${bucket.contract.id}`}>
-                Sin cargos asignados en este período
-              </div>
+            {isExpanded && (
+              bucket.requests.length === 0
+                ? (
+                  <div style={s.emptyRequests} data-testid={`empty-requests-${bucket.contract.id}`}>
+                    Sin cargos asignados en este período
+                  </div>
+                )
+                : bucket.requests.map((entry) => (
+                  <RequestSubRow
+                    key={entry.request?.id || entry.assignments[0]?.id}
+                    bucket={bucket}
+                    entry={entry}
+                    weeks={weeks}
+                    onOpenCandidates={onOpenCandidates}
+                    onOpen={onOpen}
+                  />
+                ))
             )}
-            {isExpanded && bucket.requests.map((entry) => (
-              <RequestSubRow
-                key={entry.request?.id || entry.assignments[0]?.id}
-                bucket={bucket}
-                entry={entry}
-                weeks={weeks}
-                onOpenCandidates={onOpenCandidates}
-                onOpen={onOpen}
-              />
-            ))}
           </React.Fragment>
         );
       })}
@@ -991,6 +911,24 @@ export default function CapacityPlanner() {
   const [assignToast, setAssignToast] = useState(null); // { ok, msg }
   // SPEC-006 / Spec 2.2: clic en barra de asignación → modal de edición
   const [editingAssignmentId, setEditingAssignmentId] = useState(null);
+  // SPEC-009: accordion state — keyed by contract_id, true = expanded
+  const [expandedProjects, setExpandedProjects] = useState({});
+
+  const toggleProject = useCallback((contractId) => {
+    setExpandedProjects((prev) => ({ ...prev, [contractId]: !prev[contractId] }));
+  }, []);
+
+  // When a single contract is filtered, show it expanded by default.
+  const effectiveExpandedProjects = useMemo(() => {
+    if (contractId) {
+      const filtered = (data?.contracts || []).filter((c) => String(c.id) === String(contractId));
+      if (filtered.length === 1) {
+        const id = filtered[0].id;
+        return { ...expandedProjects, [id]: expandedProjects[id] !== false };
+      }
+    }
+    return expandedProjects;
+  }, [contractId, data, expandedProjects]);
 
   // Small helper so every control mutates the URL, not component state.
   // Passing '' removes the key (keeps the URL tidy when a filter is cleared).
@@ -1034,23 +972,6 @@ export default function CapacityPlanner() {
   const contracts = data?.contracts || [];
   const wks = data?.weeks || [];
   const projects = useMemo(() => buildProjectsView(data), [data]);
-
-  // SPEC-009: accordion expand/collapse state — keyed by contract_id.
-  // Starts fully collapsed; user toggles each project individually.
-  const [expandedProjects, setExpandedProjects] = useState({});
-
-  const toggleProject = useCallback((contractId) => {
-    setExpandedProjects((prev) => ({ ...prev, [contractId]: !prev[contractId] }));
-  }, []);
-
-  // When a contract filter yields exactly one visible project, auto-expand it
-  // so the user immediately sees the cargo breakdown without an extra click.
-  const effectiveExpandedProjects = useMemo(() => {
-    if (view === 'projects' && contractId && projects.length === 1) {
-      return { ...expandedProjects, [projects[0].contract.id]: true };
-    }
-    return expandedProjects;
-  }, [view, contractId, projects, expandedProjects]);
 
   return (
     <div style={s.page}>
