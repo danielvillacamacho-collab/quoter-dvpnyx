@@ -342,9 +342,11 @@ describe('CapacityPlanner module', () => {
     mount('/capacity/planner?view=projects');
     const ct1Row = await screen.findByTestId('contract-row-ct1');
     expect(within(ct1Row).getByText('Contrato Alpha')).toBeInTheDocument();
+    // SPEC-009: projects start collapsed — expand ct1 to reveal employee bars.
+    fireEvent.click(ct1Row);
+    await waitFor(() => expect(ct1Row.getAttribute('aria-expanded')).toBe('true'));
     // Ana is assigned to ct1 via assignment a1 (rr1). Her name should appear
-    // in contract cells for weeks 0..7.
-    // Bars now include the % label ("Ana García · 50%"), so we use a regex.
+    // in contract cells for weeks 0..7 when expanded.
     for (let i = 0; i <= 7; i += 1) {
       expect(within(screen.getByTestId(`contract-cell-ct1-${i}`)).getByText(/Ana García/)).toBeInTheDocument();
     }
@@ -353,6 +355,9 @@ describe('CapacityPlanner module', () => {
 
   it('projects view renders unfilled requests with dashed "Sin asignar" bars', async () => {
     mount('/capacity/planner?view=projects');
+    // SPEC-009: expand ct3 to make its sub-rows visible.
+    const ct3Row = await screen.findByTestId('contract-row-ct3');
+    fireEvent.click(ct3Row);
     const row = await screen.findByTestId('project-request-row-rr9');
     // Unassigned bar in the request's week range.
     expect(within(row).getAllByText(/Sin asignar/).length).toBeGreaterThan(0);
@@ -374,6 +379,9 @@ describe('CapacityPlanner module', () => {
       return Promise.resolve({});
     });
     mount('/capacity/planner?view=projects');
+    // SPEC-009: expand ct3 to reveal the sub-row before clicking it.
+    const ct3Row = await screen.findByTestId('contract-row-ct3');
+    fireEvent.click(ct3Row);
     const row = await screen.findByTestId('project-request-row-rr9');
     fireEvent.click(row);
     expect(await screen.findByRole('dialog', { name: /Candidatos/i })).toBeInTheDocument();
@@ -422,6 +430,9 @@ describe('CapacityPlanner module', () => {
 
     it('requestTitle en sub-fila de proyecto tiene title y overflow ellipsis', async () => {
       mount('/capacity/planner?view=projects');
+      // SPEC-009: expand ct3 to make the sub-row visible.
+      const ct3Row = await screen.findByTestId('contract-row-ct3');
+      fireEvent.click(ct3Row);
       const row = await screen.findByTestId('project-request-row-rr9');
       const titleEl = within(row).getByTitle('QA Sr');
       expect(titleEl.style.overflow).toBe('hidden');
@@ -472,5 +483,163 @@ describe('CapacityPlanner module', () => {
     });
     mount();
     expect(await screen.findByRole('alert')).toHaveTextContent(/boom/);
+  });
+
+  describe('SPEC-009: acordeón expand/collapse en la vista de proyectos', () => {
+    it('all projects start collapsed when entering the projects view', async () => {
+      mount('/capacity/planner?view=projects');
+      const ct1Row = await screen.findByTestId('contract-row-ct1');
+      const ct3Row = screen.getByTestId('contract-row-ct3');
+      expect(ct1Row.getAttribute('aria-expanded')).toBe('false');
+      expect(ct3Row.getAttribute('aria-expanded')).toBe('false');
+      // Sub-rows must not be in the DOM while collapsed.
+      expect(screen.queryByTestId('project-request-row-rr9')).not.toBeInTheDocument();
+    });
+
+    it('shows ▶ chevron on collapsed project and ▼ on expanded', async () => {
+      mount('/capacity/planner?view=projects');
+      const ct1Row = await screen.findByTestId('contract-row-ct1');
+      expect(within(ct1Row).getByText('▶')).toBeInTheDocument();
+      fireEvent.click(ct1Row);
+      await waitFor(() => expect(within(ct1Row).getByText('▼')).toBeInTheDocument());
+    });
+
+    it('clicking a project expands it and shows request sub-rows', async () => {
+      mount('/capacity/planner?view=projects');
+      await screen.findByTestId('contract-row-ct3');
+      expect(screen.queryByTestId('project-request-row-rr9')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('contract-row-ct3'));
+      await waitFor(() => expect(screen.getByTestId('project-request-row-rr9')).toBeInTheDocument());
+      expect(screen.getByTestId('contract-row-ct3').getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('clicking an expanded project collapses it and hides sub-rows', async () => {
+      mount('/capacity/planner?view=projects');
+      await screen.findByTestId('contract-row-ct3');
+      // Expand, then collapse.
+      fireEvent.click(screen.getByTestId('contract-row-ct3'));
+      await waitFor(() => expect(screen.getByTestId('project-request-row-rr9')).toBeInTheDocument());
+      fireEvent.click(screen.getByTestId('contract-row-ct3'));
+      await waitFor(() => expect(screen.queryByTestId('project-request-row-rr9')).not.toBeInTheDocument());
+      expect(screen.getByTestId('contract-row-ct3').getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('multiple projects can be expanded simultaneously', async () => {
+      mount('/capacity/planner?view=projects');
+      await screen.findByTestId('contract-row-ct1');
+      fireEvent.click(screen.getByTestId('contract-row-ct1'));
+      fireEvent.click(screen.getByTestId('contract-row-ct3'));
+      await waitFor(() => {
+        expect(screen.getByTestId('project-request-row-rr1')).toBeInTheDocument();
+        expect(screen.getByTestId('project-request-row-rr9')).toBeInTheDocument();
+      });
+      expect(screen.getByTestId('contract-row-ct1').getAttribute('aria-expanded')).toBe('true');
+      expect(screen.getByTestId('contract-row-ct3').getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('collapsed header shows aggregate assigned-people count per week', async () => {
+      mount('/capacity/planner?view=projects');
+      // Ana (e1) is assigned to ct1 in weeks 0–7. Collapsed header should show "1".
+      const chip0 = await screen.findByTestId('contract-agg-ct1-0');
+      expect(chip0.textContent).toBe('1');
+      // Week 11 is outside Ana's range — no chip rendered.
+      expect(screen.queryByTestId('contract-agg-ct1-11')).not.toBeInTheDocument();
+      // Employee name must NOT appear in the collapsed cell (only the count chip).
+      expect(within(screen.getByTestId('contract-cell-ct1-0')).queryByText(/Ana García/)).not.toBeInTheDocument();
+    });
+
+    it('project name has greater font-size than request sub-row title (visual hierarchy)', async () => {
+      mount('/capacity/planner?view=projects');
+      const ct3Row = await screen.findByTestId('contract-row-ct3');
+      fireEvent.click(ct3Row);
+      await waitFor(() => screen.getByTestId('project-request-row-rr9'));
+      const contractNameEl = within(ct3Row).getByTitle('Contrato Gamma');
+      const reqTitleEl = within(screen.getByTestId('project-request-row-rr9')).getByTitle('QA Sr');
+      expect(parseFloat(contractNameEl.style.fontSize)).toBeGreaterThan(parseFloat(reqTitleEl.style.fontSize));
+    });
+
+    it('auto-expands the single project when a contract filter yields exactly one result', async () => {
+      // Return a filtered response with only ct1 — simulates contract_id=ct1 server filter.
+      apiV2.apiGet.mockImplementation((url) => {
+        if (url.startsWith('/api/capacity/planner')) {
+          return Promise.resolve({
+            ...plannerResponse(),
+            contracts: [{ id: 'ct1', name: 'Contrato Alpha', client_name: 'Acme', color: '#6B5B95' }],
+            open_requests: [],
+          });
+        }
+        if (url.startsWith('/api/areas')) return Promise.resolve({ data: [] });
+        return Promise.resolve({});
+      });
+      mount('/capacity/planner?view=projects&contract_id=ct1');
+      const ct1Row = await screen.findByTestId('contract-row-ct1');
+      await waitFor(() => expect(ct1Row.getAttribute('aria-expanded')).toBe('true'));
+    });
+
+    it('project with no cargos in range shows empty state when expanded', async () => {
+      apiV2.apiGet.mockImplementation((url) => {
+        if (url.startsWith('/api/capacity/planner')) {
+          return Promise.resolve({
+            ...plannerResponse(),
+            employees: [
+              {
+                id: 'e4', full_name: 'Sofía López', level: 'L4',
+                area_id: 3, area_name: 'Design', weekly_capacity_hours: 40,
+                assignments: [{
+                  id: 'a4', contract_id: 'ct2', contract_name: 'Contrato Beta',
+                  client_name: 'GlobalCorp', resource_request_id: null,
+                  role_title: 'UI Lead', weekly_hours: 40, color: '#4B9F6B',
+                  week_range: [0, 3],
+                }],
+                weekly: Array.from({ length: 12 }, (_, i) => ({
+                  week_index: i, start_date: '',
+                  hours: i <= 3 ? 40 : 0, utilization_pct: i <= 3 ? 100 : 0,
+                  bucket: i <= 3 ? 'healthy' : 'idle',
+                })),
+              },
+            ],
+            contracts: [{ id: 'ct2', name: 'Contrato Beta', client_name: 'GlobalCorp', color: '#4B9F6B' }],
+            open_requests: [],
+          });
+        }
+        if (url.startsWith('/api/areas')) return Promise.resolve({ data: [] });
+        return Promise.resolve({});
+      });
+      mount('/capacity/planner?view=projects');
+      const ct2Row = await screen.findByTestId('contract-row-ct2');
+      fireEvent.click(ct2Row);
+      await waitFor(() => expect(screen.getByTestId('project-empty-ct2')).toBeInTheDocument());
+      expect(screen.getByTestId('project-empty-ct2')).toHaveTextContent(/Sin cargos asignados en este período/);
+    });
+
+    it('changing the week range does not reset the expanded state', async () => {
+      mount('/capacity/planner?view=projects');
+      await screen.findByTestId('contract-row-ct1');
+      // Expand ct1.
+      fireEvent.click(screen.getByTestId('contract-row-ct1'));
+      await waitFor(() => expect(screen.getByTestId('contract-row-ct1').getAttribute('aria-expanded')).toBe('true'));
+      // Navigate forward — triggers a new API call with fresh data.
+      fireEvent.click(screen.getByRole('button', { name: /semanas adelante/i }));
+      await waitFor(() => {
+        const plannerCalls = apiV2.apiGet.mock.calls.filter((c) => String(c[0]).startsWith('/api/capacity/planner'));
+        expect(plannerCalls.length).toBeGreaterThanOrEqual(2);
+      });
+      // ct1 must still be expanded after the data reload.
+      expect(screen.getByTestId('contract-row-ct1').getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('accordion interactions do not break other planner filters', async () => {
+      mount('/capacity/planner?view=projects');
+      await screen.findByTestId('contract-row-ct1');
+      // Expand a project.
+      fireEvent.click(screen.getByTestId('contract-row-ct1'));
+      await waitFor(() => expect(screen.getByTestId('contract-row-ct1').getAttribute('aria-expanded')).toBe('true'));
+      // Apply a contract filter — API must still be called correctly.
+      fireEvent.change(screen.getByLabelText('Filtro contrato'), { target: { value: 'ct3' } });
+      await waitFor(() => {
+        expect(apiV2.apiGet.mock.calls.some((c) => String(c[0]).includes('contract_id=ct3'))).toBe(true);
+      });
+      expect(screen.getByTestId('loc').getAttribute('data-search')).toMatch(/contract_id=ct3/);
+    });
   });
 });

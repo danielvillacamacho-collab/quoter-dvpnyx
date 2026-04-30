@@ -208,6 +208,8 @@ const s = {
     borderTop: '2px solid var(--ds-accent-border, var(--purple-dark, #3b1d52))',
     minHeight: 60,
     background: 'var(--ds-accent-soft, #faf7ff)',
+    cursor: 'pointer',
+    userSelect: 'none',
   }),
   contractCell: { padding: '10px 12px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-accent-soft, #faf7ff)', position: 'sticky', left: 0, zIndex: 2 },
   contractName: { fontSize: 14.5, fontWeight: 600, color: 'var(--ds-accent-text, var(--purple-dark))', fontFamily: 'var(--font-ui, inherit)', letterSpacing: '-0.005em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -221,6 +223,36 @@ const s = {
   requestSubCell: { padding: '8px 12px 8px 28px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-surface, #fff)', position: 'sticky', left: 0, zIndex: 2 },
   requestTitle: { fontSize: 13, fontWeight: 600, color: 'var(--ds-text, #1b1b1b)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   requestMeta: { fontSize: 10, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
+
+  // SPEC-009: accordion expand/collapse
+  contractChevron: {
+    fontSize: 10,
+    color: 'var(--ds-accent-text, var(--purple-dark))',
+    flexShrink: 0,
+    lineHeight: 1,
+    width: 14,
+    textAlign: 'center',
+  },
+  contractAggChip: {
+    background: 'var(--ds-accent-soft, #ede9fe)',
+    color: 'var(--ds-accent-text, var(--purple-dark))',
+    borderRadius: 10,
+    padding: '2px 8px',
+    fontSize: 10,
+    fontWeight: 700,
+    fontFamily: 'var(--font-mono, inherit)',
+    fontFeatureSettings: "'tnum'",
+    alignSelf: 'center',
+    display: 'inline-block',
+  },
+  emptyRequests: {
+    padding: '10px 12px 10px 40px',
+    fontSize: 12,
+    color: 'var(--ds-text-dim, #6b7280)',
+    borderTop: '1px solid var(--ds-border, #eee)',
+    background: 'var(--ds-surface, #fff)',
+    fontStyle: 'italic',
+  },
 };
 
 const ALERT_TYPE_LABELS = {
@@ -648,10 +680,16 @@ function buildProjectsView(data) {
 }
 
 /**
- * One row per contract. Shows every assigned employee in its week range; a
- * single bar per assignment labeled with the employee's name.
+ * SPEC-009: accordion header row per contract.
+ *
+ * Collapsed → chevron ▶ + project name + client + aggregate people-count chip per week.
+ * Expanded  → chevron ▼ + project name + client + individual employee bars per week
+ *             (same detail as before). Sub-rows rendered by ProjectsView.
+ *
+ * Clicking anywhere on the row toggles the accordion.
  */
-function ContractRow({ bucket, weeks, onOpen }) {
+function ContractRow({ bucket, weeks, onOpen, isExpanded, onToggle }) {
+  // Employee bars indexed by week (used only in expanded state).
   const byWeek = useMemo(() => {
     const m = new Map();
     for (const a of bucket.summary) {
@@ -664,35 +702,83 @@ function ContractRow({ bucket, weeks, onOpen }) {
     return m;
   }, [bucket.summary]);
 
+  // Unique-employee count per week (used only in collapsed state).
+  const aggregateByWeek = useMemo(() => {
+    const map = new Map();
+    for (const a of bucket.summary) {
+      if (!a.week_range) continue;
+      for (let i = a.week_range[0]; i <= a.week_range[1]; i += 1) {
+        if (!map.has(i)) map.set(i, new Set());
+        map.get(i).add(a.employee_id);
+      }
+    }
+    const counts = new Map();
+    for (const [k, v] of map.entries()) counts.set(k, v.size);
+    return counts;
+  }, [bucket.summary]);
+
+  const handleToggle = () => onToggle(bucket.contract.id);
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(); }
+  };
+
   return (
-    <div style={s.contractRow(weeks.length)} data-testid={`contract-row-${bucket.contract.id}`}>
+    <div
+      style={s.contractRow(weeks.length)}
+      data-testid={`contract-row-${bucket.contract.id}`}
+      role="button"
+      tabIndex={0}
+      onClick={handleToggle}
+      onKeyDown={onKeyDown}
+      aria-expanded={isExpanded}
+    >
       <div style={s.contractCell}>
-        <div style={s.contractName} title={bucket.contract.name}>{bucket.contract.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={s.contractChevron} aria-hidden="true">{isExpanded ? '▼' : '▶'}</span>
+          <div style={s.contractName} title={bucket.contract.name}>{bucket.contract.name}</div>
+        </div>
         <div style={s.contractClient}>{bucket.contract.client_name || '—'}</div>
       </div>
       {weeks.map((w, i) => {
-        const items = byWeek.get(i) || [];
+        if (isExpanded) {
+          const items = byWeek.get(i) || [];
+          return (
+            <div key={w.index} style={s.weekCell('transparent')} data-testid={`contract-cell-${bucket.contract.id}-${i}`}>
+              {items.map((a) => {
+                const cap = Number(a.employee_capacity) || 0;
+                const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+                const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+                const barColor = areaColorFor(a.employee_area_id);
+                return (
+                  <div
+                    key={`${a.id}-${i}`}
+                    style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
+                    role={onOpen ? 'button' : undefined}
+                    tabIndex={onOpen ? 0 : undefined}
+                    onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
+                    onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
+                  >
+                    <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
+                    <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        }
+        // Collapsed: show aggregate people-count chip (or nothing when 0).
+        const count = aggregateByWeek.get(i) || 0;
         return (
           <div key={w.index} style={s.weekCell('transparent')} data-testid={`contract-cell-${bucket.contract.id}-${i}`}>
-            {items.map((a) => {
-              const cap = Number(a.employee_capacity) || 0;
-              const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
-              const pctStr = pctVal !== null ? `${pctVal}%` : '—';
-              const barColor = areaColorFor(a.employee_area_id);
-              return (
-                <div
-                  key={`${a.id}-${i}`}
-                  style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
-                  role={onOpen ? 'button' : undefined}
-                  tabIndex={onOpen ? 0 : undefined}
-                  onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
-                  onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
-                >
-                  <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
-                  <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
-                </div>
-              );
-            })}
+            {count > 0 && (
+              <div
+                style={s.contractAggChip}
+                title={`${count} ${count === 1 ? 'persona asignada' : 'personas asignadas'}`}
+                data-testid={`contract-agg-${bucket.contract.id}-${i}`}
+              >
+                {count}
+              </div>
+            )}
           </div>
         );
       })}
@@ -784,8 +870,16 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
   );
 }
 
-function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch }) {
-  // Filtro client-side por nombre de contrato o cliente.
+/**
+ * SPEC-009: projects view with accordion expand/collapse per contract.
+ *
+ * Each contract starts collapsed (only header visible). Clicking the header
+ * expands it to show per-cargo RequestSubRows. Multiple projects can be
+ * open simultaneously. When a single contract filter is active the
+ * effectiveExpandedProjects memo (in the parent) forces that project open.
+ */
+function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch, expandedProjects, onToggleProject }) {
+  // Client-side filter by contract/client name.
   const needle = (projectSearch || '').toLowerCase().trim();
   const visible = needle
     ? projects.filter((b) =>
@@ -798,7 +892,7 @@ function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch
     return <div style={s.empty}>{needle ? `Sin resultados para "${projectSearch}".` : 'No hay proyectos en el rango seleccionado.'}</div>;
   }
 
-  // Leyenda de áreas: recoge las áreas únicas visibles en este viewport.
+  // Area legend: collected from all visible assignments for colour reference.
   const areaMap = new Map();
   for (const bucket of visible) {
     for (const a of bucket.summary) {
@@ -829,21 +923,36 @@ function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch
           ))}
         </div>
       )}
-      {visible.map((bucket) => (
-        <React.Fragment key={bucket.contract.id}>
-          <ContractRow bucket={bucket} weeks={weeks} onOpen={onOpen} />
-          {bucket.requests.map((entry) => (
-            <RequestSubRow
-              key={entry.request?.id || entry.assignments[0]?.id}
+      {visible.map((bucket) => {
+        const isExpanded = !!(expandedProjects && expandedProjects[bucket.contract.id]);
+        const hasRequests = bucket.requests.length > 0;
+        return (
+          <React.Fragment key={bucket.contract.id}>
+            <ContractRow
               bucket={bucket}
-              entry={entry}
               weeks={weeks}
-              onOpenCandidates={onOpenCandidates}
               onOpen={onOpen}
+              isExpanded={isExpanded}
+              onToggle={onToggleProject}
             />
-          ))}
-        </React.Fragment>
-      ))}
+            {isExpanded && !hasRequests && (
+              <div style={s.emptyRequests} data-testid={`project-empty-${bucket.contract.id}`}>
+                Sin cargos asignados en este período
+              </div>
+            )}
+            {isExpanded && bucket.requests.map((entry) => (
+              <RequestSubRow
+                key={entry.request?.id || entry.assignments[0]?.id}
+                bucket={bucket}
+                entry={entry}
+                weeks={weeks}
+                onOpenCandidates={onOpenCandidates}
+                onOpen={onOpen}
+              />
+            ))}
+          </React.Fragment>
+        );
+      })}
     </>
   );
 }
@@ -925,6 +1034,23 @@ export default function CapacityPlanner() {
   const contracts = data?.contracts || [];
   const wks = data?.weeks || [];
   const projects = useMemo(() => buildProjectsView(data), [data]);
+
+  // SPEC-009: accordion expand/collapse state — keyed by contract_id.
+  // Starts fully collapsed; user toggles each project individually.
+  const [expandedProjects, setExpandedProjects] = useState({});
+
+  const toggleProject = useCallback((contractId) => {
+    setExpandedProjects((prev) => ({ ...prev, [contractId]: !prev[contractId] }));
+  }, []);
+
+  // When a contract filter yields exactly one visible project, auto-expand it
+  // so the user immediately sees the cargo breakdown without an extra click.
+  const effectiveExpandedProjects = useMemo(() => {
+    if (view === 'projects' && contractId && projects.length === 1) {
+      return { ...expandedProjects, [projects[0].contract.id]: true };
+    }
+    return expandedProjects;
+  }, [view, contractId, projects, expandedProjects]);
 
   return (
     <div style={s.page}>
@@ -1078,6 +1204,8 @@ export default function CapacityPlanner() {
                   onOpenCandidates={(rid) => setOpenCandidatesFor(rid)}
                   onOpen={setEditingAssignmentId}
                   projectSearch={projectSearch}
+                  expandedProjects={effectiveExpandedProjects}
+                  onToggleProject={toggleProject}
                 />
               )}
             </div>
