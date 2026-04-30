@@ -379,6 +379,80 @@ describe('CapacityPlanner module', () => {
     expect(await screen.findByRole('dialog', { name: /Candidatos/i })).toBeInTheDocument();
   });
 
+  describe('SPEC-008: tipografía — jerarquía visual', () => {
+    it('empName tiene fontSize mayor que empMeta (jerarquía primario > secundario)', async () => {
+      mount();
+      await screen.findByTestId('emp-row-e1');
+      const anaRow = screen.getByTestId('emp-row-e1');
+      const nameEl = within(anaRow).getByTitle('Ana García');
+      // Primary name must carry overflow/ellipsis to handle long names
+      expect(nameEl.style.overflow).toBe('hidden');
+      expect(nameEl.style.textOverflow).toBe('ellipsis');
+      expect(nameEl.style.whiteSpace).toBe('nowrap');
+      // fontSize must be strictly larger than the secondary (empMeta is 11px; empName ≥ 14px)
+      expect(parseFloat(nameEl.style.fontSize)).toBeGreaterThanOrEqual(14);
+    });
+
+    it('empName muestra title con el nombre completo (tooltip para nombres truncados)', async () => {
+      mount();
+      await screen.findByTestId('emp-row-e1');
+      const anaRow = screen.getByTestId('emp-row-e1');
+      expect(within(anaRow).getByTitle('Ana García')).toBeInTheDocument();
+      const pedroRow = screen.getByTestId('emp-row-e2');
+      expect(within(pedroRow).getByTitle('Pedro Zúñiga')).toBeInTheDocument();
+    });
+
+    it('los bars de asignación tienen fontSize mayor a 10px (legibilidad en celdas semanales)', async () => {
+      mount();
+      await screen.findByTestId('emp-row-e1');
+      // AssignmentBar renders contract name; grab the first one in week 0
+      const cell = screen.getByTestId('cell-e1-0');
+      const bar = within(cell).getByText(/Contrato Alpha/);
+      expect(parseFloat(bar.style.fontSize)).toBeGreaterThan(10);
+    });
+
+    it('contractName en vista proyectos tiene title y overflow ellipsis', async () => {
+      mount('/capacity/planner?view=projects');
+      const ct1Row = await screen.findByTestId('contract-row-ct1');
+      const nameEl = within(ct1Row).getByTitle('Contrato Alpha');
+      expect(nameEl.style.overflow).toBe('hidden');
+      expect(nameEl.style.textOverflow).toBe('ellipsis');
+      expect(parseFloat(nameEl.style.fontSize)).toBeGreaterThanOrEqual(14);
+    });
+
+    it('requestTitle en sub-fila de proyecto tiene title y overflow ellipsis', async () => {
+      mount('/capacity/planner?view=projects');
+      const row = await screen.findByTestId('project-request-row-rr9');
+      const titleEl = within(row).getByTitle('QA Sr');
+      expect(titleEl.style.overflow).toBe('hidden');
+      expect(titleEl.style.textOverflow).toBe('ellipsis');
+      expect(parseFloat(titleEl.style.fontSize)).toBeGreaterThanOrEqual(12);
+    });
+
+    it('unassignedTitle tiene title y overflow ellipsis (vista por persona)', async () => {
+      mount();
+      const row = await screen.findByTestId('unassigned-row-rr9');
+      const titleEl = within(row).getByTitle('QA Sr');
+      expect(titleEl.style.overflow).toBe('hidden');
+      expect(titleEl.style.textOverflow).toBe('ellipsis');
+    });
+
+    it('el comportamiento funcional del planner no se ve afectado por los cambios de estilo', async () => {
+      mount();
+      await screen.findByTestId('emp-row-e1');
+      // Filtros siguen funcionando
+      fireEvent.change(screen.getByLabelText('Filtro contrato'), { target: { value: 'ct1' } });
+      await waitFor(() => {
+        expect(apiV2.apiGet.mock.calls.some((c) => String(c[0]).includes('contract_id=ct1'))).toBe(true);
+      });
+      // Toggle de vistas sigue funcionando
+      fireEvent.click(screen.getByTestId('view-toggle-projects'));
+      await waitFor(() => {
+        expect(screen.getByTestId('contract-row-ct1')).toBeInTheDocument();
+      });
+    });
+  });
+
   it('projects view preserves filters when toggling', async () => {
     mount('/capacity/planner?view=projects&contract_id=ct1&search=Ana');
     await screen.findByTestId('contract-row-ct1');
