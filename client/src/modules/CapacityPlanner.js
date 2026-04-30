@@ -124,6 +124,7 @@ const s = {
     boxShadow: 'var(--ds-shadow-sm, 0 1px 2px rgba(0,0,0,.1))',
   }),
   barName: {
+    fontSize: 11.5,
     display: '-webkit-box',
     WebkitLineClamp: 2,
     WebkitBoxOrient: 'vertical',
@@ -208,10 +209,14 @@ const s = {
     borderTop: '2px solid var(--ds-accent-border, var(--purple-dark, #3b1d52))',
     minHeight: 60,
     background: 'var(--ds-accent-soft, #faf7ff)',
+    cursor: 'pointer',
+    userSelect: 'none',
   }),
   contractCell: { padding: '10px 12px', borderRight: '1px solid var(--ds-border, #eee)', background: 'var(--ds-accent-soft, #faf7ff)', position: 'sticky', left: 0, zIndex: 2 },
   contractName: { fontSize: 14.5, fontWeight: 600, color: 'var(--ds-accent-text, var(--purple-dark))', fontFamily: 'var(--font-ui, inherit)', letterSpacing: '-0.005em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   contractClient: { fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 2 },
+  contractChevron: { fontSize: 10, color: 'var(--ds-accent-text, var(--purple-dark))', flexShrink: 0, lineHeight: 1 },
+  emptyRequests: { padding: '8px 12px 8px 28px', fontSize: 12, color: 'var(--ds-text-dim, #888)', fontStyle: 'italic' },
   requestSubRow: (weeksLen) => ({
     display: 'grid',
     gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
@@ -392,15 +397,6 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   );
 }
 
-// Fuente adaptativa: nombres más largos encogen para caber en 2 renglones.
-// SPEC-008: tiers aumentados +1.5px respecto a la línea base anterior para
-// mejorar legibilidad sin romper el layout de 110px de columna semanal.
-function adaptiveFontSize(name = '') {
-  if (name.length > 26) return 9;
-  if (name.length > 18) return 10.5;
-  return 11.5;
-}
-
 function AssignmentBar({ a, onOpen, capacity }) {
   const cap = Number(capacity) || 0;
   const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
@@ -408,12 +404,13 @@ function AssignmentBar({ a, onOpen, capacity }) {
   return (
     <div
       style={{ ...s.bar(a.color), cursor: onOpen ? 'pointer' : 'default' }}
+      title={`${a.contract_name} · ${a.weekly_hours}h/sem`}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
       role={onOpen ? 'button' : undefined}
       tabIndex={onOpen ? 0 : undefined}
       onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
     >
-      <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.contract_name) }}>{a.contract_name}</span>
+      <span style={s.barName}>{a.contract_name}</span>
       <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
     </div>
   );
@@ -648,10 +645,10 @@ function buildProjectsView(data) {
 }
 
 /**
- * One row per contract. Shows every assigned employee in its week range; a
- * single bar per assignment labeled with the employee's name.
+ * One row per contract. Always shows assigned employee bars; the chevron
+ * controls whether the RequestSubRow breakdown below is visible.
  */
-function ContractRow({ bucket, weeks, onOpen }) {
+function ContractRow({ bucket, weeks, onOpen, isExpanded, onToggle }) {
   const byWeek = useMemo(() => {
     const m = new Map();
     for (const a of bucket.summary) {
@@ -664,10 +661,26 @@ function ContractRow({ bucket, weeks, onOpen }) {
     return m;
   }, [bucket.summary]);
 
+  const handleToggle = () => onToggle(bucket.contract.id);
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleToggle(); }
+  };
+
   return (
-    <div style={s.contractRow(weeks.length)} data-testid={`contract-row-${bucket.contract.id}`}>
+    <div
+      style={s.contractRow(weeks.length)}
+      data-testid={`contract-row-${bucket.contract.id}`}
+      role="button"
+      tabIndex={0}
+      onClick={handleToggle}
+      onKeyDown={onKeyDown}
+      aria-expanded={isExpanded}
+    >
       <div style={s.contractCell}>
-        <div style={s.contractName} title={bucket.contract.name}>{bucket.contract.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={s.contractChevron} aria-hidden="true">{isExpanded ? '▼' : '▶'}</span>
+          <div style={s.contractName} title={bucket.contract.name}>{bucket.contract.name}</div>
+        </div>
         <div style={s.contractClient}>{bucket.contract.client_name || '—'}</div>
       </div>
       {weeks.map((w, i) => {
@@ -683,12 +696,13 @@ function ContractRow({ bucket, weeks, onOpen }) {
                 <div
                   key={`${a.id}-${i}`}
                   style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name} · ${a.weekly_hours}h/sem`}
                   role={onOpen ? 'button' : undefined}
                   tabIndex={onOpen ? 0 : undefined}
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
+                  <span style={s.barName}>{a.employee_name}</span>
                   <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
                 </div>
               );
@@ -762,12 +776,13 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
                 <div
                   key={`${a.id}-${i}`}
                   style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name} · ${a.weekly_hours}h/sem`}
                   role={onOpen ? 'button' : undefined}
                   tabIndex={onOpen ? 0 : undefined}
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
+                  <span style={s.barName}>{a.employee_name}</span>
                   <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
                 </div>
               );
@@ -784,7 +799,7 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
   );
 }
 
-function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch }) {
+function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch, expandedProjects, onToggleProject }) {
   // Filtro client-side por nombre de contrato o cliente.
   const needle = (projectSearch || '').toLowerCase().trim();
   const visible = needle
@@ -829,21 +844,38 @@ function ProjectsView({ projects, weeks, onOpenCandidates, onOpen, projectSearch
           ))}
         </div>
       )}
-      {visible.map((bucket) => (
-        <React.Fragment key={bucket.contract.id}>
-          <ContractRow bucket={bucket} weeks={weeks} onOpen={onOpen} />
-          {bucket.requests.map((entry) => (
-            <RequestSubRow
-              key={entry.request?.id || entry.assignments[0]?.id}
+      {visible.map((bucket) => {
+        const isExpanded = !!(expandedProjects && expandedProjects[bucket.contract.id]);
+        return (
+          <React.Fragment key={bucket.contract.id}>
+            <ContractRow
               bucket={bucket}
-              entry={entry}
               weeks={weeks}
-              onOpenCandidates={onOpenCandidates}
               onOpen={onOpen}
+              isExpanded={isExpanded}
+              onToggle={onToggleProject}
             />
-          ))}
-        </React.Fragment>
-      ))}
+            {isExpanded && (
+              bucket.requests.length === 0
+                ? (
+                  <div style={s.emptyRequests} data-testid={`empty-requests-${bucket.contract.id}`}>
+                    Sin cargos asignados en este período
+                  </div>
+                )
+                : bucket.requests.map((entry) => (
+                  <RequestSubRow
+                    key={entry.request?.id || entry.assignments[0]?.id}
+                    bucket={bucket}
+                    entry={entry}
+                    weeks={weeks}
+                    onOpenCandidates={onOpenCandidates}
+                    onOpen={onOpen}
+                  />
+                ))
+            )}
+          </React.Fragment>
+        );
+      })}
     </>
   );
 }
@@ -882,6 +914,24 @@ export default function CapacityPlanner() {
   const [assignToast, setAssignToast] = useState(null); // { ok, msg }
   // SPEC-006 / Spec 2.2: clic en barra de asignación → modal de edición
   const [editingAssignmentId, setEditingAssignmentId] = useState(null);
+  // SPEC-009: accordion state — keyed by contract_id, true = expanded
+  const [expandedProjects, setExpandedProjects] = useState({});
+
+  const toggleProject = useCallback((contractId) => {
+    setExpandedProjects((prev) => ({ ...prev, [contractId]: !prev[contractId] }));
+  }, []);
+
+  // When a single contract is filtered, show it expanded by default.
+  const effectiveExpandedProjects = useMemo(() => {
+    if (contractId) {
+      const filtered = (data?.contracts || []).filter((c) => String(c.id) === String(contractId));
+      if (filtered.length === 1) {
+        const id = filtered[0].id;
+        return { ...expandedProjects, [id]: expandedProjects[id] !== false };
+      }
+    }
+    return expandedProjects;
+  }, [contractId, data, expandedProjects]);
 
   // Small helper so every control mutates the URL, not component state.
   // Passing '' removes the key (keeps the URL tidy when a filter is cleared).
@@ -1078,6 +1128,8 @@ export default function CapacityPlanner() {
                   onOpenCandidates={(rid) => setOpenCandidatesFor(rid)}
                   onOpen={setEditingAssignmentId}
                   projectSearch={projectSearch}
+                  expandedProjects={effectiveExpandedProjects}
+                  onToggleProject={toggleProject}
                 />
               )}
             </div>
