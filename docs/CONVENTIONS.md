@@ -219,6 +219,59 @@ Wrapper para registrar TODA llamada a un agente IA. Ver [`AI_INTEGRATION_GUIDE.m
 
 Ya está estandarizado vía `parsePagination` + `filterParams` array + `[...filterParams, limit, offset]` en la query final.
 
+### Patrón ordenable (sortable)
+
+Todas las tablas paginadas exponen sort vía whitelist. Pattern:
+
+```js
+const { parseSort } = require('../utils/sort');
+
+const SORTABLE = {
+  name:          'c.name',          // alias → columna SQL real
+  status:        'c.status',
+  created_at:    'c.created_at',
+  client_name:   'cl.name',         // permite columnas joineadas
+};
+
+router.get('/', async (req, res) => {
+  // ...
+  const sort = parseSort(req.query, SORTABLE, {
+    defaultField: 'updated_at',
+    defaultDir: 'desc',
+    tieBreaker: 'c.id ASC',         // estabilidad
+  });
+  await pool.query(
+    `SELECT ... ORDER BY ${sort.orderBy} LIMIT $N OFFSET $M`,
+    [...filterParams, limit, offset]
+  );
+});
+```
+
+**Reglas:**
+- **Nunca** interpolar el sort field directamente — `parseSort` valida contra el SORTABLE para prevenir SQL injection (ORDER BY no se puede parametrizar con `$N`).
+- `NULLS LAST` por default — comportamiento predecible.
+- `tieBreaker` siempre presente para estabilidad de paginación.
+- Cliente: usar el hook `useSort({ field, dir })` + componente `<SortableTh>`. El hook expone `applyToQs(qs)` para inyectar `?sort=&dir=` en el load callback.
+
+### Patrón lookup (selectores no paginados) — INC-003
+
+Cuando el cliente necesita la lista **completa** para un combobox/dropdown, **NO** usar el endpoint paginado con `?limit=N`. `parsePagination` capa silenciosamente cualquier `limit` > `maxLimit` (default 100), con lo cual entradas más allá del top quedan invisibles.
+
+Crear un endpoint `/lookup` dedicado:
+
+```js
+router.get('/lookup', async (req, res) => {
+  // Sin parsePagination. Devuelve TODO con campos mínimos.
+  const { rows } = await pool.query(`
+    SELECT id, name, ... FROM table WHERE deleted_at IS NULL
+    ORDER BY name
+  `);
+  res.json({ data: rows });
+});
+```
+
+Usado actualmente por: `GET /api/employees/lookup`, `GET /api/resource-requests/lookup`. Migrar otros dropdowns a este patrón conforme aparezcan capacity issues.
+
 ---
 
 ## 5. Server: transacciones
@@ -245,6 +298,41 @@ try {
 - ROLLBACK con `safeRollback(conn, where)` — nunca `.catch(()=>{})` silencioso.
 - Si el endpoint puede tardar más de 2 segundos, evaluar si requiere transacción o si pueden ser queries individuales.
 - Identificadores explícitos (`'POST /things/bulk'`) para que los logs sean buscables.
+
+### Trampas mortales: helpers dentro de transacciones — INC-002
+
+Cuando una query falla dentro de una transacción abierta, **Postgres marca la txn como ABORTED**. Cualquier query siguiente — incluyendo el `COMMIT` — falla con `current transaction is aborted, commands ignored until end of transaction block`. **Un `try/catch` de JS NO rescata el estado SQL.**
+
+**Antipatrón** (causa de INC-002):
+```js
+await conn.query('BEGIN');
+const asg = await conn.query('INSERT ... assignments ...');
+try {
+  await notify(conn, { user_id: maybeBrokenFK, ... });  // ← swallowed error
+} catch (e) { /* "best-effort" */ }
+await conn.query('COMMIT');  // ← falla con "transaction is aborted"
+```
+
+**Correcto** (alguno de estos):
+1. **Side effects fuera de la txn**: ejecuta el COMMIT primero, después llama notify/emitEvent con `pool` (no con `conn`).
+   ```js
+   await conn.query('COMMIT');
+   res.status(201).json(asg);
+   try { await notify(pool, { ... }); } catch (_) { /* ok */ }
+   ```
+2. **SAVEPOINT** si la operación side-effect TIENE que ser atómica con la mutación:
+   ```js
+   await conn.query('SAVEPOINT sp1');
+   try {
+     await conn.query('INSERT INTO notifications ...');
+     await conn.query('RELEASE SAVEPOINT sp1');
+   } catch (e) {
+     await conn.query('ROLLBACK TO SAVEPOINT sp1');
+   }
+   ```
+   Los helpers `notify()` y `emitEvent()` ya hacen esto automáticamente cuando detectan un client de transacción (sin `.connect`). Pero **prefiere la opción 1** — es menos confusa.
+
+**Regla operativa**: si tu helper hace una INSERT que puede fallar (FK, CHECK, unique) y vive dentro de una txn, o lo mueves después del COMMIT o lo wrappeas en SAVEPOINT. Nunca confíes en el try/catch del helper.
 
 ---
 

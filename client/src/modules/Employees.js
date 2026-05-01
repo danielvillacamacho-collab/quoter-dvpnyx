@@ -4,6 +4,8 @@ import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
 import Avatar from '../shell/Avatar';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -385,6 +387,7 @@ export default function Employees() {
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [skillsFor, setSkillsFor] = useState(null); // employee row for which the skills modal is open
+  const sort = useSort({ field: 'last_name', dir: 'asc' });
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -395,6 +398,7 @@ export default function Employees() {
     if (areaFilter) qs.set('area_id', areaFilter);
     if (levelFilter) qs.set('level', levelFilter);
     if (statusFilter) qs.set('status', statusFilter);
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/employees?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -403,7 +407,7 @@ export default function Employees() {
       // eslint-disable-next-line no-alert
       alert('Error cargando empleados: ' + e.message);
     }
-  }, [search, areaFilter, levelFilter, statusFilter]);
+  }, [search, areaFilter, levelFilter, statusFilter, sort.field, sort.dir]);
 
   const loadAreas = useCallback(async () => {
     try {
@@ -483,9 +487,15 @@ export default function Employees() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
-                {['Nombre', 'Área', 'Level', 'País', 'Capacidad', 'Skills', 'Estado', 'Inicio', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="last_name" style={s.th}>Nombre</SortableTh>
+                <SortableTh sort={sort} field="area_name" style={s.th}>Área</SortableTh>
+                <SortableTh sort={sort} field="level" style={s.th}>Level</SortableTh>
+                <SortableTh sort={sort} field="country" style={s.th}>País</SortableTh>
+                <SortableTh sort={sort} field="weekly_capacity_hours" style={s.th}>Capacidad</SortableTh>
+                <SortableTh sort={sort} field="skills_count" style={s.th}>Skills</SortableTh>
+                <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <SortableTh sort={sort} field="start_date" style={s.th}>Inicio</SortableTh>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>
