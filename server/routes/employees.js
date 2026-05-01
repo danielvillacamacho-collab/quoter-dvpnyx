@@ -20,6 +20,23 @@ const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
+
+const SORTABLE = {
+  first_name:            'e.first_name',
+  last_name:             'e.last_name',
+  level:                 'e.level',
+  country:               'e.country',
+  status:                'e.status',
+  employment_type:       'e.employment_type',
+  weekly_capacity_hours: 'e.weekly_capacity_hours',
+  start_date:            'e.start_date',
+  end_date:              'e.end_date',
+  created_at:            'e.created_at',
+  updated_at:            'e.updated_at',
+  area_name:             'a.name',
+  skills_count:          '(SELECT COUNT(*)::int FROM employee_skills WHERE employee_id=e.id)',
+};
 const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
@@ -109,6 +126,9 @@ router.get('/', async (req, res) => {
     if (req.query.country)     wheres.push(`e.country = ${add(req.query.country)}`);
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'last_name', defaultDir: 'asc', tieBreaker: 'e.first_name ASC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -120,7 +140,7 @@ router.get('/', async (req, res) => {
            FROM employees e
            LEFT JOIN areas a ON a.id = e.area_id
            ${where}
-           ORDER BY e.last_name, e.first_name
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset]
       ),

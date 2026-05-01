@@ -2,7 +2,7 @@
 
 Vista técnica del sistema. Pensado para que un ingeniero nuevo entienda **cómo fluye una request** desde el browser hasta la DB, **por qué** el código está organizado así, y **dónde** tocar para agregar algo nuevo sin romper el resto.
 
-> **Última revisión:** Mayo 2026. Refleja la rama `chore/ai-readiness-foundations` mergeada en develop.
+> **Última revisión:** 2026-05-01 (housekeeping pase). Refleja main al día con: AI-readiness, sortable tables (Phase 17), endpoints `/lookup` para selectores, defense-in-depth con SAVEPOINT en helpers de side-effects (`notify`, `emitEvent`), optimizaciones PERF-001/002/003. Ver `docs/INCIDENTS.md` para los aprendizajes operativos detrás de varios de estos cambios.
 
 ---
 

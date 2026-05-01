@@ -93,6 +93,14 @@ Estado de cada capacidad del producto: ✅ live, 🚧 wip, ❌ no implementado, 
 
 ## 🚧 En progreso / planeados
 
+### Recién entregado (mayo 2026 inicial)
+
+- ✅ **Sortable tables** (Phase 17) — todas las tablas paginadas tienen click-to-sort en columnas de atributos, `<SortableTh>` accesible (aria-sort, Enter/Space), tie-breaker estable. Cableado en Contracts, Employees, Opportunities, Clients, ResourceRequests, Assignments. Pendientes: Reports, EmployeeCosts mass view (sortRows client-side).
+- ✅ **PERF-001/002/003** — visibility-gate del polling de notifications, JOIN ON filter en reports/utilization+bench, índice parcial `assignments_employee_active_idx`.
+- ✅ **INC-002 fix** — defense-in-depth con SAVEPOINT en `notify()` y `emitEvent()` cuando se llaman desde un client de transacción.
+- ✅ **INC-003 fix** — endpoints `/lookup` dedicados en employees y resource-requests, sin paginación, para alimentar dropdowns que necesitan el universo completo.
+- ✅ **Housekeeping mayo 2026** — 87 ramas remotas mergeadas eliminadas; deps no usadas removidas (`uuid`, `express-validator`, `jspdf`, `jspdf-autotable`, `@dnd-kit/sortable`); `.docx` binarios untrackeados.
+
 ### Próxima ola (Q3 2026 sugerida)
 
 - **Backfill de embeddings** (job + endpoint admin)

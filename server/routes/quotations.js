@@ -3,7 +3,19 @@ const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { emitEvent } = require('../utils/events');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError } = require('../utils/http');
+
+const SORTABLE = {
+  project_name:    'q.project_name',
+  client_name:     'q.client_name',
+  type:            'q.type',
+  status:          'q.status',
+  created_at:      'q.created_at',
+  updated_at:      'q.updated_at',
+  sent_at:         'q.sent_at',
+  created_by_name: 'u.name',
+};
 const { recalcStaffAugLines, detectLineDrift } = require('../utils/calc');
 const quotationExport = require('../utils/quotation_export');
 
@@ -52,12 +64,15 @@ router.get('/', async (req, res) => {
     if (req.query.status)         wheres.push(`q.status = ${add(req.query.status)}`);
 
     const where = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'updated_at', defaultDir: 'desc', tieBreaker: 'q.id ASC',
+    });
     const baseSql = `
       SELECT q.*, u.name as created_by_name,
         (SELECT COUNT(*) FROM quotation_lines WHERE quotation_id=q.id) as line_count
       FROM quotations q JOIN users u ON q.created_by=u.id
       ${where}
-      ORDER BY q.updated_at DESC`;
+      ORDER BY ${sort.orderBy}`;
 
     if (!paginated) {
       // Legacy shape: flat array, no pagination metadata. Cap a 500 aunque

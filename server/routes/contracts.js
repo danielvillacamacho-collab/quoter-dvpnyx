@@ -22,6 +22,7 @@ const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { stringifyCsv } = require('../utils/csv');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError, safeRollback } = require('../utils/http');
 const { validateContractSubtype, ALL_SUBTYPES } = require('../utils/contract_subtype');
 
@@ -50,6 +51,19 @@ const EDITABLE_FIELDS = [
   'start_date', 'end_date', 'account_owner_id', 'delivery_manager_id',
   'capacity_manager_id', 'squad_id', 'notes', 'tags', 'metadata',
 ];
+
+// Whitelist de campos ordenables vía ?sort= y ?dir=. Mapea api-name → SQL.
+const SORTABLE = {
+  name:             'c.name',
+  type:             'c.type',
+  contract_subtype: 'c.contract_subtype',
+  status:           'c.status',
+  start_date:       'c.start_date',
+  end_date:         'c.end_date',
+  created_at:       'c.created_at',
+  updated_at:       'c.updated_at',
+  client_name:      'cl.name',
+};
 
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
@@ -82,6 +96,9 @@ router.get('/', async (req, res) => {
     }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'updated_at', defaultDir: 'desc', tieBreaker: 'c.id ASC',
+    });
     // limit/offset son enteros saneados → siempre seguros vía $N (no al template).
     const dataParams = [...filterParams, limit, offset];
     const limitIdx = filterParams.length + 1;
@@ -96,7 +113,7 @@ router.get('/', async (req, res) => {
            FROM contracts c
            LEFT JOIN clients cl ON cl.id = c.client_id
            ${where}
-           ORDER BY c.updated_at DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         dataParams
       ),

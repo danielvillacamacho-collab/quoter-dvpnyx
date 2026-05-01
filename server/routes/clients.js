@@ -14,7 +14,22 @@ const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError } = require('../utils/http');
+
+const SORTABLE = {
+  name:                'name',
+  legal_name:          'legal_name',
+  country:             'country',
+  industry:            'industry',
+  tier:                'tier',
+  active:              'active',
+  preferred_currency:  'preferred_currency',
+  created_at:          'created_at',
+  updated_at:          'updated_at',
+  opportunities_count: '(SELECT COUNT(*)::int FROM opportunities o WHERE o.client_id=c.id AND o.deleted_at IS NULL)',
+  active_contracts_count: '(SELECT COUNT(*)::int FROM contracts ct WHERE ct.client_id=c.id AND ct.status=\'active\' AND ct.deleted_at IS NULL)',
+};
 
 router.use(auth);
 
@@ -47,6 +62,9 @@ router.get('/', async (req, res) => {
     }
 
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'name', defaultDir: 'asc', tieBreaker: 'c.id ASC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -57,7 +75,7 @@ router.get('/', async (req, res) => {
            (SELECT COUNT(*)::int FROM contracts ct WHERE ct.client_id=c.id AND ct.status='active' AND ct.deleted_at IS NULL) AS active_contracts_count
            FROM clients c
            ${where}
-           ORDER BY c.name ASC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset],
       ),

@@ -33,7 +33,23 @@ const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { stringifyCsv } = require('../utils/csv');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError, safeRollback } = require('../utils/http');
+
+const SORTABLE = {
+  name:                 'o.name',
+  status:               'o.status',
+  expected_close_date:  'o.expected_close_date',
+  closed_at:            'o.closed_at',
+  booking_amount_usd:   'o.booking_amount_usd',
+  weighted_amount_usd:  'o.weighted_amount_usd',
+  probability:          'o.probability',
+  last_stage_change_at: 'o.last_stage_change_at',
+  next_step_due_date:   'o.next_step_due_date',
+  created_at:           'o.created_at',
+  updated_at:           'o.updated_at',
+  client_name:          'c.name',
+};
 
 router.use(auth);
 
@@ -87,6 +103,9 @@ router.get('/', async (req, res) => {
     if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
 
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'created_at', defaultDir: 'desc', tieBreaker: 'o.id ASC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -98,7 +117,7 @@ router.get('/', async (req, res) => {
            FROM opportunities o
            LEFT JOIN clients c ON c.id = o.client_id
            ${where}
-           ORDER BY o.created_at DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset],
       ),
