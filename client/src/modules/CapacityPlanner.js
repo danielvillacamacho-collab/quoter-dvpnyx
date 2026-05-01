@@ -124,6 +124,7 @@ const s = {
     boxShadow: 'var(--ds-shadow-sm, 0 1px 2px rgba(0,0,0,.1))',
   }),
   barName: {
+    fontSize: 11.5,
     display: '-webkit-box',
     WebkitLineClamp: 2,
     WebkitBoxOrient: 'vertical',
@@ -695,12 +696,13 @@ function ContractRow({ bucket, weeks, onOpen, isExpanded, onToggle }) {
                 <div
                   key={`${a.id}-${i}`}
                   style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name} · ${a.weekly_hours}h/sem`}
                   role={onOpen ? 'button' : undefined}
                   tabIndex={onOpen ? 0 : undefined}
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
+                  <span style={s.barName}>{a.employee_name}</span>
                   <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
                 </div>
               );
@@ -774,12 +776,13 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
                 <div
                   key={`${a.id}-${i}`}
                   style={{ ...s.bar(barColor), cursor: onOpen ? 'pointer' : 'default' }}
+                  title={`${a.employee_name} · ${a.weekly_hours}h/sem`}
                   role={onOpen ? 'button' : undefined}
                   tabIndex={onOpen ? 0 : undefined}
                   onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
                   onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
                 >
-                  <span style={{ ...s.barName, fontSize: adaptiveFontSize(a.employee_name) }}>{a.employee_name}</span>
+                  <span style={s.barName}>{a.employee_name}</span>
                   <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
                 </div>
               );

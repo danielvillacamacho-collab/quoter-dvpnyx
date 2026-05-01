@@ -28,18 +28,26 @@ router.get('/utilization', async (req, res) => {
   try {
     const areaFilter = req.query.area_id ? `AND e.area_id = $1` : '';
     const params = req.query.area_id ? [Number(req.query.area_id)] : [];
+    // PERF-002: filtros de active + deleted_at en el JOIN ON, no en
+    // un FILTER del SUM. Antes: el JOIN traía TODA la historia de
+    // assignments (cancelled, ended, soft-deleted) y luego filtraba.
+    // Con miles de filas históricas eso es O(employees × all_assignments).
+    // Ahora: O(employees × active_assignments). El SUM ya no necesita FILTER.
     const { rows } = await pool.query(
       `SELECT e.id, e.first_name, e.last_name, e.level, e.country, e.status,
               e.weekly_capacity_hours,
               a.name AS area_name,
-              COALESCE(SUM(asg.weekly_hours) FILTER (WHERE asg.status='active' AND asg.deleted_at IS NULL), 0)::numeric AS assigned_weekly_hours,
+              COALESCE(SUM(asg.weekly_hours), 0)::numeric AS assigned_weekly_hours,
               CASE WHEN e.weekly_capacity_hours > 0
-                   THEN COALESCE(SUM(asg.weekly_hours) FILTER (WHERE asg.status='active' AND asg.deleted_at IS NULL), 0) / e.weekly_capacity_hours
+                   THEN COALESCE(SUM(asg.weekly_hours), 0) / e.weekly_capacity_hours
                    ELSE 0
               END AS utilization
          FROM employees e
-         LEFT JOIN assignments asg ON asg.employee_id = e.id
-         LEFT JOIN areas       a   ON a.id = e.area_id
+         LEFT JOIN assignments asg
+                ON asg.employee_id = e.id
+               AND asg.status = 'active'
+               AND asg.deleted_at IS NULL
+         LEFT JOIN areas a ON a.id = e.area_id
         WHERE e.deleted_at IS NULL
           AND e.status IN ('active', 'on_leave', 'bench')
           ${areaFilter}
@@ -59,23 +67,27 @@ router.get('/utilization', async (req, res) => {
 router.get('/bench', async (req, res) => {
   try {
     const threshold = Number(req.query.threshold || 0.30);
+    // PERF-002: mismo patrón que /utilization — filtros en JOIN ON.
     const { rows } = await pool.query(
       `SELECT e.id, e.first_name, e.last_name, e.level, e.country, e.status,
               e.weekly_capacity_hours,
               a.name AS area_name,
-              COALESCE(SUM(asg.weekly_hours) FILTER (WHERE asg.status='active' AND asg.deleted_at IS NULL), 0)::numeric AS assigned_weekly_hours,
+              COALESCE(SUM(asg.weekly_hours), 0)::numeric AS assigned_weekly_hours,
               CASE WHEN e.weekly_capacity_hours > 0
-                   THEN COALESCE(SUM(asg.weekly_hours) FILTER (WHERE asg.status='active' AND asg.deleted_at IS NULL), 0) / e.weekly_capacity_hours
+                   THEN COALESCE(SUM(asg.weekly_hours), 0) / e.weekly_capacity_hours
                    ELSE 0
               END AS utilization
          FROM employees e
-         LEFT JOIN assignments asg ON asg.employee_id = e.id
-         LEFT JOIN areas       a   ON a.id = e.area_id
+         LEFT JOIN assignments asg
+                ON asg.employee_id = e.id
+               AND asg.status = 'active'
+               AND asg.deleted_at IS NULL
+         LEFT JOIN areas a ON a.id = e.area_id
         WHERE e.deleted_at IS NULL
           AND e.status IN ('active', 'bench')
         GROUP BY e.id, a.name
         HAVING e.weekly_capacity_hours > 0 AND
-               (COALESCE(SUM(asg.weekly_hours) FILTER (WHERE asg.status='active' AND asg.deleted_at IS NULL), 0) / e.weekly_capacity_hours) < $1
+               (COALESCE(SUM(asg.weekly_hours), 0) / e.weekly_capacity_hours) < $1
         ORDER BY utilization ASC, e.last_name`,
       [threshold]
     );
