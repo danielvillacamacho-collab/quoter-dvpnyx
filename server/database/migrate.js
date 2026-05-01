@@ -587,6 +587,154 @@ const V2_ALTERS = `
   CREATE INDEX IF NOT EXISTS idx_opportunities_status_close ON opportunities(status, expected_close_date) WHERE deleted_at IS NULL;
 
   -- ==================================================================
+  -- SPEC-CRM-00 v1.1 PR1 (Mayo 2026) — Pipeline 9 estados + Postponed
+  -- ==================================================================
+  -- Decisión CEO + CPO interim:
+  --   * Renombrado en lote de los 7 estados legacy a los 9 del spec.
+  --   * cancelled → closed_lost (decisión explícita CCO 2026-05).
+  --   * Estado postponed nuevo, requiere postponed_until_date.
+  --   * opportunity_number legible "OPP-{cc}-{año}-{seq}" generado para
+  --     las opps existentes y para todas las nuevas.
+  --
+  -- Mapping (idempotente — la segunda corrida no encuentra filas):
+  --   open       → lead
+  --   qualified  → qualified  (sin cambio)
+  --   proposal   → proposal_validated  (probability 50 = match exacto)
+  --   negotiation→ negotiation (sin cambio)
+  --   won        → closed_won
+  --   lost       → closed_lost
+  --   cancelled  → closed_lost (per decisión CCO; outcome se preserva)
+  --
+  -- Probabilidades nuevas (más granulares que las 7 legacy):
+  --   lead 5 / qualified 15 / solution_design 30 / proposal_validated 50
+  --   / negotiation 75 / verbal_commit 90 / closed_won 100 / closed_lost 0
+  --   / postponed 0
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS postponed_until_date DATE NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS postponed_reason     TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS country              VARCHAR(100) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS opportunity_number   VARCHAR(50) NULL;
+
+  -- 1) Drop el CHECK constraint legacy (autonombre de Postgres). Se
+  --    busca dinámicamente porque su nombre exacto depende de la versión
+  --    en la que se creó la tabla.
+  DO $do_status_check_drop$
+  DECLARE
+    cn text;
+  BEGIN
+    SELECT con.conname INTO cn
+      FROM pg_constraint con
+      JOIN pg_class      cls ON cls.oid = con.conrelid
+     WHERE cls.relname = 'opportunities'
+       AND con.contype = 'c'
+       AND pg_get_constraintdef(con.oid) ILIKE '%status%IN%open%';
+    IF cn IS NOT NULL THEN
+      EXECUTE 'ALTER TABLE opportunities DROP CONSTRAINT ' || quote_ident(cn);
+    END IF;
+  END
+  $do_status_check_drop$;
+
+  -- 2) Migración de datos. Idempotente: la segunda vuelta no toca nada.
+  UPDATE opportunities SET status = 'lead'               WHERE status = 'open';
+  UPDATE opportunities SET status = 'proposal_validated' WHERE status = 'proposal';
+  UPDATE opportunities SET status = 'closed_won'         WHERE status = 'won';
+  UPDATE opportunities SET status = 'closed_lost'        WHERE status IN ('lost', 'cancelled');
+
+  -- 3) Constraint nuevo con los 9 estados aprobados + cláusula postponed.
+  ALTER TABLE opportunities
+    ADD CONSTRAINT opportunities_status_check_v11
+    CHECK (status IN (
+      'lead','qualified','solution_design','proposal_validated',
+      'negotiation','verbal_commit','closed_won','closed_lost','postponed'
+    ));
+
+  -- Postponed siempre debe tener fecha de reactivación. Se nombra
+  -- explícitamente para poder verificarlo en tests + drop si se quita.
+  DO $do_postponed_check$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint WHERE conname = 'opp_postponed_has_until_date'
+    ) THEN
+      ALTER TABLE opportunities
+        ADD CONSTRAINT opp_postponed_has_until_date
+        CHECK (status <> 'postponed' OR postponed_until_date IS NOT NULL);
+    END IF;
+  END
+  $do_postponed_check$;
+
+  -- 4) Reescribimos opp_pipeline_recalc() con la nueva tabla de
+  --    probabilidades. CREATE OR REPLACE → idempotente.
+  CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    IF TG_OP = 'INSERT' OR NEW.status IS DISTINCT FROM OLD.status THEN
+      NEW.probability := CASE NEW.status
+        WHEN 'lead'                THEN 5
+        WHEN 'qualified'           THEN 15
+        WHEN 'solution_design'     THEN 30
+        WHEN 'proposal_validated'  THEN 50
+        WHEN 'negotiation'         THEN 75
+        WHEN 'verbal_commit'       THEN 90
+        WHEN 'closed_won'          THEN 100
+        WHEN 'closed_lost'         THEN 0
+        WHEN 'postponed'           THEN 0
+        ELSE 5
+      END;
+      IF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        NEW.last_stage_change_at := NOW();
+      END IF;
+    END IF;
+    NEW.weighted_amount_usd := COALESCE(NEW.booking_amount_usd, 0) * COALESCE(NEW.probability, 0) / 100.0;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  -- 5) Recalcular probability + weighted para las opps que acabamos de
+  --    renombrar. Disparamos el trigger por UPDATE no-op.
+  UPDATE opportunities SET status = status WHERE status IN (
+    'lead','qualified','proposal_validated','negotiation','closed_won','closed_lost'
+  );
+
+  -- 6) Backfill de country desde el cliente — solo donde está vacío.
+  UPDATE opportunities o
+     SET country = c.country
+    FROM clients c
+   WHERE o.client_id = c.id
+     AND o.country IS NULL
+     AND c.country IS NOT NULL;
+
+  -- 7) Backfill de opportunity_number. Formato OPP-{cc}-{yyyy}-{nnnnn}.
+  --    cc es el código de país de la opp en mayúsculas, máx 4 caracteres
+  --    para acomodar nombres en español ("Colombia"→"COLO", "México"→"MEXI").
+  --    Si el ops team prefiere ISO alpha-2 estricto se puede normalizar
+  --    en una migración futura sin romper este formato.
+  --    El seq se calcula por (cc, año) sobre el set existente — números
+  --    estables para opps ya en BD.
+  WITH numbered AS (
+    SELECT id,
+           UPPER(LEFT(REGEXP_REPLACE(COALESCE(country, 'XX'), '[^A-Za-z]', '', 'g'), 4)) AS cc,
+           EXTRACT(YEAR FROM created_at)::int AS yy,
+           ROW_NUMBER() OVER (
+             PARTITION BY UPPER(LEFT(REGEXP_REPLACE(COALESCE(country, 'XX'), '[^A-Za-z]', '', 'g'), 4)),
+                          EXTRACT(YEAR FROM created_at)
+             ORDER BY created_at, id
+           ) AS seq
+      FROM opportunities
+     WHERE opportunity_number IS NULL
+  )
+  UPDATE opportunities o
+     SET opportunity_number = 'OPP-' || COALESCE(NULLIF(n.cc, ''), 'XX') || '-' || n.yy::text || '-' || LPAD(n.seq::text, 5, '0')
+    FROM numbered n
+   WHERE o.id = n.id;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS opportunities_number_unique
+    ON opportunities(opportunity_number)
+    WHERE opportunity_number IS NOT NULL AND deleted_at IS NULL;
+
+  CREATE INDEX IF NOT EXISTS opportunities_postponed_until_idx
+    ON opportunities(postponed_until_date)
+    WHERE status = 'postponed' AND deleted_at IS NULL;
+
+  -- ==================================================================
   -- RR-MVP-00.1 (Abril 27 2026) — Revenue recognition mínimo
   -- ==================================================================
   -- Decisión CTO+CPO: trabajo funcional placeholder. Reemplaza el Excel

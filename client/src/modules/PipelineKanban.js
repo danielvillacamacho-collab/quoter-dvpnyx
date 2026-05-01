@@ -123,20 +123,31 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
   const [winningQuotation, setWinningQuotation] = useState('');
   const [outcomeReason, setOutcomeReason] = useState('');
   const [outcomeNotes, setOutcomeNotes] = useState('');
+  // SPEC-CRM-00 v1.1 — Postponed exige fecha futura de reactivación.
+  const defaultPostponedDate = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [postponedDate, setPostponedDate] = useState(defaultPostponedDate);
+  const [postponedReasonInput, setPostponedReasonInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [quotations, setQuotations] = useState([]);
   const fromS = STAGE_BY_ID[fromStage];
   const toS = STAGE_BY_ID[toStage];
-  const requiresWinning = toStage === 'won';
-  const requiresOutcomeReason = toStage === 'lost' || toStage === 'cancelled';
+  const requiresWinning = toStage === 'closed_won';
+  const requiresOutcomeReason = toStage === 'closed_lost';
+  const requiresPostponedDate = toStage === 'postponed';
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const postponedDateInvalid = requiresPostponedDate && (!postponedDate || postponedDate <= todayIso);
 
   const warnings = useMemo(
     () => computeTransitionWarnings({ fromStage, toStage, opportunity: opp }),
     [fromStage, toStage, opp],
   );
 
-  // Cargar cotizaciones de la oportunidad si vamos a 'won'
+  // Cargar cotizaciones de la oportunidad si vamos a closed_won
   useEffect(() => {
     if (!requiresWinning) return;
     apiGet(`/api/quotations?opportunity_id=${opp.id}`)
@@ -147,6 +158,7 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
   const handleConfirm = async () => {
     if (requiresWinning && !winningQuotation) { setError('Selecciona la cotización ganadora.'); return; }
     if (requiresOutcomeReason && !outcomeReason) { setError('Indica la razón del resultado.'); return; }
+    if (requiresPostponedDate && postponedDateInvalid) { setError('La fecha de reactivación debe ser futura.'); return; }
     setSubmitting(true);
     setError('');
     try {
@@ -156,6 +168,10 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
       };
       if (requiresWinning) body.winning_quotation_id = winningQuotation;
       if (requiresOutcomeReason) body.outcome_reason = outcomeReason;
+      if (requiresPostponedDate) {
+        body.postponed_until_date = postponedDate;
+        body.postponed_reason = postponedReasonInput || undefined;
+      }
       const result = await apiPost(`/api/opportunities/${opp.id}/status`, body);
       onConfirm(result);
     } catch (e) {
@@ -213,7 +229,8 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
               Razón del resultado *
             </label>
             <select value={outcomeReason} onChange={(e) => setOutcomeReason(e.target.value)}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
+                    style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}
+                    aria-label="Razón del resultado">
               <option value="">—</option>
               <option value="price">Precio</option>
               <option value="timing">Tiempo / fecha</option>
@@ -222,6 +239,35 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
               <option value="client_internal">Decisión interna del cliente</option>
               <option value="other">Otro</option>
             </select>
+          </div>
+        )}
+
+        {requiresPostponedDate && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ background: '#f5f3ff', color: '#6d28d9', padding: '8px 10px', borderRadius: 6, fontSize: 12, marginBottom: 10 }}>
+              ⏸ Las oportunidades postergadas <strong>NO entran</strong> en pipeline weighted hasta que se reactiven. Recibirás recordatorio el día indicado.
+            </div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>
+              Reactivar revisión el *
+            </label>
+            <input
+              type="date"
+              value={postponedDate}
+              min={todayIso}
+              onChange={(e) => setPostponedDate(e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}
+              aria-label="Fecha de reactivación"
+            />
+            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginTop: 10, marginBottom: 4 }}>
+              Razón de la postergación
+            </label>
+            <textarea
+              value={postponedReasonInput}
+              onChange={(e) => setPostponedReasonInput(e.target.value)}
+              placeholder="Ej. Cliente postpuso decisión por restructura. Esperan resolver Q3."
+              style={{ width: '100%', minHeight: 60, padding: 8, border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, resize: 'vertical' }}
+              aria-label="Razón de postergación"
+            />
           </div>
         )}
 

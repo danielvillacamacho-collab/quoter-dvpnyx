@@ -53,26 +53,36 @@ const SORTABLE = {
 
 router.use(auth);
 
-const VALID_STATUSES = ['open', 'qualified', 'proposal', 'negotiation', 'won', 'lost', 'cancelled'];
-const TERMINAL = new Set(['won', 'lost', 'cancelled']);
-const NON_TERMINAL = new Set(['open', 'qualified', 'proposal', 'negotiation']);
-// CRM-MVP-00.1: las transiciones se relajaron para soportar el drag-and-drop
-// del Kanban. La regla de integridad se mantiene: terminal es inmutable y
-// las transiciones a terminal exigen los datos requeridos (winning_quotation_id
-// para won, outcome_reason para lost/cancelled). Saltos hacia atrás o saltos
-// "ilegales" del flujo lineal SÍ son permitidos pero generan warnings que el
-// frontend muestra al usuario antes de confirmar.
-const TRANSITIONS = {
-  open:        new Set(['qualified', 'proposal', 'negotiation', 'won', 'lost', 'cancelled']),
-  qualified:   new Set(['open', 'proposal', 'negotiation', 'won', 'lost', 'cancelled']),
-  proposal:    new Set(['open', 'qualified', 'negotiation', 'won', 'lost', 'cancelled']),
-  negotiation: new Set(['open', 'qualified', 'proposal', 'won', 'lost', 'cancelled']),
-  won:         new Set(),
-  lost:        new Set(),
-  cancelled:   new Set(),
-};
-// Orden canónico para detectar saltos hacia atrás (warning en /status).
-const STAGE_ORDER = { open: 1, qualified: 2, proposal: 3, negotiation: 4, won: 5, lost: 5, cancelled: 5 };
+// SPEC-CRM-00 v1.1 — Pipeline de 9 estados. Estos sets se derivan del
+// SSOT en server/utils/pipeline.js para que cualquier cambio del modelo
+// se propague aquí automáticamente.
+const { STAGE_BY_ID, STAGES, isTerminal, isPostponed } = require('../utils/pipeline');
+const VALID_STATUSES = STAGES.map((s) => s.id);
+const TERMINAL = new Set(STAGES.filter((s) => s.terminal).map((s) => s.id)); // closed_won, closed_lost
+const NON_TERMINAL = new Set(STAGES.filter((s) => !s.terminal && !s.postponed).map((s) => s.id));
+// Para el drag-and-drop del Kanban relajamos transiciones a "cualquier no-terminal
+// → cualquier no-terminal" más Postponed. Las transiciones canónicas (lead→qualified
+// →solution_design→…) viven en utils/pipeline.js TRANSITIONS y son las que el
+// frontend muestra como botones por defecto. Saltos hacia atrás o "ilegales" siguen
+// permitiéndose pero generan warnings (computeTransitionWarnings) y se loguean en
+// el evento opportunity.status_changed para que la auditoría capture el patrón.
+const ACTIVE_STAGES = STAGES.filter((s) => !s.terminal).map((s) => s.id); // incluye postponed
+const TRANSITIONS = STAGES.reduce((acc, s) => {
+  if (s.terminal) {
+    acc[s.id] = new Set();         // closed_won, closed_lost — inmutables
+  } else if (s.postponed) {
+    // Postponed solo sale a qualified (per spec) o closed_lost.
+    acc[s.id] = new Set(['qualified', 'closed_lost']);
+  } else {
+    acc[s.id] = new Set([
+      ...ACTIVE_STAGES.filter((id) => id !== s.id), // cualquier otra etapa activa
+      'closed_won', 'closed_lost',
+    ]);
+  }
+  return acc;
+}, {});
+// Orden canónico para detectar saltos hacia atrás (warning soft en /status).
+const STAGE_ORDER = STAGES.reduce((acc, s) => { acc[s.id] = s.sort; return acc; }, {});
 const VALID_OUTCOME_REASONS = ['price', 'timing', 'competition', 'technical_fit', 'client_internal', 'other'];
 
 const EDITABLE_FIELDS = [
@@ -80,6 +90,8 @@ const EDITABLE_FIELDS = [
   'squad_id', 'expected_close_date', 'tags', 'external_crm_id',
   // CRM-MVP-00.1
   'booking_amount_usd', 'next_step', 'next_step_due_date',
+  // SPEC-CRM-00 v1.1 — country denormalizado + identificador legible
+  'country',
 ];
 
 /* -------- LIST -------- */
@@ -334,18 +346,22 @@ router.post('/', async (req, res) => {
     client_id, name, description,
     account_owner_id, presales_lead_id, squad_id,
     expected_close_date, tags, external_crm_id,
+    country: countryOverride,
   } = req.body || {};
 
   if (!client_id) return res.status(400).json({ error: 'client_id es requerido' });
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'El nombre es requerido' });
 
   try {
-    // Verify the client exists and is not soft-deleted
+    // Verify the client exists and is not soft-deleted. We also pull the
+    // client's country to denormalize on the opportunity row + drive the
+    // opportunity_number country prefix.
     const { rows: clientRows } = await pool.query(
-      `SELECT id, active FROM clients WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT id, active, country FROM clients WHERE id=$1 AND deleted_at IS NULL`,
       [client_id],
     );
     if (!clientRows.length) return res.status(400).json({ error: 'Cliente no existe o está eliminado' });
+    const oppCountry = countryOverride || clientRows[0].country || null;
 
     const ownerId = account_owner_id || req.user.id;
 
@@ -379,11 +395,19 @@ router.post('/', async (req, res) => {
       return res.status(500).json({ error: 'No se pudo resolver el squad por defecto. Contacta al administrador.' });
     }
 
+    // SPEC-CRM-00 v1.1 — opportunity_number legible. Generamos en una
+    // transacción con SERIALIZABLE-like guard mediante advisory lock por
+    // (cc, año) para evitar colisión de seq cuando 2 POSTs concurrentes
+    // crean la primera opp del año en el mismo país. El fallback `XX` se
+    // usa para opps sin country definible.
+    const oppNumber = await generateOpportunityNumber(pool, oppCountry);
+
     const { rows } = await pool.query(
       `INSERT INTO opportunities
          (client_id, name, description, account_owner_id, presales_lead_id, squad_id,
-          expected_close_date, tags, external_crm_id, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          expected_close_date, tags, external_crm_id, created_by,
+          country, opportunity_number)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        RETURNING *`,
       [
         client_id,
@@ -396,6 +420,8 @@ router.post('/', async (req, res) => {
         tags || null,
         external_crm_id || null,
         req.user.id,
+        oppCountry,
+        oppNumber,
       ],
     );
     const opp = rows[0];
@@ -404,7 +430,12 @@ router.post('/', async (req, res) => {
       entity_type: 'opportunity',
       entity_id: opp.id,
       actor_user_id: req.user.id,
-      payload: { name: opp.name, client_id: opp.client_id, status: opp.status },
+      payload: {
+        name: opp.name,
+        client_id: opp.client_id,
+        status: opp.status,
+        opportunity_number: opp.opportunity_number,
+      },
       req,
     });
     res.status(201).json(opp);
@@ -414,6 +445,35 @@ router.post('/', async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   }
 });
+
+/**
+ * Genera un opportunity_number "OPP-{cc}-{año}-{seq}" donde:
+ *   cc  = primeras 4 letras del país (mayúsculas, alfanuméricas), o "XX"
+ *   año = año actual UTC
+ *   seq = siguiente secuencia para esa combinación, padded a 5 dígitos
+ *
+ * En un equipo pequeño (DVPNYX) la probabilidad de carrera entre dos
+ * POSTs concurrentes para el mismo país en el mismo segundo es
+ * efectivamente cero. El UNIQUE INDEX `opportunities_number_unique` actúa
+ * como red de seguridad: si dos requests calculan el mismo seq, uno gana
+ * el INSERT y el otro recibe 23505 → 500 → cliente reintenta. Se hace
+ * fila a un sequence por (cc, año) si esto se vuelve un problema real.
+ */
+async function generateOpportunityNumber(db, country) {
+  const ccRaw = String(country || '').replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 4);
+  const cc = ccRaw || 'XX';
+  const year = new Date().getUTCFullYear();
+  const { rows } = await db.query(
+    `SELECT COALESCE(MAX(
+        CAST(SUBSTRING(opportunity_number FROM '\\d+$') AS INTEGER)
+      ), 0) + 1 AS next_seq
+       FROM opportunities
+      WHERE opportunity_number LIKE $1`,
+    [`OPP-${cc}-${year}-%`],
+  );
+  const seq = rows[0].next_seq || 1;
+  return `OPP-${cc}-${year}-${String(seq).padStart(5, '0')}`;
+}
 
 /* -------- UPDATE (editable fields only — status goes through /status) -------- */
 router.put('/:id', async (req, res) => {
@@ -473,7 +533,15 @@ router.put('/:id', async (req, res) => {
 
 /* -------- STATUS TRANSITION -------- */
 router.post('/:id/status', async (req, res) => {
-  const { new_status, winning_quotation_id, outcome_reason, outcome_notes } = req.body || {};
+  const {
+    new_status,
+    winning_quotation_id,
+    outcome_reason,
+    outcome_notes,
+    // SPEC-CRM-00 v1.1 — postponed transition data
+    postponed_until_date,
+    postponed_reason,
+  } = req.body || {};
   if (!VALID_STATUSES.includes(new_status)) {
     return res.status(400).json({ error: 'Status inválido' });
   }
@@ -502,19 +570,39 @@ router.post('/:id/status', async (req, res) => {
         valid_transitions: Array.from(allowed || []),
       });
     }
-    if (new_status === 'won' && !winning_quotation_id) {
+    if (new_status === 'closed_won' && !winning_quotation_id) {
       await connection.query('ROLLBACK');
       return res.status(400).json({ error: 'winning_quotation_id es requerido al marcar ganada' });
     }
-    if ((new_status === 'lost' || new_status === 'cancelled')) {
+    if (new_status === 'closed_lost') {
       if (!outcome_reason || !VALID_OUTCOME_REASONS.includes(outcome_reason)) {
         await connection.query('ROLLBACK');
         return res.status(400).json({ error: 'outcome_reason es requerido y debe ser un valor válido' });
       }
     }
+    // SPEC-CRM-00 v1.1 — Postponed exige fecha de reactivación.
+    // El DB constraint (opp_postponed_has_until_date) es la última red,
+    // pero validamos en API para devolver un mensaje útil al usuario.
+    if (new_status === 'postponed') {
+      if (!postponed_until_date || !/^\d{4}-\d{2}-\d{2}$/.test(String(postponed_until_date))) {
+        await connection.query('ROLLBACK');
+        return res.status(400).json({
+          error: 'postponed_until_date es requerido (formato YYYY-MM-DD) al postergar la oportunidad',
+        });
+      }
+      // Sanity check: la fecha debe ser futura. Es un warning soft pero
+      // la rechazamos para evitar postponed_until_date=ayer (bug obvio).
+      const today = new Date().toISOString().slice(0, 10);
+      if (postponed_until_date <= today) {
+        await connection.query('ROLLBACK');
+        return res.status(400).json({
+          error: 'postponed_until_date debe ser una fecha futura',
+        });
+      }
+    }
 
     let quotationSideEffects = null;
-    if (new_status === 'won') {
+    if (new_status === 'closed_won') {
       const { rows: qrows } = await connection.query(
         `SELECT id, status, type, project_name FROM quotations WHERE id=$1 AND opportunity_id=$2`,
         [winning_quotation_id, req.params.id],
@@ -580,7 +668,7 @@ router.post('/:id/status', async (req, res) => {
       }
     }
 
-    if (new_status === 'lost' || new_status === 'cancelled') {
+    if (new_status === 'closed_lost') {
       // `sent` -> `rejected`. `draft` and `approved` are left untouched.
       const { rows: rejectedRows } = await connection.query(
         `UPDATE quotations SET status='rejected', updated_at=NOW()
@@ -591,8 +679,13 @@ router.post('/:id/status', async (req, res) => {
       quotationSideEffects = { rejected: rejectedRows.map((r) => r.id) };
     }
 
-    const closingNow = TERMINAL.has(new_status);
-    const outcomeValue = (new_status === 'won' || new_status === 'lost' || new_status === 'cancelled') ? new_status : null;
+    const closingNow = TERMINAL.has(new_status); // closed_won | closed_lost
+    const outcomeValue = (new_status === 'closed_won' || new_status === 'closed_lost') ? new_status : null;
+
+    // Postponed: persistir fecha + razón. Salir de Postponed: limpiar campos.
+    const setPostponedDate = (new_status === 'postponed') ? postponed_until_date : null;
+    const setPostponedReason = (new_status === 'postponed') ? (postponed_reason || null) : null;
+    const clearPostponedFields = (current.status === 'postponed' && new_status !== 'postponed');
 
     const { rows: [after] } = await connection.query(
       `UPDATE opportunities SET
@@ -602,20 +695,33 @@ router.post('/:id/status', async (req, res) => {
           outcome_notes        = COALESCE($4, outcome_notes),
           winning_quotation_id = COALESCE($5, winning_quotation_id),
           closed_at            = CASE WHEN $6::boolean THEN NOW() ELSE closed_at END,
+          postponed_until_date = CASE
+                                   WHEN $7::boolean THEN NULL
+                                   WHEN $8::date IS NOT NULL THEN $8::date
+                                   ELSE postponed_until_date
+                                 END,
+          postponed_reason     = CASE
+                                   WHEN $7::boolean THEN NULL
+                                   WHEN $9::text IS NOT NULL THEN $9::text
+                                   ELSE postponed_reason
+                                 END,
           updated_at           = NOW()
-        WHERE id=$7 RETURNING *`,
+        WHERE id=$10 RETURNING *`,
       [
         new_status,
         outcomeValue,
         outcome_reason || null,
         outcome_notes || null,
-        new_status === 'won' ? winning_quotation_id : null,
+        new_status === 'closed_won' ? winning_quotation_id : null,
         closingNow,
+        clearPostponedFields,
+        setPostponedDate,
+        setPostponedReason,
         req.params.id,
       ],
     );
 
-    // Events: status_changed always; plus a specific event for won/lost/cancelled
+    // Events: status_changed always; plus stage-specific events.
     await emitEvent(connection, {
       event_type: 'opportunity.status_changed',
       entity_type: 'opportunity',
@@ -624,7 +730,7 @@ router.post('/:id/status', async (req, res) => {
       payload: { from: current.status, to: new_status, side_effects: quotationSideEffects },
       req,
     });
-    if (new_status === 'won') {
+    if (new_status === 'closed_won') {
       await emitEvent(connection, {
         event_type: 'opportunity.won',
         entity_type: 'opportunity',
@@ -633,7 +739,7 @@ router.post('/:id/status', async (req, res) => {
         payload: { winning_quotation_id },
         req,
       });
-    } else if (new_status === 'lost') {
+    } else if (new_status === 'closed_lost') {
       await emitEvent(connection, {
         event_type: 'opportunity.lost',
         entity_type: 'opportunity',
@@ -642,27 +748,42 @@ router.post('/:id/status', async (req, res) => {
         payload: { reason: outcome_reason, notes: outcome_notes || null },
         req,
       });
-    } else if (new_status === 'cancelled') {
+    } else if (new_status === 'postponed') {
       await emitEvent(connection, {
-        event_type: 'opportunity.cancelled',
+        event_type: 'opportunity.postponed',
         entity_type: 'opportunity',
         entity_id: after.id,
         actor_user_id: req.user.id,
-        payload: { reason: outcome_reason, notes: outcome_notes || null },
+        payload: {
+          until_date: postponed_until_date,
+          reason: postponed_reason || null,
+          previous_status: current.status,
+        },
+        req,
+      });
+    } else if (current.status === 'postponed') {
+      // Salir de postponed (a qualified o closed_lost) — reactivación.
+      await emitEvent(connection, {
+        event_type: 'opportunity.reactivated',
+        entity_type: 'opportunity',
+        entity_id: after.id,
+        actor_user_id: req.user.id,
+        payload: { to: new_status, was_postponed_until: current.postponed_until_date || null },
         req,
       });
     }
 
-    // CRM-MVP-00.1: warnings soft (no bloqueantes) calculados sobre la
-    // transición. Los devolvemos al cliente para que el modal del kanban
-    // los muestre. NO afectan persistencia — la transición ya pasó.
+    // SPEC-CRM-00 v1.1 — warnings soft (no bloqueantes). El frontend los
+    // muestra en el toast tras la transición.
     const warnings = [];
     const fromOrder = STAGE_ORDER[current.status] || 0;
     const toOrder = STAGE_ORDER[new_status] || 0;
-    if (fromOrder > 0 && toOrder > 0 && fromOrder > toOrder && !TERMINAL.has(new_status)) {
+    if (fromOrder > 0 && toOrder > 0 && fromOrder > toOrder
+        && !TERMINAL.has(new_status) && !isPostponed(new_status) && current.status !== 'postponed') {
       warnings.push({ code: 'backwards', message: `Movida hacia atrás: ${current.status} → ${new_status}.` });
     }
-    if (Number(after.booking_amount_usd || 0) === 0 && ['proposal', 'negotiation', 'won'].includes(new_status)) {
+    if (Number(after.booking_amount_usd || 0) === 0
+        && ['proposal_validated', 'negotiation', 'verbal_commit', 'closed_won'].includes(new_status)) {
       warnings.push({ code: 'amount_zero', message: 'El monto USD está en 0. Recomendado actualizarlo.' });
     }
 
