@@ -371,6 +371,11 @@ const V2_NEW_TABLES = `
   CREATE INDEX IF NOT EXISTS assignments_request_idx  ON assignments(resource_request_id) WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS assignments_status_idx   ON assignments(status)              WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS assignments_dates_idx    ON assignments(start_date, end_date) WHERE deleted_at IS NULL;
+  -- PERF-003: composite index for the reports/utilization + bench queries that filter
+  -- by (employee_id, status='active') with deleted_at IS NULL. Single index lookup
+  -- replaces a bitmap-or of two single-column indexes plus a recheck on each row.
+  CREATE INDEX IF NOT EXISTS assignments_employee_active_idx
+    ON assignments(employee_id) WHERE deleted_at IS NULL AND status = 'active';
 
   CREATE TABLE IF NOT EXISTS time_entries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
