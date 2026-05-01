@@ -3,6 +3,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -230,6 +232,7 @@ export default function Opportunities() {
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [transitioning, setTransitioning] = useState(null); // { opp, target }
+  const sort = useSort({ field: 'created_at', dir: 'desc' });
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -239,6 +242,7 @@ export default function Opportunities() {
     if (search) qs.set('search', search);
     if (statusFilter) qs.set('status', statusFilter);
     if (clientFilter) qs.set('client_id', clientFilter);
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/opportunities?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -247,7 +251,7 @@ export default function Opportunities() {
       // eslint-disable-next-line no-alert
       alert('Error cargando oportunidades: ' + e.message);
     }
-  }, [search, statusFilter, clientFilter]);
+  }, [search, statusFilter, clientFilter, sort.field, sort.dir]);
 
   const loadClients = useCallback(async () => {
     try {
@@ -377,9 +381,13 @@ export default function Opportunities() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
             <thead>
               <tr>
-                {['Nombre', 'Cliente', 'Estado', 'Cotizaciones', 'Cierre esperado', 'Creada', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="name" style={s.th}>Nombre</SortableTh>
+                <th style={s.th}>Cliente</th>
+                <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <th style={s.th}>Cotizaciones</th>
+                <SortableTh sort={sort} field="expected_close_date" style={s.th}>Cierre esperado</SortableTh>
+                <SortableTh sort={sort} field="created_at" style={s.th}>Creada</SortableTh>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>

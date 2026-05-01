@@ -35,6 +35,19 @@ const { notify, notifyMany } = require('../utils/notifications');
 const { runAllChecks } = require('../utils/assignment_validation');
 const { stringifyCsv } = require('../utils/csv');
 const { parsePagination, isValidISODate } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
+
+const SORTABLE = {
+  start_date:    'a.start_date',
+  end_date:      'a.end_date',
+  weekly_hours:  'a.weekly_hours',
+  status:        'a.status',
+  role_title:    'a.role_title',
+  created_at:    'a.created_at',
+  updated_at:    'a.updated_at',
+  employee_name: "(e.first_name || ' ' || e.last_name)",
+  contract_name: 'c.name',
+};
 const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
@@ -297,6 +310,9 @@ router.get('/', async (req, res) => {
     if (error) return res.status(400).json({ error });
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'start_date', defaultDir: 'desc', tieBreaker: 'a.id ASC',
+    });
     const limitIdx = params.length + 1;
     const offsetIdx = params.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -311,7 +327,7 @@ router.get('/', async (req, res) => {
            LEFT JOIN contracts         c  ON c.id = a.contract_id
            LEFT JOIN resource_requests rr ON rr.id = a.resource_request_id
            ${where}
-           ORDER BY a.start_date DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...params, limit, offset]
       ),

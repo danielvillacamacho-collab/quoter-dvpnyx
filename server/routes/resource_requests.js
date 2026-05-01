@@ -26,7 +26,25 @@ const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError } = require('../utils/http');
+
+const SORTABLE = {
+  role_title:    'rr.role_title',
+  level:         'rr.level',
+  country:       'rr.country',
+  weekly_hours:  'rr.weekly_hours',
+  start_date:    'rr.start_date',
+  end_date:      'rr.end_date',
+  quantity:      'rr.quantity',
+  // priority sorted by business order (critical → low) cuando se ordena ASC
+  priority:      "CASE rr.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END",
+  status:        'rr.status',
+  created_at:    'rr.created_at',
+  updated_at:    'rr.updated_at',
+  contract_name: 'c.name',
+  area_name:     'a.name',
+};
 const { rankCandidates } = require('../utils/candidate_matcher');
 
 router.use(auth);
@@ -113,6 +131,12 @@ router.get('/', async (req, res) => {
     }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    // Default: priority crítica primero, luego más recientes. Si el caller
+    // pide otro orden, lo respetamos pero priority sigue siendo el primer
+    // criterio cuando explícitamente se ordena por ella.
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'priority', defaultDir: 'asc', tieBreaker: 'rr.created_at DESC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -126,9 +150,7 @@ router.get('/', async (req, res) => {
            LEFT JOIN contracts c ON c.id = rr.contract_id
            LEFT JOIN areas     a ON a.id = rr.area_id
            ${where}
-           ORDER BY
-             CASE rr.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-             rr.created_at DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset]
       ),

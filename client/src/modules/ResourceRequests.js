@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -152,6 +154,7 @@ export default function ResourceRequests() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const sort = useSort({ field: 'priority', dir: 'asc' });
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -162,6 +165,7 @@ export default function ResourceRequests() {
     if (contractFilter) qs.set('contract_id', contractFilter);
     if (statusFilter) qs.set('status', statusFilter);
     if (priorityFilter) qs.set('priority', priorityFilter);
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/resource-requests?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -170,7 +174,7 @@ export default function ResourceRequests() {
       // eslint-disable-next-line no-alert
       alert('Error cargando solicitudes: ' + e.message);
     }
-  }, [search, contractFilter, statusFilter, priorityFilter]);
+  }, [search, contractFilter, statusFilter, priorityFilter, sort.field, sort.dir]);
 
   const loadFilters = useCallback(async () => {
     try {
@@ -275,9 +279,16 @@ export default function ResourceRequests() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
-                {['Role', 'Contrato', 'Área', 'Level', 'Cantidad', 'Asignaciones', 'Prioridad', 'Estado', 'Inicio', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="role_title" style={s.th}>Role</SortableTh>
+                <th style={s.th}>Contrato</th>
+                <SortableTh sort={sort} field="area_name" style={s.th}>Área</SortableTh>
+                <SortableTh sort={sort} field="level" style={s.th}>Level</SortableTh>
+                <SortableTh sort={sort} field="quantity" style={s.th}>Cantidad</SortableTh>
+                <th style={s.th}>Asignaciones</th>
+                <SortableTh sort={sort} field="priority" style={s.th}>Prioridad</SortableTh>
+                <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <SortableTh sort={sort} field="start_date" style={s.th}>Inicio</SortableTh>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>

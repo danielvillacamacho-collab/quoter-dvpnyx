@@ -19,3 +19,7 @@ coverage/
 Thumbs.db
 # Local-only directories dropped by agents / designers
 UI de claude design/
+# User-generated docs (manuales, briefs) — el "source of truth" vive en docs/*.md.
+# Los .docx son outputs/inputs efímeros del PO/UX, no source code.
+docs/*.docx
+*.docx

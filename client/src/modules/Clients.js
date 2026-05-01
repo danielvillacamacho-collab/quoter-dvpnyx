@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
 
 /* ========== styles ========== */
 const s = {
@@ -124,6 +126,7 @@ export default function Clients() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const sort = useSort({ field: 'name', dir: 'asc' });
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -134,6 +137,7 @@ export default function Clients() {
     if (country) qs.set('country', country);
     if (tier) qs.set('tier', tier);
     if (activeOnly) qs.set('active', 'true');
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/clients?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -142,7 +146,7 @@ export default function Clients() {
       // eslint-disable-next-line no-alert
       alert('Error cargando clientes: ' + e.message);
     }
-  }, [search, country, tier, activeOnly]);
+  }, [search, country, tier, activeOnly, sort.field, sort.dir]);
 
   useEffect(() => { load(1); }, [load]);
 
@@ -237,9 +241,14 @@ export default function Clients() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
             <thead>
               <tr>
-                {['Nombre', 'País', 'Industria', 'Tier', 'Oportunidades', 'Contratos activos', 'Estado', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="name" style={s.th}>Nombre</SortableTh>
+                <SortableTh sort={sort} field="country" style={s.th}>País</SortableTh>
+                <SortableTh sort={sort} field="industry" style={s.th}>Industria</SortableTh>
+                <SortableTh sort={sort} field="tier" style={s.th}>Tier</SortableTh>
+                <th style={s.th}>Oportunidades</th>
+                <th style={s.th}>Contratos activos</th>
+                <SortableTh sort={sort} field="active" style={s.th}>Estado</SortableTh>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>

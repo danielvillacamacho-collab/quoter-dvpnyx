@@ -15,6 +15,49 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ## [Unreleased] — entregas en curso
 
+### chore(housekeeping): pase de limpieza 2026-05-01
+
+- **Branches**: 87 ramas remotas mergeadas eliminadas (de 91 → 4 vivas). 81 locales borradas (90 → 9). El repo deja de tener "cementerio" de feature branches.
+- **Deps**: removidos `express-validator` y `uuid` del server (no se usaban — UUID se genera en DB con `uuid_generate_v4()`); removidos `jspdf`, `jspdf-autotable` y `@dnd-kit/sortable` del client (jspdf nunca se importó; sortable nunca se usó en favor de `@dnd-kit/core` directo).
+- **Docs binarios** (`docs/*.docx`) untrackeados. Son outputs/inputs efímeros del PO; el source-of-truth son los `.md`. `.gitignore` actualizado.
+- **`server/package-lock.json`** ahora trackeado (era untracked — instalaciones no reproducibles).
+
+### feat(sortable-tables): tablas paginadas ordenables — Phase 17
+
+Todas las tablas paginadas tienen ahora click-to-sort en cada columna de atributos, con flecha indicadora (▲/▼/⇅), accesibilidad `aria-sort` + Enter/Space, y tie-breaker estable.
+
+**Server** (`server/utils/sort.js` + 9 routes wired):
+- `parseSort(query, SORTABLE, opts)` — whitelist de columnas (previene SQL injection en `ORDER BY`, columnas no parametrizables vía `$N`).
+- `NULLS LAST` por default para predictibilidad.
+- Defaults sensatos por route: contracts→`updated_at desc`, employees→`last_name asc`, opportunities→`created_at desc`, etc.
+
+**Client** (`client/src/utils/useSort.js`, `sortRows.js`, `shell/SortableTh.js`):
+- Hook `useSort({ field, dir })` con click cycle: `nuevo campo → asc`, `mismo campo → toggle`.
+- `<SortableTh sort={sort} field="..." />` componente accesible (aria-sort + Enter/Space).
+- `sortRows(rows, accessor, dir)` — sort estable client-side con locale es-CO + numeric collation (`L1 < L2 < L10`) para tablas no paginadas (Reports, EmployeeCosts).
+
+**Cableado en módulos**: Contracts, Employees, Opportunities, Clients, ResourceRequests, Assignments. Pendiente para iteraciones siguientes: Reports + EmployeeCosts mass view (sortRows client-side), EmployeeDetail tabs.
+
+### perf: tres optimizaciones de baseline (PERF-001/002/003) — 2026-05-01
+
+- **PERF-001**: el polling de `/notifications/unread-count` cada 60s ahora respeta `document.visibilityState`. Tabs ocultos no consumen — con N tabs × M usuarios cada minuto era la carga de fondo dominante. Re-fetch al volver a foco.
+- **PERF-002**: `reports/utilization` y `/bench` movieron filtros `status='active'` + `deleted_at IS NULL` del `SUM(...) FILTER` al `JOIN ON`. Cardinalidad: O(employees × all_assignments) → O(employees × active_assignments).
+- **PERF-003**: índice parcial `assignments_employee_active_idx ON assignments(employee_id) WHERE deleted_at IS NULL AND status='active'`. Sirve a reports + a `sumOverlappingHours` en assignments.js.
+
+Disparador: reporte de lentitud que resultó ser memoria de la instancia (resuelta por infra), pero estas mejoras siguen siendo válidas como reducción de baseline.
+
+### fix(INC-003): empleados al final del alfabeto no aparecían en dropdowns — 2026-04-29
+
+`parsePagination` capa silenciosamente cualquier `limit` > 100 (maxLimit default). El frontend pedía `/api/employees?limit=500` esperando todos, pero el server devolvía 100 → con ~110 empleados en prod ordenados por `last_name`, los 5 con apellidos al final (Reinso, Solano, Uni, Vasquez, Vertel) caían fuera del top 100 y nunca aparecían en el combobox del form de asignación. Mismo patrón en resource-requests.
+
+Fix: endpoints dedicados sin paginación — `GET /api/employees/lookup` (excluye terminated por default) y `GET /api/resource-requests/lookup` (excluye filled/cancelled). Frontend cableado. Filtros client-side se mantienen como defense-in-depth. Post-mortem completo en `docs/INCIDENTS.md`.
+
+### fix(INC-002): asignaciones imposibles para 5 empleados específicos — 2026-04-29
+
+POST `/api/assignments` devolvía 500 para empleados cuyo `user_id` apuntaba a un `users.id` inexistente. `notify(conn, ...)` corría dentro de la transacción abierta; el INSERT en `notifications` violaba FK; el `try/catch` de notify atrapaba el error JS, pero **Postgres ya había marcado la txn ABORTED** → COMMIT fallaba con `current transaction is aborted` → 500.
+
+Fix triple: (1) bloque de notify movido **después** del COMMIT, usando `pool` no `conn`; (2) defense-in-depth en `notify()` y `emitEvent()` — si reciben un client de transacción, envuelven el INSERT en `SAVEPOINT/RELEASE/ROLLBACK TO SAVEPOINT`; (3) test de regresión que mockea fallo en notify y verifica que la asignación devuelve 201. Post-mortem completo INC-002 en `docs/INCIDENTS.md`.
+
 ### feat(spec-ii-00): Iniciativas Internas, Novedades e Idle Time (Abril 2026)
 
 Tres módulos acoplados + un catálogo de festivos por país. El idle time

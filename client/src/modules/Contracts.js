@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
 import {
   SUBTYPES_BY_TYPE, SUBTYPE_LABEL, formatSubtype, typeRequiresSubtype, subtypesFor,
 } from '../utils/contractSubtype';
@@ -178,6 +180,7 @@ function ContractForm({ initial, clients, onSave, onCancel, saving }) {
 
 export default function Contracts() {
   const [state, setState] = useState({ data: [], loading: true, page: 1, total: 0, pages: 1 });
+  const sort = useSort({ field: 'updated_at', dir: 'desc' });
   const [search, setSearch] = useState('');
   const [clientFilter, setClientFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -198,6 +201,7 @@ export default function Contracts() {
     if (statusFilter) qs.set('status', statusFilter);
     if (typeFilter) qs.set('type', typeFilter);
     if (subtypeFilter) qs.set('subtype', subtypeFilter);
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/contracts?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -206,7 +210,7 @@ export default function Contracts() {
       // eslint-disable-next-line no-alert
       alert('Error cargando contratos: ' + e.message);
     }
-  }, [search, clientFilter, statusFilter, typeFilter, subtypeFilter]);
+  }, [search, clientFilter, statusFilter, typeFilter, subtypeFilter, sort.field, sort.dir]);
 
   const loadClients = useCallback(async () => {
     try {
@@ -368,9 +372,15 @@ export default function Contracts() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
-                {['Nombre', 'Cliente', 'Tipo', 'Subtipo', 'Estado', 'Inicio', 'Solicitudes abiertas', 'Asig. activas', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="name" style={s.th}>Nombre</SortableTh>
+                <SortableTh sort={sort} field="client_name" style={s.th}>Cliente</SortableTh>
+                <SortableTh sort={sort} field="type" style={s.th}>Tipo</SortableTh>
+                <SortableTh sort={sort} field="contract_subtype" style={s.th}>Subtipo</SortableTh>
+                <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <SortableTh sort={sort} field="start_date" style={s.th}>Inicio</SortableTh>
+                <th style={s.th}>Solicitudes abiertas</th>
+                <th style={s.th}>Asig. activas</th>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>

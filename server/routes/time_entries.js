@@ -21,7 +21,18 @@ const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError } = require('../utils/http');
+
+const SORTABLE = {
+  work_date:     'te.work_date',
+  hours:         'te.hours',
+  status:        'te.status',
+  created_at:    'te.created_at',
+  updated_at:    'te.updated_at',
+  contract_name: 'c.name',
+  role_title:    'a.role_title',
+};
 
 router.use(auth);
 
@@ -120,6 +131,9 @@ router.get('/', async (req, res) => {
     }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'work_date', defaultDir: 'desc', tieBreaker: 'te.created_at DESC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -132,7 +146,7 @@ router.get('/', async (req, res) => {
            LEFT JOIN assignments a ON a.id = te.assignment_id
            LEFT JOIN contracts   c ON c.id = a.contract_id
            ${where}
-           ORDER BY te.work_date DESC, te.created_at DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset]
       ),
