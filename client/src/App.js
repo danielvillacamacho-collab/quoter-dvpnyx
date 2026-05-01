@@ -103,10 +103,17 @@ function Layout() {
   // Poll unread notifications every 60s so the bell badge stays fresh
   // without a heavy websocket. First fetch fires immediately on login.
   // Fail-soft: a failing fetch simply leaves the badge at 0.
+  //
+  // PERF-001: skip the poll when the tab is hidden, and re-fetch on
+  // visibility change. Users with multiple tabs open were generating
+  // a poll per tab per minute against a count(*) that scans the
+  // unread index — multiplied by ~10 users this was the dominant
+  // background DB load. Hidden tabs no longer contribute.
   useEffect(() => {
     if (!user) return undefined;
     let live = true;
     const fetchCount = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       try {
         const d = await apiGet('/api/notifications/unread-count');
         if (live && d && typeof d.count === 'number') setUnread(d.count);
@@ -114,7 +121,13 @@ function Layout() {
     };
     fetchCount();
     const t = setInterval(fetchCount, 60000);
-    return () => { live = false; clearInterval(t); };
+    const onVis = () => { if (document.visibilityState === 'visible') fetchCount(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      live = false;
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [user]);
 
   // Global ⌘K / Ctrl+K opens the Command Palette. Registered once per
