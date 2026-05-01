@@ -3,6 +3,16 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
 import StatusBadge from '../shell/StatusBadge';
 import { STAGES, TRANSITIONS as PIPELINE_TRANSITIONS, isPostponed, isWon } from '../utils/pipeline';
+// SPEC-CRM-00 v1.1 PR2 — labels para revenue + funding + loss reasons.
+import {
+  REVENUE_TYPES, FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  validateLossReason,
+} from '../utils/booking';
+
+const REVENUE_LABEL = Object.fromEntries(REVENUE_TYPES.map((r) => [r.value, r.label]));
+const FUNDING_LABEL = Object.fromEntries(FUNDING_SOURCES.map((f) => [f.value, f.label]));
+const LOSS_LABEL    = Object.fromEntries(LOSS_REASONS.map((l) => [l.value, l.label]));
+const fmtUsd = (n) => `USD ${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
 const s = {
   page:   { maxWidth: 1200, margin: '0 auto' },
@@ -80,15 +90,35 @@ export default function OpportunityDetail() {
       return;
     }
     if (target === 'closed_lost') {
+      // SPEC-CRM-00 v1.1 PR2 — loss_reason del enum extendido + detail
+      // mínimo 30 chars (validado backend; aquí soft-check para UX).
+      const enumOptions = LOSS_REASONS.map((l) => `${l.value} = ${l.label}`).join('\n');
       // eslint-disable-next-line no-alert
-      const reason = window.prompt(
-        `Razón para marcar ${STATUS_LABEL[target]}:\n(price / timing / competition / technical_fit / client_internal / other)`,
+      const lossReason = window.prompt(
+        `Razón para marcar Perdida:\n${enumOptions}\n\nEscribe el código (ej. "price"):`,
         'other'
       );
-      if (!reason) return;
+      if (!lossReason) return;
       // eslint-disable-next-line no-alert
-      const notes = window.prompt('Notas adicionales (opcional):', '');
-      await doTransition({ new_status: target, outcome_reason: reason, outcome_notes: notes || null });
+      const lossDetail = window.prompt(
+        `Descripción detallada (mín ${LOSS_REASON_DETAIL_MIN} chars):\nEj: "Cliente eligió competidor X. Plan: incluir feature Y en roadmap Q3."`,
+        ''
+      );
+      const v = validateLossReason({ loss_reason: lossReason, loss_reason_detail: lossDetail || '' });
+      if (v) {
+        // eslint-disable-next-line no-alert
+        alert(v);
+        return;
+      }
+      await doTransition({
+        new_status: target,
+        loss_reason: lossReason,
+        loss_reason_detail: lossDetail,
+        // legacy compat: seguimos enviando outcome_reason para servidores
+        // viejos. Si es un enum no aceptado por el legacy enum (e.g. champion_left),
+        // el backend ahora prioriza loss_reason — sin daño.
+        outcome_reason: lossReason,
+      });
       return;
     }
     if (target === 'postponed') {
@@ -233,6 +263,60 @@ export default function OpportunityDetail() {
           <Field label="Outcome">{opp.outcome_reason}</Field>
         </div>
       </div>
+
+      {/* SPEC-CRM-00 v1.1 PR2 — Revenue breakdown. */}
+      <div style={s.card} data-testid="opportunity-revenue-card">
+        <h2 style={s.h2}>💰 Revenue</h2>
+        <div style={s.grid}>
+          <Field label="Tipo">{REVENUE_LABEL[opp.revenue_type] || opp.revenue_type || '—'}</Field>
+          {(opp.revenue_type === 'one_time' || opp.revenue_type === 'mixed') && (
+            <Field label="One-time USD">{opp.one_time_amount_usd != null ? fmtUsd(opp.one_time_amount_usd) : '—'}</Field>
+          )}
+          {(opp.revenue_type === 'recurring' || opp.revenue_type === 'mixed') && (
+            <>
+              <Field label="MRR USD">{opp.mrr_usd != null ? fmtUsd(opp.mrr_usd) : '—'}</Field>
+              <Field label="Duración (meses)">{opp.contract_length_months ?? '—'}</Field>
+            </>
+          )}
+          <Field label="Booking total">{opp.booking_amount_usd != null ? fmtUsd(opp.booking_amount_usd) : '—'}</Field>
+          <Field label="Weighted">{opp.weighted_amount_usd != null ? fmtUsd(opp.weighted_amount_usd) : '—'}</Field>
+        </div>
+      </div>
+
+      {/* SPEC-CRM-00 v1.1 PR2 — Stakeholders / Funding / Drive. */}
+      <div style={s.card} data-testid="opportunity-meddpicc-card">
+        <h2 style={s.h2}>🎯 Stakeholders & Funding</h2>
+        <div style={s.grid}>
+          <Field label="Champion identificado">{opp.champion_identified ? '✅ Sí' : '❌ No'}</Field>
+          <Field label="Economic Buyer">{opp.economic_buyer_identified ? '✅ Sí' : '❌ No'}</Field>
+          <Field label="Funding source">{FUNDING_LABEL[opp.funding_source] || opp.funding_source || '—'}</Field>
+          {opp.funding_source && opp.funding_source !== 'client_direct' && (
+            <Field label="Funding USD">{opp.funding_amount_usd != null ? fmtUsd(opp.funding_amount_usd) : '—'}</Field>
+          )}
+          <Field label="Drive">
+            {opp.drive_url ? (
+              <a href={opp.drive_url} target="_blank" rel="noreferrer" style={s.link} aria-label="Abrir Drive de la oportunidad">
+                Abrir carpeta ↗
+              </a>
+            ) : '—'}
+          </Field>
+        </div>
+      </div>
+
+      {/* SPEC-CRM-00 v1.1 PR2 — Razón de pérdida (cuando aplique). */}
+      {opp.status === 'closed_lost' && (opp.loss_reason || opp.outcome_reason) && (
+        <div style={{ ...s.card, background: '#fff5f5', borderColor: 'var(--danger)' }} data-testid="opportunity-loss-card">
+          <h2 style={{ ...s.h2, color: 'var(--danger)' }}>📉 Razón de la pérdida</h2>
+          <Field label="Categoría">
+            {LOSS_LABEL[opp.loss_reason] || opp.loss_reason || opp.outcome_reason || '—'}
+          </Field>
+          {opp.loss_reason_detail && (
+            <div style={{ marginTop: 10, fontSize: 13, fontStyle: 'italic', color: 'var(--text-light)' }}>
+              {opp.loss_reason_detail}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={s.card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>

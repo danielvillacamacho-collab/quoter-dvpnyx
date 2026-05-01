@@ -617,6 +617,15 @@ const V2_ALTERS = `
   -- 1) Drop el CHECK constraint legacy (autonombre de Postgres). Se
   --    busca dinámicamente porque su nombre exacto depende de la versión
   --    en la que se creó la tabla.
+  --
+  --    HOTFIX 2026-05-01: Postgres reescribe `CHECK (status IN ('open', ...))`
+  --    a `CHECK ((status)::text = ANY (ARRAY['open'::varchar, ...]))` cuando
+  --    hay >1 valor — la representación canónica NO contiene la palabra `IN`.
+  --    El pattern original `'%status%IN%open%'` nunca matcheó en RDS, el
+  --    constraint legacy quedó vivo, y el primer UPDATE a 'lead' violó la
+  --    restricción → toda la transacción de migración hizo rollback en dev.
+  --    La señal específica del enum legacy es el literal 'cancelled', que
+  --    se eliminó en v1.1; usarlo como marcador es 100% determinístico.
   DO $do_status_check_drop$
   DECLARE
     cn text;
@@ -626,7 +635,10 @@ const V2_ALTERS = `
       JOIN pg_class      cls ON cls.oid = con.conrelid
      WHERE cls.relname = 'opportunities'
        AND con.contype = 'c'
-       AND pg_get_constraintdef(con.oid) ILIKE '%status%IN%open%';
+       AND con.conname <> 'opportunities_status_check_v11'
+       AND con.conname <> 'opp_postponed_has_until_date'
+       AND pg_get_constraintdef(con.oid) ILIKE '%status%'
+       AND pg_get_constraintdef(con.oid) ILIKE '%''cancelled''%';
     IF cn IS NOT NULL THEN
       EXECUTE 'ALTER TABLE opportunities DROP CONSTRAINT ' || quote_ident(cn);
     END IF;
@@ -640,12 +652,23 @@ const V2_ALTERS = `
   UPDATE opportunities SET status = 'closed_lost'        WHERE status IN ('lost', 'cancelled');
 
   -- 3) Constraint nuevo con los 9 estados aprobados + cláusula postponed.
-  ALTER TABLE opportunities
-    ADD CONSTRAINT opportunities_status_check_v11
-    CHECK (status IN (
-      'lead','qualified','solution_design','proposal_validated',
-      'negotiation','verbal_commit','closed_won','closed_lost','postponed'
-    ));
+  --    HOTFIX 2026-05-01: envuelto en DO/IF NOT EXISTS para que la
+  --    migración sea idempotente entre deploys (el legacy ADD CONSTRAINT
+  --    crudo fallaba en la segunda corrida con "constraint already exists").
+  DO $do_status_check_v11_add$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint WHERE conname = 'opportunities_status_check_v11'
+    ) THEN
+      ALTER TABLE opportunities
+        ADD CONSTRAINT opportunities_status_check_v11
+        CHECK (status IN (
+          'lead','qualified','solution_design','proposal_validated',
+          'negotiation','verbal_commit','closed_won','closed_lost','postponed'
+        ));
+    END IF;
+  END
+  $do_status_check_v11_add$;
 
   -- Postponed siempre debe tener fecha de reactivación. Se nombra
   -- explícitamente para poder verificarlo en tests + drop si se quita.
@@ -733,6 +756,186 @@ const V2_ALTERS = `
   CREATE INDEX IF NOT EXISTS opportunities_postponed_until_idx
     ON opportunities(postponed_until_date)
     WHERE status = 'postponed' AND deleted_at IS NULL;
+
+  -- ==================================================================
+  -- SPEC-CRM-00 v1.1 PR2 (Mayo 2026) — Revenue model + Champion/EB +
+  -- Funding source + Loss reasons formalizadas + Drive URL
+  -- ==================================================================
+  -- Decisión CCO: el modelo legacy "booking_amount_usd suelto" no refleja
+  -- la operación real. Capacity y resell son recurrentes; tratarlos como
+  -- one-time falsea métricas. Aquí formalizamos:
+  --   * revenue_type (one_time | recurring | mixed)
+  --   * one_time_amount_usd / mrr_usd / contract_length_months
+  --   * booking_amount_usd ahora es DERIVADO via trigger:
+  --       one_time:  booking = one_time_amount_usd
+  --       recurring: booking = mrr_usd * contract_length_months
+  --       mixed:     booking = one_time + (mrr * months)
+  --   * champion_identified / economic_buyer_identified (alerta A3 PR4)
+  --   * funding_source (client_direct | aws_mdf | vendor_mdf | mixed)
+  --   * loss_reason enum extendida (9 valores spec) + loss_reason_detail
+  --   * drive_url (link a carpeta de cliente, opcional)
+  --
+  -- Migración legacy: opps existentes se asumen 'one_time' con
+  -- one_time_amount_usd = booking_amount_usd actual (idempotente).
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS revenue_type            TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS one_time_amount_usd     NUMERIC(18,2) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS mrr_usd                 NUMERIC(18,2) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS contract_length_months  INTEGER NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS champion_identified     BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS economic_buyer_identified BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS funding_source          TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS funding_amount_usd      NUMERIC(18,2) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS loss_reason             TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS loss_reason_detail      TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS drive_url               TEXT NULL;
+
+  -- Backfill: opps legacy todas son one_time con booking actual.
+  UPDATE opportunities SET revenue_type = 'one_time'
+    WHERE revenue_type IS NULL;
+  UPDATE opportunities SET one_time_amount_usd = COALESCE(booking_amount_usd, 0)
+    WHERE revenue_type = 'one_time' AND one_time_amount_usd IS NULL;
+  UPDATE opportunities SET funding_source = 'client_direct'
+    WHERE funding_source IS NULL;
+
+  -- Promover defaults + NOT NULL después del backfill.
+  ALTER TABLE opportunities ALTER COLUMN revenue_type   SET DEFAULT 'one_time';
+  ALTER TABLE opportunities ALTER COLUMN revenue_type   SET NOT NULL;
+  ALTER TABLE opportunities ALTER COLUMN funding_source SET DEFAULT 'client_direct';
+  ALTER TABLE opportunities ALTER COLUMN funding_source SET NOT NULL;
+
+  -- Enums via CHECK constraints nombrados (idempotente).
+  DO $do_revenue_enum$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_revenue_type_enum') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_revenue_type_enum
+        CHECK (revenue_type IN ('one_time','recurring','mixed'));
+    END IF;
+  END
+  $do_revenue_enum$;
+
+  DO $do_funding_enum$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_funding_source_enum') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_funding_source_enum
+        CHECK (funding_source IN ('client_direct','aws_mdf','vendor_mdf','mixed'));
+    END IF;
+  END
+  $do_funding_enum$;
+
+  DO $do_loss_enum$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_loss_reason_enum') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_loss_reason_enum
+        CHECK (loss_reason IS NULL OR loss_reason IN (
+          'price','competitor_won','no_decision','budget_cut','champion_left',
+          'wrong_fit','timing','incumbent_win','other'
+        ));
+    END IF;
+  END
+  $do_loss_enum$;
+
+  -- Consistency relajado: solo verificamos que los campos REQUERIDOS por
+  -- el motion estén presentes. NO forzamos NULL en los no-aplicables — el
+  -- trigger los ignora al calcular booking, y mantener el dato histórico
+  -- es útil cuando una opp pasa de recurring → one_time.
+  DO $do_rev_consistency$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_revenue_consistency') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_revenue_consistency
+        CHECK (
+          (revenue_type = 'one_time'  AND one_time_amount_usd IS NOT NULL) OR
+          (revenue_type = 'recurring' AND mrr_usd IS NOT NULL AND contract_length_months IS NOT NULL) OR
+          (revenue_type = 'mixed'     AND one_time_amount_usd IS NOT NULL AND mrr_usd IS NOT NULL AND contract_length_months IS NOT NULL)
+        );
+    END IF;
+  END
+  $do_rev_consistency$;
+
+  DO $do_fund_consistency$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_funding_consistency') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_funding_consistency
+        CHECK (funding_source = 'client_direct' OR funding_amount_usd IS NOT NULL);
+    END IF;
+  END
+  $do_fund_consistency$;
+
+  -- Sanidades: montos no negativos.
+  DO $do_amounts_nonneg$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_amounts_nonneg') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_amounts_nonneg
+        CHECK (
+          (one_time_amount_usd IS NULL OR one_time_amount_usd >= 0) AND
+          (mrr_usd IS NULL OR mrr_usd >= 0) AND
+          (contract_length_months IS NULL OR contract_length_months >= 0) AND
+          (funding_amount_usd IS NULL OR funding_amount_usd >= 0)
+        );
+    END IF;
+  END
+  $do_amounts_nonneg$;
+
+  -- Trigger reescrito: ahora calcula booking_amount_usd derivado del
+  -- revenue_type ANTES de calcular weighted. CREATE OR REPLACE → idempotente.
+  CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    -- 1) Booking derivado del revenue_type. La app sigue pudiendo enviar
+    --    booking_amount_usd directo; el trigger lo sobrescribe siempre que
+    --    haya datos del modelo. Si el modelo está vacío (legacy) se mantiene
+    --    el booking enviado.
+    IF NEW.revenue_type = 'recurring' THEN
+      NEW.booking_amount_usd := COALESCE(NEW.mrr_usd, 0) * COALESCE(NEW.contract_length_months, 0);
+    ELSIF NEW.revenue_type = 'mixed' THEN
+      NEW.booking_amount_usd := COALESCE(NEW.one_time_amount_usd, 0)
+                              + COALESCE(NEW.mrr_usd, 0) * COALESCE(NEW.contract_length_months, 0);
+    ELSIF NEW.revenue_type = 'one_time' THEN
+      -- Si la app envía one_time_amount_usd, se usa. Si no, se respeta el
+      -- booking enviado (compat legacy). Cuando la app esté 100% migrada
+      -- esta rama colapsa a `COALESCE(NEW.one_time_amount_usd, 0)`.
+      NEW.booking_amount_usd := COALESCE(NEW.one_time_amount_usd, NEW.booking_amount_usd, 0);
+    END IF;
+
+    -- 2) Probability + last_stage_change_at cuando cambia status.
+    IF TG_OP = 'INSERT' OR NEW.status IS DISTINCT FROM OLD.status THEN
+      NEW.probability := CASE NEW.status
+        WHEN 'lead'                THEN 5
+        WHEN 'qualified'           THEN 15
+        WHEN 'solution_design'     THEN 30
+        WHEN 'proposal_validated'  THEN 50
+        WHEN 'negotiation'         THEN 75
+        WHEN 'verbal_commit'       THEN 90
+        WHEN 'closed_won'          THEN 100
+        WHEN 'closed_lost'         THEN 0
+        WHEN 'postponed'           THEN 0
+        ELSE 5
+      END;
+      IF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        NEW.last_stage_change_at := NOW();
+      END IF;
+    END IF;
+
+    -- 3) Weighted siempre derivado.
+    NEW.weighted_amount_usd := COALESCE(NEW.booking_amount_usd, 0) * COALESCE(NEW.probability, 0) / 100.0;
+
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  -- Re-trigger para recalcular booking en todas las opps (booking ya estaba
+  -- correcto en legacy porque era el campo directo, pero después del
+  -- rename one_time_amount_usd ← booking este UPDATE no-op confirma).
+  UPDATE opportunities SET revenue_type = revenue_type
+    WHERE revenue_type IS NOT NULL;
+
+  CREATE INDEX IF NOT EXISTS opportunities_revenue_type_idx
+    ON opportunities(revenue_type) WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS opportunities_funding_source_idx
+    ON opportunities(funding_source)
+    WHERE funding_source <> 'client_direct' AND deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS opportunities_champion_idx
+    ON opportunities(champion_identified)
+    WHERE champion_identified = false AND deleted_at IS NULL;
 
   -- ==================================================================
   -- RR-MVP-00.1 (Abril 27 2026) — Revenue recognition mínimo

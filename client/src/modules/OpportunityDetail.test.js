@@ -25,6 +25,11 @@ describe('OpportunityDetail', () => {
     client: { id: 'c1', name: 'Acme' },
     quotations: [{ id: 'q1', project_name: 'Atlas v1', type: 'fixed_scope', status: 'sent', total_usd: 12000 }],
     expected_close_date: '2026-05-30',
+    // SPEC-CRM-00 v1.1 PR2 — modelo de revenue + flags + funding visibles
+    // en cards nuevos del detalle.
+    revenue_type: 'one_time', one_time_amount_usd: 50000, booking_amount_usd: 50000, weighted_amount_usd: 25000,
+    champion_identified: true, economic_buyer_identified: false,
+    funding_source: 'client_direct',
   };
 
   it('renders the opportunity summary with client link + opportunity_number', async () => {
@@ -93,6 +98,104 @@ describe('OpportunityDetail', () => {
     });
     promptSpy.mockRestore();
     confirmSpy.mockRestore();
+  });
+
+  // SPEC-CRM-00 v1.1 PR2 — Revenue + Stakeholders + Funding cards.
+  describe('SPEC-CRM-00 v1.1 PR2: Revenue / Stakeholders / Funding cards', () => {
+    it('renders revenue card with one_time amount + booking + weighted', async () => {
+      apiV2.apiGet.mockResolvedValue(baseOpp);
+      mount();
+      await screen.findByText(/💼 Proyecto Atlas/);
+      const card = await screen.findByTestId('opportunity-revenue-card');
+      // El label del enum + el label del campo "One-time USD" ambos contienen
+      // "One-time"; chequeamos que aparece >=1 vez en lugar de exigir único.
+      expect(within(card).getAllByText(/One-time/i).length).toBeGreaterThan(0);
+      expect(within(card).getAllByText(/USD 50,000/).length).toBeGreaterThan(0); // one-time + booking
+      expect(within(card).getByText(/USD 25,000/)).toBeInTheDocument();          // weighted
+    });
+
+    it('renders revenue card with MRR + duración cuando es recurring', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp,
+        revenue_type: 'recurring', one_time_amount_usd: null,
+        mrr_usd: 5000, contract_length_months: 24,
+        booking_amount_usd: 120000, weighted_amount_usd: 60000,
+      });
+      mount();
+      const card = await screen.findByTestId('opportunity-revenue-card');
+      expect(within(card).getByText(/Recurring/i)).toBeInTheDocument();
+      expect(within(card).getByText(/USD 5,000/)).toBeInTheDocument();   // MRR
+      expect(within(card).getByText('24')).toBeInTheDocument();          // duración
+      expect(within(card).getByText(/USD 120,000/)).toBeInTheDocument(); // booking
+    });
+
+    it('renders stakeholders card con flags + funding source', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp,
+        champion_identified: true, economic_buyer_identified: false,
+        funding_source: 'aws_mdf', funding_amount_usd: 25000,
+      });
+      mount();
+      const card = await screen.findByTestId('opportunity-meddpicc-card');
+      expect(within(card).getByText('✅ Sí')).toBeInTheDocument();   // Champion
+      expect(within(card).getByText('❌ No')).toBeInTheDocument();   // EB
+      expect(within(card).getByText(/AWS MDF/)).toBeInTheDocument();
+      expect(within(card).getByText(/USD 25,000/)).toBeInTheDocument();
+    });
+
+    it('renders loss card con loss_reason + detail cuando status es closed_lost', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp, status: 'closed_lost',
+        loss_reason: 'competitor_won',
+        loss_reason_detail: 'Cliente eligió competidor X por feature Y. Plan: roadmap Q3.',
+      });
+      mount();
+      const card = await screen.findByTestId('opportunity-loss-card');
+      expect(within(card).getByText(/Ganó competidor/)).toBeInTheDocument();
+      expect(within(card).getByText(/feature Y/)).toBeInTheDocument();
+    });
+
+    it('NO renderiza loss card cuando la opp está activa', async () => {
+      apiV2.apiGet.mockResolvedValue(baseOpp);
+      mount();
+      await screen.findByText(/💼 Proyecto Atlas/);
+      expect(screen.queryByTestId('opportunity-loss-card')).toBeNull();
+    });
+
+    it('drive_url renderiza como link cuando está poblado', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp, drive_url: 'https://drive.google.com/folder/abc',
+      });
+      mount();
+      const link = await screen.findByLabelText('Abrir Drive de la oportunidad');
+      expect(link).toHaveAttribute('href', 'https://drive.google.com/folder/abc');
+      expect(link).toHaveAttribute('target', '_blank');
+    });
+  });
+
+  // SPEC-CRM-00 v1.1 PR2 — closed_lost con loss_reason del enum extendido
+  // + detail mín 30 chars. El detalle usa window.prompt (UI rápida).
+  it('transition closed_lost: prompt loss_reason + detail, posts loss_reason + detail', async () => {
+    apiV2.apiGet.mockResolvedValueOnce(baseOpp).mockResolvedValue(baseOpp);
+    apiV2.apiPost.mockResolvedValue({ id: 'o1', status: 'closed_lost' });
+    const detail = 'Cliente eligió competidor por feature X. Plan: incluir Y en Q3 y reabrir.';
+    const promptSpy = jest.spyOn(window, 'prompt')
+      .mockImplementationOnce(() => 'competitor_won')
+      .mockImplementationOnce(() => detail);
+    mount();
+    await screen.findByText(/💼 Proyecto Atlas/);
+    fireEvent.click(screen.getByLabelText('Mover a Perdida'));
+    await waitFor(() => {
+      expect(apiV2.apiPost).toHaveBeenCalledWith(
+        '/api/opportunities/o1/status',
+        expect.objectContaining({
+          new_status: 'closed_lost',
+          loss_reason: 'competitor_won',
+          loss_reason_detail: detail,
+        }),
+      );
+    });
+    promptSpy.mockRestore();
   });
 
   // SPEC-CRM-00 v1.1 — Postponed via prompt, validates future date, posts payload.

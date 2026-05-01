@@ -160,23 +160,48 @@ describe('Opportunities module', () => {
     expect(screen.queryByLabelText('Mover Proyecto Atlas a Cancelada')).toBeNull();
   });
 
-  it('transitions to closed_lost: requires reason, then POSTs /status with outcome_reason', async () => {
+  // SPEC-CRM-00 v1.1 PR2 — closed_lost ahora exige loss_reason del enum
+  // extendido + loss_reason_detail con ≥30 chars. La UI reemplazó el
+  // dropdown legacy de outcome_reason por un dropdown de 9 valores y un
+  // textarea de detalle.
+  it('transitions to closed_lost: requires loss_reason + 30-char detail, posts loss_reason + loss_reason_detail', async () => {
     apiV2.apiPost.mockResolvedValue({ id: 'o1', status: 'closed_lost' });
     mount();
     await screen.findByText('Proyecto Atlas');
     fireEvent.click(screen.getByLabelText('Mover Proyecto Atlas a Perdida'));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/Mover a Perdida/)).toBeInTheDocument();
-    // submit without reason → validation error
+    // submit without reason → validation error (mensaje del validator);
+    // usamos role=alert para distinguirlo del label "Razón de pérdida".
     fireEvent.submit(within(dialog).getByRole('button', { name: /Confirmar/i }).closest('form'));
-    await waitFor(() => expect(within(dialog).getByText(/Selecciona una razón de pérdida/i)).toBeInTheDocument());
-    // pick reason and confirm
-    fireEvent.change(within(dialog).getByLabelText('Razón de pérdida'), { target: { value: 'price' } });
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(/razón de pérdida/i),
+    );
+    // pick reason but submit with short detail → exige 30 chars
+    fireEvent.change(within(dialog).getByLabelText('Razón de pérdida'), { target: { value: 'competitor_won' } });
+    fireEvent.change(within(dialog).getByLabelText('Descripción detallada de la pérdida'), {
+      target: { value: 'corto' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/i }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(/al menos 30/i),
+    );
+    expect(apiV2.apiPost).not.toHaveBeenCalled();
+    // detail con suficientes chars → sí dispara el POST.
+    const detail = 'Cliente eligió competidor por feature X. Plan: roadmap Q3.';
+    fireEvent.change(within(dialog).getByLabelText('Descripción detallada de la pérdida'), {
+      target: { value: detail },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/opportunities/o1/status',
-        expect.objectContaining({ new_status: 'closed_lost', outcome_reason: 'price' }),
+        expect.objectContaining({
+          new_status: 'closed_lost',
+          loss_reason: 'competitor_won',
+          loss_reason_detail: detail,
+          outcome_reason: 'competitor_won', // legacy compat también enviado
+        }),
       );
     });
   });
@@ -240,6 +265,98 @@ describe('Opportunities module', () => {
         '/api/opportunities/o1/status',
         expect.objectContaining({ new_status: 'closed_won', winning_quotation_id: 'q1' }),
       );
+    });
+  });
+
+  // SPEC-CRM-00 v1.1 PR2 — Form de creación con revenue model + flags.
+  describe('SPEC-CRM-00 v1.1 PR2: revenue selector', () => {
+    const openCreateModal = async () => {
+      mount();
+      await screen.findByText('Proyecto Atlas');
+      await waitFor(() => {
+        const filter = screen.getByLabelText('Filtro por cliente');
+        expect(filter.querySelector('option[value="c1"]')).not.toBeNull();
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Nueva Oportunidad/i }));
+      return await screen.findByRole('dialog');
+    };
+
+    // Los radios usan aria-label exacto (texto del enum) para evitar
+    // que /Recurring/i matchee también "Mixed (...recurring)".
+    const ARIA = {
+      one_time: 'One-time (proyecto puntual)',
+      recurring: 'Recurring (mensual con duración)',
+      mixed: 'Mixed (one-time + recurring)',
+    };
+
+    it('por default es one_time y muestra el campo Monto one-time', async () => {
+      const dialog = await openCreateModal();
+      expect(within(dialog).getByLabelText(ARIA.one_time)).toBeChecked();
+      expect(within(dialog).getByLabelText('Monto one-time USD')).toBeInTheDocument();
+      // No exhibe los campos de recurring cuando estamos en one_time.
+      expect(within(dialog).queryByLabelText('MRR USD')).toBeNull();
+    });
+
+    it('al elegir Recurring muestra MRR + Duración y calcula booking en vivo', async () => {
+      const dialog = await openCreateModal();
+      fireEvent.click(within(dialog).getByLabelText(ARIA.recurring));
+      fireEvent.change(within(dialog).getByLabelText('MRR USD'), { target: { value: '5000' } });
+      fireEvent.change(within(dialog).getByLabelText('Duración del contrato en meses'), { target: { value: '24' } });
+      // Booking calculado: 5000 × 24 = 120,000.
+      expect(within(dialog).getByText(/Booking calculado: USD 120,000/)).toBeInTheDocument();
+    });
+
+    it('Mixed muestra los tres campos y suma one-time + mrr×months', async () => {
+      const dialog = await openCreateModal();
+      fireEvent.click(within(dialog).getByLabelText(ARIA.mixed));
+      fireEvent.change(within(dialog).getByLabelText('Monto one-time USD'), { target: { value: '20000' } });
+      fireEvent.change(within(dialog).getByLabelText('MRR USD'), { target: { value: '3000' } });
+      fireEvent.change(within(dialog).getByLabelText('Duración del contrato en meses'), { target: { value: '12' } });
+      expect(within(dialog).getByText(/Booking calculado: USD 56,000/)).toBeInTheDocument();
+    });
+
+    it('rechaza submit en recurring sin mrr', async () => {
+      const dialog = await openCreateModal();
+      fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
+      const nameInput = within(dialog).getAllByRole('textbox')[0];
+      fireEvent.change(nameInput, { target: { value: 'Recurring Deal' } });
+      fireEvent.click(within(dialog).getByLabelText(ARIA.recurring));
+      // dejamos mrr y meses vacíos → validación bloquea
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
+      await waitFor(() => expect(within(dialog).getByText(/MRR es requerido/i)).toBeInTheDocument());
+      expect(apiV2.apiPost).not.toHaveBeenCalled();
+    });
+
+    it('opciones avanzadas: Champion / EB / funding aws_mdf con monto / drive_url', async () => {
+      apiV2.apiPost.mockResolvedValue({ id: 'o-new' });
+      const dialog = await openCreateModal();
+      fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
+      fireEvent.change(within(dialog).getAllByRole('textbox')[0], { target: { value: 'Avanzado' } });
+      fireEvent.change(within(dialog).getByLabelText('Monto one-time USD'), { target: { value: '15000' } });
+      // toggle "Más opciones"
+      fireEvent.click(within(dialog).getByLabelText('Mostrar opciones avanzadas'));
+      fireEvent.click(within(dialog).getByLabelText('Champion identificado'));
+      fireEvent.click(within(dialog).getByLabelText('Economic Buyer identificado'));
+      fireEvent.change(within(dialog).getByLabelText('Funding source'), { target: { value: 'aws_mdf' } });
+      fireEvent.change(within(dialog).getByLabelText('Monto de funding USD'), { target: { value: '5000' } });
+      fireEvent.change(within(dialog).getByLabelText('Drive URL'), {
+        target: { value: 'https://drive.google.com/folder/abc' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
+      await waitFor(() => {
+        expect(apiV2.apiPost).toHaveBeenCalledWith(
+          '/api/opportunities',
+          expect.objectContaining({
+            revenue_type: 'one_time',
+            one_time_amount_usd: 15000,
+            champion_identified: true,
+            economic_buyer_identified: true,
+            funding_source: 'aws_mdf',
+            funding_amount_usd: 5000,
+            drive_url: 'https://drive.google.com/folder/abc',
+          }),
+        );
+      });
     });
   });
 

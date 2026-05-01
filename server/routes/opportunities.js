@@ -57,6 +57,11 @@ router.use(auth);
 // SSOT en server/utils/pipeline.js para que cualquier cambio del modelo
 // se propague aquí automáticamente.
 const { STAGE_BY_ID, STAGES, isTerminal, isPostponed } = require('../utils/pipeline');
+// SPEC-CRM-00 v1.1 PR2 — Revenue model + funding + loss reasons.
+const {
+  REVENUE_TYPES, FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  computeBooking, validateRevenueModel, validateFunding, validateLossReason,
+} = require('../utils/booking');
 const VALID_STATUSES = STAGES.map((s) => s.id);
 const TERMINAL = new Set(STAGES.filter((s) => s.terminal).map((s) => s.id)); // closed_won, closed_lost
 const NON_TERMINAL = new Set(STAGES.filter((s) => !s.terminal && !s.postponed).map((s) => s.id));
@@ -90,8 +95,12 @@ const EDITABLE_FIELDS = [
   'squad_id', 'expected_close_date', 'tags', 'external_crm_id',
   // CRM-MVP-00.1
   'booking_amount_usd', 'next_step', 'next_step_due_date',
-  // SPEC-CRM-00 v1.1 — country denormalizado + identificador legible
+  // SPEC-CRM-00 v1.1 PR1 — country denormalizado + identificador legible
   'country',
+  // SPEC-CRM-00 v1.1 PR2 — modelo de revenue + funding + flags + drive_url
+  'revenue_type', 'one_time_amount_usd', 'mrr_usd', 'contract_length_months',
+  'champion_identified', 'economic_buyer_identified',
+  'funding_source', 'funding_amount_usd', 'drive_url',
 ];
 
 /* -------- LIST -------- */
@@ -113,6 +122,17 @@ router.get('/', async (req, res) => {
     if (req.query.squad_id)  wheres.push(`o.squad_id = ${add(req.query.squad_id)}`);
     if (req.query.from_expected_close) wheres.push(`o.expected_close_date >= ${add(req.query.from_expected_close)}`);
     if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
+    // SPEC-CRM-00 v1.1 PR2 — filtros de revenue model + flags + funding.
+    if (req.query.revenue_type && REVENUE_TYPES.includes(req.query.revenue_type)) {
+      wheres.push(`o.revenue_type = ${add(req.query.revenue_type)}`);
+    }
+    if (req.query.funding_source && FUNDING_SOURCES.includes(req.query.funding_source)) {
+      wheres.push(`o.funding_source = ${add(req.query.funding_source)}`);
+    }
+    if (req.query.has_champion === 'true')  wheres.push(`o.champion_identified = true`);
+    if (req.query.has_champion === 'false') wheres.push(`o.champion_identified = false`);
+    if (req.query.has_economic_buyer === 'true')  wheres.push(`o.economic_buyer_identified = true`);
+    if (req.query.has_economic_buyer === 'false') wheres.push(`o.economic_buyer_identified = false`);
 
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
     const sort = parseSort(req.query, SORTABLE, {
@@ -176,6 +196,11 @@ router.get('/kanban', async (req, res) => {
               o.expected_close_date, o.booking_amount_usd, o.weighted_amount_usd,
               o.probability, o.last_stage_change_at, o.next_step, o.next_step_due_date,
               o.created_at,
+              -- SPEC-CRM-00 v1.1 PR2 — el card del Kanban necesita estos
+              -- campos para los badges (⚠Champ, MRR breakdown, funding chip).
+              o.revenue_type, o.one_time_amount_usd, o.mrr_usd, o.contract_length_months,
+              o.champion_identified, o.economic_buyer_identified,
+              o.funding_source, o.funding_amount_usd,
               c.name AS client_name,
               u.name AS owner_name, u.email AS owner_email,
               EXTRACT(DAY FROM NOW() - o.last_stage_change_at)::int AS days_in_current_stage,
@@ -347,10 +372,42 @@ router.post('/', async (req, res) => {
     account_owner_id, presales_lead_id, squad_id,
     expected_close_date, tags, external_crm_id,
     country: countryOverride,
+    // SPEC-CRM-00 v1.1 PR2 — revenue model + flags + funding + drive_url.
+    // Si la app no manda revenue_type, asumimos 'one_time' y mapeamos
+    // booking_amount_usd legacy → one_time_amount_usd. Esto preserva
+    // compat con el cliente del PR1 mientras transiciona al nuevo modelo.
+    revenue_type: revenueTypeIn,
+    one_time_amount_usd: oneTimeAmountIn,
+    mrr_usd, contract_length_months,
+    champion_identified, economic_buyer_identified,
+    funding_source: fundingSourceIn,
+    funding_amount_usd,
+    drive_url,
+    booking_amount_usd: legacyBookingAmount,
   } = req.body || {};
 
   if (!client_id) return res.status(400).json({ error: 'client_id es requerido' });
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'El nombre es requerido' });
+
+  // Normalizar revenue model + funding con compat legacy.
+  // Si la app NO mandó nada del nuevo modelo asumimos one_time con
+  // monto = booking_amount_usd legacy (o 0 si tampoco hay). Esto preserva
+  // el comportamiento "Nueva Oportunidad rápida" del PR1 mientras la UI
+  // del nuevo formulario llega.
+  const revenue_type = revenueTypeIn || 'one_time';
+  let one_time_amount_usd = oneTimeAmountIn != null
+    ? oneTimeAmountIn
+    : (revenue_type === 'one_time' && legacyBookingAmount != null ? legacyBookingAmount : null);
+  if (revenue_type === 'one_time' && one_time_amount_usd == null && !revenueTypeIn) {
+    // Compat: caller "legacy" sin revenue_type ni amount → default 0.
+    one_time_amount_usd = 0;
+  }
+  const funding_source = fundingSourceIn || 'client_direct';
+
+  const revenueErr = validateRevenueModel({ revenue_type, one_time_amount_usd, mrr_usd, contract_length_months });
+  if (revenueErr) return res.status(400).json({ error: revenueErr });
+  const fundingErr = validateFunding({ funding_source, funding_amount_usd });
+  if (fundingErr) return res.status(400).json({ error: fundingErr });
 
   try {
     // Verify the client exists and is not soft-deleted. We also pull the
@@ -402,12 +459,23 @@ router.post('/', async (req, res) => {
     // usa para opps sin country definible.
     const oppNumber = await generateOpportunityNumber(pool, oppCountry);
 
+    // booking_amount_usd se calcula en el trigger DB; si la app legacy lo
+    // mandó nosotros lo enviamos a la BD pero el trigger lo sobreescribirá
+    // según revenue_type + componentes. Lo conservamos para compat.
+    const computedBooking = computeBooking({
+      revenue_type, one_time_amount_usd, mrr_usd, contract_length_months,
+    });
+
     const { rows } = await pool.query(
       `INSERT INTO opportunities
          (client_id, name, description, account_owner_id, presales_lead_id, squad_id,
           expected_close_date, tags, external_crm_id, created_by,
-          country, opportunity_number)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+          country, opportunity_number,
+          revenue_type, one_time_amount_usd, mrr_usd, contract_length_months,
+          champion_identified, economic_buyer_identified,
+          funding_source, funding_amount_usd, drive_url, booking_amount_usd)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [
         client_id,
@@ -422,6 +490,16 @@ router.post('/', async (req, res) => {
         req.user.id,
         oppCountry,
         oppNumber,
+        revenue_type,
+        one_time_amount_usd != null ? Number(one_time_amount_usd) : null,
+        mrr_usd != null ? Number(mrr_usd) : null,
+        contract_length_months != null ? Number(contract_length_months) : null,
+        Boolean(champion_identified),
+        Boolean(economic_buyer_identified),
+        funding_source,
+        funding_amount_usd != null ? Number(funding_amount_usd) : null,
+        drive_url || null,
+        computedBooking,
       ],
     );
     const opp = rows[0];
@@ -489,17 +567,52 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'El nombre no puede estar vacío' });
     }
 
+    // SPEC-CRM-00 v1.1 PR2 — si se cambia el modelo de revenue, validar
+    // consistencia. Aceptamos PATCH parcial: si solo viene 1 campo del modelo
+    // se valida contra los actuales del DB (before).
+    if (body.revenue_type != null
+      || body.one_time_amount_usd !== undefined
+      || body.mrr_usd !== undefined
+      || body.contract_length_months !== undefined) {
+      const merged = {
+        revenue_type: body.revenue_type ?? before.revenue_type,
+        one_time_amount_usd: body.one_time_amount_usd !== undefined ? body.one_time_amount_usd : before.one_time_amount_usd,
+        mrr_usd: body.mrr_usd !== undefined ? body.mrr_usd : before.mrr_usd,
+        contract_length_months: body.contract_length_months !== undefined
+          ? body.contract_length_months : before.contract_length_months,
+      };
+      const revenueErr = validateRevenueModel(merged);
+      if (revenueErr) return res.status(400).json({ error: revenueErr });
+    }
+    if (body.funding_source != null || body.funding_amount_usd !== undefined) {
+      const merged = {
+        funding_source: body.funding_source ?? before.funding_source,
+        funding_amount_usd: body.funding_amount_usd !== undefined ? body.funding_amount_usd : before.funding_amount_usd,
+      };
+      const fundingErr = validateFunding(merged);
+      if (fundingErr) return res.status(400).json({ error: fundingErr });
+    }
+
     const { rows } = await pool.query(
       `UPDATE opportunities SET
-          name                = COALESCE($1, name),
-          description         = COALESCE($2, description),
-          account_owner_id    = COALESCE($3, account_owner_id),
-          presales_lead_id    = COALESCE($4, presales_lead_id),
-          squad_id            = COALESCE($5, squad_id),
-          expected_close_date = COALESCE($6, expected_close_date),
-          tags                = COALESCE($7, tags),
-          external_crm_id     = COALESCE($8, external_crm_id),
-          updated_at          = NOW()
+          name                      = COALESCE($1, name),
+          description               = COALESCE($2, description),
+          account_owner_id          = COALESCE($3, account_owner_id),
+          presales_lead_id          = COALESCE($4, presales_lead_id),
+          squad_id                  = COALESCE($5, squad_id),
+          expected_close_date       = COALESCE($6, expected_close_date),
+          tags                      = COALESCE($7, tags),
+          external_crm_id           = COALESCE($8, external_crm_id),
+          revenue_type              = COALESCE($10, revenue_type),
+          one_time_amount_usd       = COALESCE($11, one_time_amount_usd),
+          mrr_usd                   = COALESCE($12, mrr_usd),
+          contract_length_months    = COALESCE($13, contract_length_months),
+          champion_identified       = COALESCE($14, champion_identified),
+          economic_buyer_identified = COALESCE($15, economic_buyer_identified),
+          funding_source            = COALESCE($16, funding_source),
+          funding_amount_usd        = COALESCE($17, funding_amount_usd),
+          drive_url                 = COALESCE($18, drive_url),
+          updated_at                = NOW()
         WHERE id=$9 AND deleted_at IS NULL
         RETURNING *`,
       [
@@ -512,6 +625,15 @@ router.put('/:id', async (req, res) => {
         body.tags ?? null,
         body.external_crm_id ?? null,
         req.params.id,
+        body.revenue_type ?? null,
+        body.one_time_amount_usd != null ? Number(body.one_time_amount_usd) : null,
+        body.mrr_usd != null ? Number(body.mrr_usd) : null,
+        body.contract_length_months != null ? Number(body.contract_length_months) : null,
+        body.champion_identified != null ? Boolean(body.champion_identified) : null,
+        body.economic_buyer_identified != null ? Boolean(body.economic_buyer_identified) : null,
+        body.funding_source ?? null,
+        body.funding_amount_usd != null ? Number(body.funding_amount_usd) : null,
+        body.drive_url ?? null,
       ],
     );
     const after = rows[0];
@@ -538,9 +660,14 @@ router.post('/:id/status', async (req, res) => {
     winning_quotation_id,
     outcome_reason,
     outcome_notes,
-    // SPEC-CRM-00 v1.1 — postponed transition data
+    // SPEC-CRM-00 v1.1 PR1 — postponed transition data
     postponed_until_date,
     postponed_reason,
+    // SPEC-CRM-00 v1.1 PR2 — loss model formal (enum extendido + detail
+    // mínimo 30 chars). El legacy outcome_reason se mantiene como fallback
+    // para clientes que aún no migraron su payload.
+    loss_reason,
+    loss_reason_detail,
   } = req.body || {};
   if (!VALID_STATUSES.includes(new_status)) {
     return res.status(400).json({ error: 'Status inválido' });
@@ -575,9 +702,19 @@ router.post('/:id/status', async (req, res) => {
       return res.status(400).json({ error: 'winning_quotation_id es requerido al marcar ganada' });
     }
     if (new_status === 'closed_lost') {
-      if (!outcome_reason || !VALID_OUTCOME_REASONS.includes(outcome_reason)) {
+      // SPEC-CRM-00 v1.1 PR2 — modelo formal de loss_reason. Si el caller
+      // mandó loss_reason, validamos contra el enum extendido + detail
+      // ≥30 chars. Si no mandó loss_reason pero sí outcome_reason (legacy),
+      // aceptamos como fallback. Sin ninguno → 400.
+      if (loss_reason != null) {
+        const lossErr = validateLossReason({ loss_reason, loss_reason_detail });
+        if (lossErr) {
+          await connection.query('ROLLBACK');
+          return res.status(400).json({ error: lossErr });
+        }
+      } else if (!outcome_reason || !VALID_OUTCOME_REASONS.includes(outcome_reason)) {
         await connection.query('ROLLBACK');
-        return res.status(400).json({ error: 'outcome_reason es requerido y debe ser un valor válido' });
+        return res.status(400).json({ error: 'outcome_reason o loss_reason es requerido' });
       }
     }
     // SPEC-CRM-00 v1.1 — Postponed exige fecha de reactivación.
@@ -705,6 +842,8 @@ router.post('/:id/status', async (req, res) => {
                                    WHEN $9::text IS NOT NULL THEN $9::text
                                    ELSE postponed_reason
                                  END,
+          loss_reason          = COALESCE($11, loss_reason),
+          loss_reason_detail   = COALESCE($12, loss_reason_detail),
           updated_at           = NOW()
         WHERE id=$10 RETURNING *`,
       [
@@ -718,6 +857,8 @@ router.post('/:id/status', async (req, res) => {
         setPostponedDate,
         setPostponedReason,
         req.params.id,
+        new_status === 'closed_lost' && loss_reason ? loss_reason : null,
+        new_status === 'closed_lost' && loss_reason_detail ? String(loss_reason_detail).trim() : null,
       ],
     );
 
@@ -745,7 +886,14 @@ router.post('/:id/status', async (req, res) => {
         entity_type: 'opportunity',
         entity_id: after.id,
         actor_user_id: req.user.id,
-        payload: { reason: outcome_reason, notes: outcome_notes || null },
+        payload: {
+          // Compat con consumidores legacy: seguimos emitiendo `reason`
+          // pero agregamos los campos formales del v1.1 cuando vienen.
+          reason: outcome_reason || loss_reason || null,
+          notes: outcome_notes || null,
+          loss_reason: loss_reason || null,
+          loss_reason_detail: loss_reason_detail ? String(loss_reason_detail).trim() : null,
+        },
         req,
       });
     } else if (new_status === 'postponed') {
