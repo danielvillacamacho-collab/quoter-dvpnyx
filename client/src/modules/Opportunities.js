@@ -5,6 +5,7 @@ import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
+import { STAGES, STAGE_BY_ID, TRANSITIONS as PIPELINE_TRANSITIONS } from '../utils/pipeline';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -26,37 +27,17 @@ const s = {
   modal:  { background: '#fff', borderRadius: 12, padding: 24, width: 560, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' },
 };
 
+// SPEC-CRM-00 v1.1 — los stages, labels, colors y transiciones vienen
+// del SSOT en utils/pipeline.js (importado arriba) para evitar drift
+// entre frontend y backend. Cualquier cambio del modelo se propaga aquí
+// automáticamente.
 const STATUS_OPTIONS = [
-  { value: '',            label: 'Todos' },
-  { value: 'open',        label: 'Abierta' },
-  { value: 'qualified',   label: 'Calificada' },
-  { value: 'proposal',    label: 'Propuesta' },
-  { value: 'negotiation', label: 'Negociación' },
-  { value: 'won',         label: 'Ganada' },
-  { value: 'lost',        label: 'Perdida' },
-  { value: 'cancelled',   label: 'Cancelada' },
+  { value: '', label: 'Todos' },
+  ...STAGES.map((st) => ({ value: st.id, label: st.label })),
 ];
-const STATUS_LABEL = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o.label]));
-
-const STATUS_COLORS = {
-  open:        'var(--purple-dark)',
-  qualified:   'var(--teal-mid)',
-  proposal:    'var(--teal-mid)',
-  negotiation: 'var(--orange)',
-  won:         'var(--success)',
-  lost:        'var(--danger)',
-  cancelled:   'var(--text-light)',
-};
-
-const TRANSITIONS = {
-  open:        ['qualified', 'cancelled'],
-  qualified:   ['proposal',  'cancelled'],
-  proposal:    ['negotiation', 'won', 'lost', 'cancelled'],
-  negotiation: ['won', 'lost', 'cancelled'],
-  won:         [],
-  lost:        [],
-  cancelled:   [],
-};
+const STATUS_LABEL = Object.fromEntries(STAGES.map((st) => [st.id, st.label]));
+const STATUS_COLORS = Object.fromEntries(STAGES.map((st) => [st.id, st.color]));
+const TRANSITIONS = PIPELINE_TRANSITIONS;
 
 const OUTCOME_REASONS = [
   { value: 'price',           label: 'Precio' },
@@ -139,14 +120,24 @@ function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
 }
 
 function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
-  const needsWinningQuot = target === 'won';
-  const needsReason      = target === 'lost' || target === 'cancelled';
+  const needsWinningQuot = target === 'closed_won';
+  const needsReason      = target === 'closed_lost';
+  const needsPostponedDate = target === 'postponed';
   const [winningId, setWinningId] = useState('');
   const [reason, setReason]       = useState('');
   const [notes, setNotes]         = useState('');
+  // SPEC-CRM-00 v1.1 — Postponed exige fecha futura de reactivación.
+  // Default: 30 días desde hoy (suficiente para que el comercial vuelva
+  // a tocar la opp pero no tan lejos que se olvide).
+  const defaultPostponedDate = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [postponedDate, setPostponedDate] = useState(defaultPostponedDate);
+  const [postponedReason, setPostponedReason] = useState('');
   const [err, setErr]             = useState('');
 
-  // fetch quotations list for this opp when marking as won
+  // Para closed_won, cargar cotizaciones de la opp así el usuario elige cuál ganó.
   const [quotations, setQuotations] = useState([]);
   useEffect(() => {
     if (needsWinningQuot && opp?.id) {
@@ -154,17 +145,25 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
     }
   }, [needsWinningQuot, opp?.id]);
 
+  // Validación local: la fecha de reactivación debe ser futura.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const postponedDateInvalid = needsPostponedDate && postponedDate <= todayIso;
+
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
     if (needsWinningQuot && !winningId) return setErr('Selecciona cotización ganadora');
-    if (needsReason && !reason) return setErr('Selecciona una razón');
+    if (needsReason && !reason) return setErr('Selecciona una razón de pérdida');
+    if (needsPostponedDate && !postponedDate) return setErr('La fecha de reactivación es requerida');
+    if (needsPostponedDate && postponedDateInvalid) return setErr('La fecha de reactivación debe ser futura');
     try {
       await onConfirm({
         new_status: target,
         winning_quotation_id: winningId || undefined,
         outcome_reason: reason || undefined,
         outcome_notes: notes || undefined,
+        postponed_until_date: needsPostponedDate ? postponedDate : undefined,
+        postponed_reason: needsPostponedDate ? (postponedReason || undefined) : undefined,
       });
     } catch (ex) {
       setErr(ex.message || 'Error');
@@ -200,22 +199,63 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
       {needsReason && (
         <>
           <div>
-            <label style={s.label}>Razón *</label>
-            <select style={s.input} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Razón" required>
+            <label style={s.label}>Razón de pérdida *</label>
+            <select style={s.input} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Razón de pérdida" required>
               <option value="">— Selecciona —</option>
               {OUTCOME_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
           </div>
           <div>
             <label style={s.label}>Notas</label>
-            <textarea style={{ ...s.input, minHeight: 60, resize: 'vertical' }} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <textarea
+              style={{ ...s.input, minHeight: 60, resize: 'vertical' }}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              aria-label="Notas de pérdida"
+            />
           </div>
         </>
       )}
-      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+      {needsPostponedDate && (
+        <>
+          <div style={{ background: 'var(--surface-soft, #f8f7fa)', padding: 12, borderRadius: 8, fontSize: 12, color: 'var(--text-light)' }}>
+            ⚠ Las oportunidades postergadas <strong>NO entran</strong> en pipeline weighted hasta que se reactiven. Recibirás recordatorio el día indicado.
+          </div>
+          <div>
+            <label style={s.label}>Reactivar revisión el *</label>
+            <input
+              type="date"
+              style={s.input}
+              value={postponedDate}
+              min={todayIso}
+              onChange={(e) => setPostponedDate(e.target.value)}
+              aria-label="Fecha de reactivación"
+              required
+            />
+            {postponedDateInvalid && (
+              <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>
+                La fecha debe ser futura.
+              </div>
+            )}
+          </div>
+          <div>
+            <label style={s.label}>Razón de la postergación</label>
+            <textarea
+              style={{ ...s.input, minHeight: 60, resize: 'vertical' }}
+              value={postponedReason}
+              onChange={(e) => setPostponedReason(e.target.value)}
+              placeholder="Ej. Cliente postpuso decisión por restructura organizacional. Esperan resolver Q3."
+              aria-label="Razón de postergación"
+            />
+          </div>
+        </>
+      )}
+      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }} role="alert">{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
-        <button type="submit" style={s.btn()} disabled={saving}>{saving ? 'Guardando…' : 'Confirmar'}</button>
+        <button type="submit" style={s.btn()} disabled={saving || postponedDateInvalid}>
+          {saving ? 'Guardando…' : 'Confirmar'}
+        </button>
       </div>
     </form>
   );

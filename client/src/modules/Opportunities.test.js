@@ -10,7 +10,7 @@ const mount = () => render(<MemoryRouter initialEntries={['/opportunities']}><Op
 
 const sampleOpp = {
   id: 'o1', name: 'Proyecto Atlas', client_id: 'c1', client_name: 'Acme Corp',
-  status: 'proposal', quotations_count: 2,
+  status: 'proposal_validated', quotations_count: 2,
   expected_close_date: '2026-05-30', created_at: '2026-04-10',
 };
 
@@ -48,10 +48,10 @@ describe('Opportunities module', () => {
     await waitFor(() => expect(apiV2.apiGet).toHaveBeenCalled());
     expect(await screen.findByText('Proyecto Atlas')).toBeInTheDocument();
     // 'Acme Corp' also shows up in the client-filter <option>, so scope to the
-    // row. Likewise 'Propuesta' appears in the status-filter <option>.
+    // row. Likewise 'Propuesta Validada' appears in the status-filter <option>.
     const row = screen.getByText('Proyecto Atlas').closest('tr');
     expect(within(row).getByText('Acme Corp')).toBeInTheDocument();
-    expect(within(row).getByText('Propuesta')).toBeInTheDocument();
+    expect(within(row).getByText('Propuesta Validada')).toBeInTheDocument();
   });
 
   it('loads clients list into the client filter dropdown', async () => {
@@ -67,10 +67,10 @@ describe('Opportunities module', () => {
     mount();
     await screen.findByText('Proyecto Atlas');
     apiV2.apiGet.mockClear();
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'won' } });
+    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'closed_won' } });
     await waitFor(() => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
-      expect(urls.some((u) => u.includes('status=won'))).toBe(true);
+      expect(urls.some((u) => u.includes('status=closed_won'))).toBe(true);
     });
   });
 
@@ -148,18 +148,20 @@ describe('Opportunities module', () => {
     confirmSpy.mockRestore();
   });
 
-  it('renders status transition buttons for the current state (proposal)', async () => {
+  it('renders status transition buttons for the current state (proposal_validated)', async () => {
     mount();
     await screen.findByText('Proyecto Atlas');
-    // from proposal: Negotiation, Ganada, Perdida, Cancelada
+    // SPEC-CRM-00 v1.1: from proposal_validated → Negociación, Ganada, Perdida, Postergada.
+    // (Cancelada ya no existe en el pipeline de 9 estados.)
     expect(screen.getByLabelText('Mover Proyecto Atlas a Negociación')).toBeInTheDocument();
     expect(screen.getByLabelText('Mover Proyecto Atlas a Ganada')).toBeInTheDocument();
     expect(screen.getByLabelText('Mover Proyecto Atlas a Perdida')).toBeInTheDocument();
-    expect(screen.getByLabelText('Mover Proyecto Atlas a Cancelada')).toBeInTheDocument();
+    expect(screen.getByLabelText('Mover Proyecto Atlas a Postergada')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Mover Proyecto Atlas a Cancelada')).toBeNull();
   });
 
-  it('transitions to lost: requires reason, then POSTs /status with outcome_reason', async () => {
-    apiV2.apiPost.mockResolvedValue({ id: 'o1', status: 'lost' });
+  it('transitions to closed_lost: requires reason, then POSTs /status with outcome_reason', async () => {
+    apiV2.apiPost.mockResolvedValue({ id: 'o1', status: 'closed_lost' });
     mount();
     await screen.findByText('Proyecto Atlas');
     fireEvent.click(screen.getByLabelText('Mover Proyecto Atlas a Perdida'));
@@ -167,20 +169,57 @@ describe('Opportunities module', () => {
     expect(within(dialog).getByText(/Mover a Perdida/)).toBeInTheDocument();
     // submit without reason → validation error
     fireEvent.submit(within(dialog).getByRole('button', { name: /Confirmar/i }).closest('form'));
-    await waitFor(() => expect(within(dialog).getByText(/Selecciona una razón/i)).toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).getByText(/Selecciona una razón de pérdida/i)).toBeInTheDocument());
     // pick reason and confirm
-    fireEvent.change(within(dialog).getByLabelText('Razón'), { target: { value: 'price' } });
+    fireEvent.change(within(dialog).getByLabelText('Razón de pérdida'), { target: { value: 'price' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/opportunities/o1/status',
-        expect.objectContaining({ new_status: 'lost', outcome_reason: 'price' }),
+        expect.objectContaining({ new_status: 'closed_lost', outcome_reason: 'price' }),
+      );
+    });
+  });
+
+  // SPEC-CRM-00 v1.1 — Postponed transitions UI.
+  it('transitions to postponed: shows date picker, validates future date, POSTs with postponed_until_date', async () => {
+    apiV2.apiPost.mockResolvedValue({ id: 'o1', status: 'postponed' });
+    mount();
+    await screen.findByText('Proyecto Atlas');
+    fireEvent.click(screen.getByLabelText('Mover Proyecto Atlas a Postergada'));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/Mover a Postergada/)).toBeInTheDocument();
+    // El date picker debe existir con el default (~30 días futuros).
+    const dateInput = within(dialog).getByLabelText('Fecha de reactivación');
+    expect(dateInput).toBeInTheDocument();
+    expect(dateInput).toHaveAttribute('min'); // tiene min=today
+    expect(dateInput.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    // Mover a fecha pasada — debe bloquear el submit con mensaje claro.
+    fireEvent.change(dateInput, { target: { value: '2020-01-01' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/i }));
+    await waitFor(() => expect(within(dialog).getByText(/futura/i)).toBeInTheDocument());
+    expect(apiV2.apiPost).not.toHaveBeenCalled();
+    // Volver a una fecha válida y confirmar.
+    const future = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
+    fireEvent.change(dateInput, { target: { value: future } });
+    fireEvent.change(within(dialog).getByLabelText('Razón de postergación'), {
+      target: { value: 'restructura organizacional' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/i }));
+    await waitFor(() => {
+      expect(apiV2.apiPost).toHaveBeenCalledWith(
+        '/api/opportunities/o1/status',
+        expect.objectContaining({
+          new_status: 'postponed',
+          postponed_until_date: future,
+          postponed_reason: 'restructura organizacional',
+        }),
       );
     });
   });
 
   it('transitions to won: loads quotations and requires winning_quotation_id', async () => {
-    apiV2.apiPost.mockResolvedValue({ id: 'o1', status: 'won' });
+    apiV2.apiPost.mockResolvedValue({ id: 'o1', status: 'closed_won' });
     mount();
     await screen.findByText('Proyecto Atlas');
     fireEvent.click(screen.getByLabelText('Mover Proyecto Atlas a Ganada'));
@@ -199,7 +238,7 @@ describe('Opportunities module', () => {
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/opportunities/o1/status',
-        expect.objectContaining({ new_status: 'won', winning_quotation_id: 'q1' }),
+        expect.objectContaining({ new_status: 'closed_won', winning_quotation_id: 'q1' }),
       );
     });
   });
@@ -219,7 +258,7 @@ describe('Opportunities module', () => {
     await screen.findByText('Proyecto Atlas');
 
     // Apply a status filter so the CSV request should carry it.
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'proposal' } });
+    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'proposal_validated' } });
 
     fireEvent.click(screen.getByTestId('opportunities-export-csv'));
     await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));

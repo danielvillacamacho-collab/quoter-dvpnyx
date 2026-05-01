@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
 import StatusBadge from '../shell/StatusBadge';
+import { STAGES, TRANSITIONS as PIPELINE_TRANSITIONS, isPostponed, isWon } from '../utils/pipeline';
 
 const s = {
   page:   { maxWidth: 1200, margin: '0 auto' },
@@ -19,20 +20,9 @@ const s = {
   link:   { color: 'var(--teal-mid)', textDecoration: 'none', fontWeight: 600 },
 };
 
-const STATUS_LABEL = {
-  open: 'Abierta', qualified: 'Calificada', proposal: 'Propuesta', negotiation: 'Negociación',
-  won: 'Ganada', lost: 'Perdida', cancelled: 'Cancelada',
-};
-const STATUS_COLOR = {
-  open: 'var(--purple-dark)', qualified: 'var(--teal-mid)', proposal: 'var(--teal-mid)',
-  negotiation: 'var(--orange)', won: 'var(--success)', lost: 'var(--danger)', cancelled: 'var(--text-light)',
-};
-const TRANSITIONS = {
-  open: ['qualified', 'cancelled'], qualified: ['proposal', 'cancelled'],
-  proposal: ['negotiation', 'won', 'lost', 'cancelled'],
-  negotiation: ['won', 'lost', 'cancelled'],
-  won: [], lost: [], cancelled: [],
-};
+// SPEC-CRM-00 v1.1 — labels y transiciones del SSOT de pipeline.
+const STATUS_LABEL = Object.fromEntries(STAGES.map((st) => [st.id, st.label]));
+const TRANSITIONS = PIPELINE_TRANSITIONS;
 
 function Field({ label, children }) {
   return (
@@ -62,7 +52,7 @@ export default function OpportunityDetail() {
   useEffect(() => { load(); }, [load]);
 
   const transition = async (target) => {
-    if (target === 'won') {
+    if (target === 'closed_won') {
       const winning = (opp.quotations || []).filter((q) => q.status !== 'rejected');
       if (winning.length === 0) {
         // eslint-disable-next-line no-alert
@@ -75,7 +65,7 @@ export default function OpportunityDetail() {
       );
       const idx = Number(pick) - 1;
       if (!Number.isFinite(idx) || !winning[idx]) return;
-      await doTransition({ new_status: 'won', winning_quotation_id: winning[idx].id });
+      await doTransition({ new_status: 'closed_won', winning_quotation_id: winning[idx].id });
       // eslint-disable-next-line no-alert
       if (window.confirm('¡Oportunidad ganada! ¿Crear un contrato desde esta cotización ahora? (un click — luego puedes ajustar los detalles)')) {
         try {
@@ -89,7 +79,7 @@ export default function OpportunityDetail() {
       }
       return;
     }
-    if (target === 'lost' || target === 'cancelled') {
+    if (target === 'closed_lost') {
       // eslint-disable-next-line no-alert
       const reason = window.prompt(
         `Razón para marcar ${STATUS_LABEL[target]}:\n(price / timing / competition / technical_fit / client_internal / other)`,
@@ -99,6 +89,34 @@ export default function OpportunityDetail() {
       // eslint-disable-next-line no-alert
       const notes = window.prompt('Notas adicionales (opcional):', '');
       await doTransition({ new_status: target, outcome_reason: reason, outcome_notes: notes || null });
+      return;
+    }
+    if (target === 'postponed') {
+      // SPEC-CRM-00 v1.1 — Postponed exige fecha de reactivación.
+      // Default: hoy + 30 días.
+      const defaultIso = (() => {
+        const d = new Date(); d.setDate(d.getDate() + 30);
+        return d.toISOString().slice(0, 10);
+      })();
+      // eslint-disable-next-line no-alert
+      const dateInput = window.prompt(
+        'Postergar la oportunidad — ¿en qué fecha la revisamos de nuevo? (YYYY-MM-DD)',
+        defaultIso,
+      );
+      if (!dateInput) return;
+      const today = new Date().toISOString().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput) || dateInput <= today) {
+        // eslint-disable-next-line no-alert
+        alert('Fecha inválida. Debe ser YYYY-MM-DD y posterior a hoy.');
+        return;
+      }
+      // eslint-disable-next-line no-alert
+      const reason = window.prompt('Razón de la postergación (opcional):', '');
+      await doTransition({
+        new_status: 'postponed',
+        postponed_until_date: dateInput,
+        postponed_reason: reason || undefined,
+      });
       return;
     }
     await doTransition({ new_status: target });
@@ -126,10 +144,16 @@ export default function OpportunityDetail() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
+          {opp.opportunity_number && (
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>
+              {opp.opportunity_number}
+            </div>
+          )}
           <h1 style={s.h1}>💼 {opp.name}</h1>
           <div style={s.sub}>
             Cliente:{' '}
             {opp.client ? <Link to={`/clients/${opp.client.id}`} style={s.link}>{opp.client.name}</Link> : '—'}
+            {opp.country && <> · {opp.country}</>}
             {' · '}
             <StatusBadge domain="opportunity" value={opp.status} label={STATUS_LABEL[opp.status]} />
           </div>
@@ -141,13 +165,30 @@ export default function OpportunityDetail() {
               onClick={() => transition(ns)} disabled={busy}
               aria-label={`Mover a ${STATUS_LABEL[ns]}`}
             >
-              {ns === 'won' ? '🏆 ' : ''}Mover a {STATUS_LABEL[ns]}
+              {ns === 'closed_won' ? '🏆 ' : ns === 'postponed' ? '⏸ ' : ''}Mover a {STATUS_LABEL[ns]}
             </button>
           ))}
         </div>
       </div>
 
-      {opp.status === 'won' && (
+      {opp.status === 'postponed' && (
+        <div style={{ ...s.card, background: '#f5f3ff', borderColor: '#A78BFA' }}>
+          <h2 style={{ ...s.h2, color: '#7c3aed' }}>⏸ Oportunidad postergada</h2>
+          <div style={{ fontSize: 13 }}>
+            Reactivar revisión el <strong>{opp.postponed_until_date ? String(opp.postponed_until_date).slice(0, 10) : '—'}</strong>.
+            {opp.postponed_reason && (
+              <div style={{ marginTop: 6, color: 'var(--text-light)' }}>
+                <em>{opp.postponed_reason}</em>
+              </div>
+            )}
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-light)' }}>
+              Mientras esté en este estado <strong>NO entra</strong> en pipeline weighted. Para reactivar, mueve a <em>Calificada</em>.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isWon(opp.status) && (
         <div style={{ ...s.card, background: '#effff6', borderColor: 'var(--success)' }}>
           <h2 style={{ ...s.h2, color: 'var(--success)' }}>🏆 Oportunidad ganada</h2>
           <div style={{ fontSize: 13 }}>
