@@ -357,7 +357,18 @@ export default function OpportunityDetail() {
 
       {/* SPEC-CRM-00 v1.1 PR2 — Stakeholders / Funding / Drive. */}
       <div style={s.card} data-testid="opportunity-meddpicc-card">
-        <h2 style={s.h2}>🎯 Stakeholders & Funding</h2>
+        <h2 style={s.h2}>
+          🎯 Stakeholders & Funding
+          {['solution_design', 'proposal_validated', 'negotiation', 'verbal_commit'].includes(opp.status)
+            && (!opp.champion_identified || !opp.economic_buyer_identified) && (
+            <span
+              style={{ marginLeft: 10, background: '#fef3c7', color: '#92400e', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}
+              aria-label="Alerta A3: Champion o EB pendiente"
+            >
+              ⚠ A3 {!opp.champion_identified && !opp.economic_buyer_identified ? 'Champion + EB' : !opp.champion_identified ? 'Champion' : 'EB'} pendiente
+            </span>
+          )}
+        </h2>
         <div style={s.grid}>
           <Field label="Champion identificado">{opp.champion_identified ? '✅ Sí' : '❌ No'}</Field>
           <Field label="Economic Buyer">{opp.economic_buyer_identified ? '✅ Sí' : '❌ No'}</Field>

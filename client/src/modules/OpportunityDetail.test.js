@@ -131,6 +131,36 @@ describe('OpportunityDetail', () => {
       expect(within(card).getByText(/USD 120,000/)).toBeInTheDocument(); // booking
     });
 
+    it('shows A3 badge when in solution_design+ without Champion or EB', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp, status: 'solution_design',
+        champion_identified: false, economic_buyer_identified: true,
+      });
+      mount();
+      const card = await screen.findByTestId('opportunity-meddpicc-card');
+      expect(within(card).getByLabelText('Alerta A3: Champion o EB pendiente')).toBeInTheDocument();
+    });
+
+    it('does NOT show A3 badge when both Champion and EB are identified', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp, status: 'negotiation',
+        champion_identified: true, economic_buyer_identified: true,
+      });
+      mount();
+      await screen.findByTestId('opportunity-meddpicc-card');
+      expect(screen.queryByLabelText('Alerta A3: Champion o EB pendiente')).toBeNull();
+    });
+
+    it('does NOT show A3 badge in early stages (qualified)', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp, status: 'qualified',
+        champion_identified: false, economic_buyer_identified: false,
+      });
+      mount();
+      await screen.findByTestId('opportunity-meddpicc-card');
+      expect(screen.queryByLabelText('Alerta A3: Champion o EB pendiente')).toBeNull();
+    });
+
     it('renders stakeholders card con flags + funding source', async () => {
       apiV2.apiGet.mockResolvedValue({
         ...baseOpp,

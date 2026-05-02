@@ -1212,6 +1212,27 @@ const V2_ALTERS = `
   CREATE INDEX IF NOT EXISTS opportunities_margin_low_idx
     ON opportunities(id)
     WHERE margin_pct IS NOT NULL AND margin_pct < 20 AND deleted_at IS NULL;
+
+  -- ==================================================================
+  -- SPEC-CRM-00 v1.1 PR4 (Mayo 2026) — RBAC 7 roles
+  -- ==================================================================
+  -- Añade 'director' (VP-level, ve todo) y 'external' (acceso restringido).
+  -- 'preventa' se mantiene por compat de BD pero auth.js lo normaliza a
+  -- member+function=preventa. Este DO solo actúa si 'director' aún no
+  -- está en el constraint — idempotente con re-runs.
+  DO $do_role_check_v2$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'users_role_check'
+        AND pg_get_constraintdef(oid) ILIKE '%director%'
+    ) THEN
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+      ALTER TABLE users ADD CONSTRAINT users_role_check
+        CHECK (role IN ('superadmin','admin','director','lead','member','viewer','external','preventa'));
+    END IF;
+  END
+  $do_role_check_v2$;
 `;
 
 /* ==================================================================

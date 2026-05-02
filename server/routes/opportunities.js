@@ -35,6 +35,11 @@ const { stringifyCsv } = require('../utils/csv');
 const { parsePagination } = require('../utils/sanitize');
 const { parseSort } = require('../utils/sort');
 const { serverError, safeRollback } = require('../utils/http');
+// SPEC-CRM-00 v1.1 PR4 — Alerts + RBAC.
+const { SEE_ALL_ROLES, WRITE_ROLES } = require('../middleware/auth');
+const {
+  ALERT_DEFS, A3_STAGES, checkA3, createAlertNotification, runAlertScan,
+} = require('../utils/alerts');
 
 const SORTABLE = {
   name:                 'o.name',
@@ -136,6 +141,18 @@ router.get('/', async (req, res) => {
     if (req.query.has_economic_buyer === 'true')  wheres.push(`o.economic_buyer_identified = true`);
     if (req.query.has_economic_buyer === 'false') wheres.push(`o.economic_buyer_identified = false`);
 
+    // SPEC-CRM-00 v1.1 PR4 — RBAC scoping.
+    if (req.user.role === 'external') {
+      return res.status(403).json({ error: 'Acceso restringido para usuarios externos' });
+    }
+    if (!SEE_ALL_ROLES.has(req.user.role)) {
+      if (req.user.role === 'lead' && req.user.squad_id) {
+        wheres.push(`o.squad_id = ${add(req.user.squad_id)}`);
+      } else {
+        wheres.push(`(o.account_owner_id = ${add(req.user.id)} OR o.presales_lead_id = ${add(req.user.id)})`);
+      }
+    }
+
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
     const sort = parseSort(req.query, SORTABLE, {
       defaultField: 'created_at', defaultDir: 'desc', tieBreaker: 'o.id ASC',
@@ -191,6 +208,19 @@ router.get('/kanban', async (req, res) => {
     if (req.query.from_expected_close) wheres.push(`o.expected_close_date >= ${add(req.query.from_expected_close)}`);
     if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
     if (req.query.min_amount_usd) wheres.push(`o.booking_amount_usd >= ${add(Number(req.query.min_amount_usd) || 0)}`);
+
+    // SPEC-CRM-00 v1.1 PR4 — RBAC scoping (same logic as GET /).
+    if (req.user.role === 'external') {
+      return res.status(403).json({ error: 'Acceso restringido para usuarios externos' });
+    }
+    if (!SEE_ALL_ROLES.has(req.user.role)) {
+      if (req.user.role === 'lead' && req.user.squad_id) {
+        wheres.push(`o.squad_id = ${add(req.user.squad_id)}`);
+      } else {
+        wheres.push(`(o.account_owner_id = ${add(req.user.id)} OR o.presales_lead_id = ${add(req.user.id)})`);
+      }
+    }
+
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
 
     const { rows } = await pool.query(
@@ -313,6 +343,26 @@ router.get('/export.csv', async (req, res) => {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error('GET /opportunities/export.csv failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
+/* -------- CHECK ALERTS (SPEC-CRM-00 v1.1 PR4) --------
+ * Escanea oportunidades activas y genera notificaciones A1/A2/A3/A5
+ * (con dedup de 24 h). Diseñado para ser invocado por cron diario
+ * (o manualmente). Solo roles con permisos de escritura (member+).
+ * Responde: { checked, created, details }
+ */
+router.post('/check-alerts', async (req, res) => {
+  if (!WRITE_ROLES.has(req.user.role)) {
+    return res.status(403).json({ error: 'No tienes permisos para ejecutar el escaneo de alertas' });
+  }
+  try {
+    const result = await runAlertScan(pool, { user: req.user });
+    res.json(result);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('POST /opportunities/check-alerts failed:', err);
     res.status(500).json({ error: 'Error interno' });
   }
 });
@@ -647,6 +697,28 @@ router.put('/:id', async (req, res) => {
       payload: buildUpdatePayload(before, after, EDITABLE_FIELDS),
       req,
     });
+
+    // SPEC-CRM-00 v1.1 PR4 — A3: si la opp ya está en etapa avanzada y
+    // el PUT cambió champion/EB a false, disparar alerta (fire-and-forget).
+    if (A3_STAGES.has(after.status) && after.account_owner_id
+        && (body.champion_identified !== undefined || body.economic_buyer_identified !== undefined)) {
+      const a3gaps = checkA3({
+        status: after.status,
+        champion_identified: after.champion_identified,
+        economic_buyer_identified: after.economic_buyer_identified,
+      });
+      if (a3gaps) {
+        const a3def = ALERT_DEFS.A3_MEDDPICC;
+        createAlertNotification(pool, {
+          user_id: after.account_owner_id,
+          type: a3def.type,
+          title: a3def.title(after.name || 'Oportunidad'),
+          body: a3def.body(a3gaps),
+          opp_id: after.id,
+        }).catch(() => {}); // swallow — non-fatal
+      }
+    }
+
     res.json(after);
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -948,6 +1020,28 @@ router.post('/:id/status', async (req, res) => {
     }
 
     await connection.query('COMMIT');
+
+    // SPEC-CRM-00 v1.1 PR4 — A3: Champion/EB gap check. Fire-and-forget
+    // notification (fuera de la txn, non-blocking, non-fatal). Se dispara
+    // al entrar en una etapa avanzada sin Champion o EB identificados.
+    if (A3_STAGES.has(new_status) && after.account_owner_id) {
+      const a3gaps = checkA3({
+        status: new_status,
+        champion_identified: after.champion_identified,
+        economic_buyer_identified: after.economic_buyer_identified,
+      });
+      if (a3gaps) {
+        const a3def = ALERT_DEFS.A3_MEDDPICC;
+        createAlertNotification(pool, {
+          user_id: after.account_owner_id,
+          type: a3def.type,
+          title: a3def.title(after.name || 'Oportunidad'),
+          body: a3def.body(a3gaps),
+          opp_id: after.id,
+        }).catch(() => {}); // swallow — non-fatal
+      }
+    }
+
     res.json({ ...after, warnings });
   } catch (err) {
     await safeRollback(connection, 'opportunities');

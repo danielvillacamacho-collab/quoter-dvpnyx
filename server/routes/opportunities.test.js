@@ -55,6 +55,10 @@ jest.mock('../middleware/auth', () => ({
     if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Rol insuficiente' });
     next();
   },
+  // SPEC-CRM-00 v1.1 PR4 — RBAC constants consumed by opportunities.js.
+  ROLES: ['superadmin', 'admin', 'director', 'lead', 'member', 'viewer', 'external'],
+  SEE_ALL_ROLES: new Set(['superadmin', 'admin', 'director']),
+  WRITE_ROLES: new Set(['superadmin', 'admin', 'director', 'lead', 'member']),
 }));
 
 const express = require('express');
@@ -101,7 +105,131 @@ const client = request(app);
 beforeEach(() => {
   queryQueue.length = 0;
   issuedQueries.length = 0;
-  mockCurrentUser = { id: 'u1', role: 'member', function: 'comercial' };
+  // Default admin: no RBAC scoping. Tests que necesitan member/viewer/external
+  // overridean explícitamente.
+  mockCurrentUser = { id: 'u1', role: 'admin', function: 'comercial' };
+});
+
+// SPEC-CRM-00 v1.1 PR4 — RBAC scoping + alerts.
+describe('SPEC-CRM-00 v1.1 PR4: RBAC scoping', () => {
+  it('director sees all opportunities (no squad/owner filter)', async () => {
+    mockCurrentUser = { id: 'u1', role: 'director', squad_id: 's1' };
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities');
+    const sql = issuedQueries[0].sql;
+    expect(sql).not.toMatch(/squad_id/);
+    expect(sql).not.toMatch(/account_owner_id/);
+  });
+
+  it('lead only sees opportunities from their squad', async () => {
+    mockCurrentUser = { id: 'u2', role: 'lead', squad_id: 's7' };
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities');
+    const sql = issuedQueries[0].sql;
+    expect(sql).toMatch(/o\.squad_id =/);
+    expect(issuedQueries[0].params).toContain('s7');
+  });
+
+  it('member only sees own opportunities (account_owner or presales_lead)', async () => {
+    mockCurrentUser = { id: 'u3', role: 'member' };
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities');
+    const sql = issuedQueries[0].sql;
+    expect(sql).toMatch(/account_owner_id/);
+    expect(sql).toMatch(/presales_lead_id/);
+  });
+
+  it('external role gets 403 on GET /', async () => {
+    mockCurrentUser = { id: 'u4', role: 'external' };
+    const res = await client.call('GET', '/api/opportunities');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/restringido/i);
+  });
+
+  it('external role gets 403 on GET /kanban', async () => {
+    mockCurrentUser = { id: 'u4', role: 'external' };
+    const res = await client.call('GET', '/api/opportunities/kanban');
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /api/opportunities/check-alerts (SPEC-CRM-00 v1.1 PR4)', () => {
+  it('creates A1+A2 notifications for stale opp with overdue next_step', async () => {
+    mockCurrentUser = { id: 'u1', role: 'admin' };
+    // SELECT active opportunities
+    queryQueue.push({ rows: [{
+      id: 'o1', name: 'Deal Stale', status: 'qualified',
+      account_owner_id: 'u5', days_in_stage: 45,
+      next_step: 'Call cliente', next_step_due_date: '2026-01-15',
+      expected_close_date: '2026-12-30',
+      champion_identified: true, economic_buyer_identified: true,
+    }] });
+    // INSERT for A1 → created
+    queryQueue.push({ rows: [{ id: 'n1' }] });
+    // INSERT for A2 → created
+    queryQueue.push({ rows: [{ id: 'n2' }] });
+    const res = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res.status).toBe(200);
+    expect(res.body.checked).toBe(1);
+    expect(res.body.created).toBe(2);
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ alert: 'a1_stale' }),
+        expect.objectContaining({ alert: 'a2_next_step' }),
+      ]),
+    );
+  });
+
+  it('creates A3 notification for opp in solution_design without champion', async () => {
+    mockCurrentUser = { id: 'u1', role: 'admin' };
+    queryQueue.push({ rows: [{
+      id: 'o2', name: 'Deal No Champ', status: 'solution_design',
+      account_owner_id: 'u5', days_in_stage: 5,
+      next_step_due_date: null, expected_close_date: null,
+      champion_identified: false, economic_buyer_identified: true,
+    }] });
+    queryQueue.push({ rows: [{ id: 'n3' }] }); // A3 INSERT
+    const res = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(1);
+    expect(res.body.details[0].alert).toBe('a3_meddpicc');
+  });
+
+  it('dedup: returns 0 created when notifications already exist (empty RETURNING)', async () => {
+    mockCurrentUser = { id: 'u1', role: 'admin' };
+    queryQueue.push({ rows: [{
+      id: 'o1', name: 'Deal', status: 'qualified',
+      account_owner_id: 'u5', days_in_stage: 45,
+      next_step_due_date: null, expected_close_date: null,
+      champion_identified: true, economic_buyer_identified: true,
+    }] });
+    queryQueue.push({ rows: [] }); // A1 INSERT → dedup'd (empty rows)
+    const res = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(0);
+  });
+
+  it('rejects external and viewer roles with 403', async () => {
+    mockCurrentUser = { id: 'u1', role: 'viewer' };
+    const res1 = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res1.status).toBe(403);
+
+    mockCurrentUser = { id: 'u1', role: 'external' };
+    const res2 = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res2.status).toBe(403);
+  });
+
+  it('lead scoping: only scans squad opportunities', async () => {
+    mockCurrentUser = { id: 'u2', role: 'lead', squad_id: 's3' };
+    queryQueue.push({ rows: [] }); // SELECT (empty — scoped to squad)
+    await client.call('POST', '/api/opportunities/check-alerts', {});
+    const sql = issuedQueries[0].sql;
+    expect(sql).toMatch(/o\.squad_id =/);
+    expect(issuedQueries[0].params).toContain('s3');
+  });
 });
 
 /* ---------- GET / ---------- */
