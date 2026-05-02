@@ -461,9 +461,13 @@ const V2_ALTERS = `
   -- JSONB so we can add more keys later without another migration.
   ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'::jsonb;
 
-  -- Drop old role CHECK (was superadmin/admin/preventa) and add the V2 one.
-  -- We keep 'preventa' valid during migration so V1 data doesn't break; data
-  -- migration script will convert 'preventa' → 'member' with function='preventa'.
+  -- Drop old role CHECK and recreate with the FULL role set (V2 + PR4).
+  -- Includes 'director' (VP-level, ve todo) and 'external' (acceso restringido)
+  -- from PR4, plus 'preventa' for backward compat. Creating the full list from
+  -- the start prevents a re-deploy failure when a user already has role
+  -- 'director' or 'external' (the old code created a narrow constraint here
+  -- and widened it later in the same transaction — safe for first deploy but
+  -- broke on re-runs if data had those roles).
   DO $$
   BEGIN
     IF EXISTS (
@@ -474,7 +478,7 @@ const V2_ALTERS = `
     END IF;
   END $$;
   ALTER TABLE users ADD CONSTRAINT users_role_check
-    CHECK (role IN ('superadmin','admin','lead','member','viewer','preventa'));
+    CHECK (role IN ('superadmin','admin','director','lead','member','viewer','external','preventa'));
 
   -- users.function CHECK (nullable during backfill)
   DO $$
@@ -790,9 +794,11 @@ const V2_ALTERS = `
   ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS drive_url               TEXT NULL;
 
   -- Backfill: opps legacy todas son one_time con booking actual.
+  -- GREATEST(..., 0) garantiza non-negative para que opp_amounts_nonneg CHECK
+  -- pase incluso si alguna opp legacy tiene booking negativo (crédito / error).
   UPDATE opportunities SET revenue_type = 'one_time'
     WHERE revenue_type IS NULL;
-  UPDATE opportunities SET one_time_amount_usd = COALESCE(booking_amount_usd, 0)
+  UPDATE opportunities SET one_time_amount_usd = GREATEST(COALESCE(booking_amount_usd, 0), 0)
     WHERE revenue_type = 'one_time' AND one_time_amount_usd IS NULL;
   UPDATE opportunities SET funding_source = 'client_direct'
     WHERE funding_source IS NULL;
@@ -1213,26 +1219,9 @@ const V2_ALTERS = `
     ON opportunities(id)
     WHERE margin_pct IS NOT NULL AND margin_pct < 20 AND deleted_at IS NULL;
 
-  -- ==================================================================
-  -- SPEC-CRM-00 v1.1 PR4 (Mayo 2026) — RBAC 7 roles
-  -- ==================================================================
-  -- Añade 'director' (VP-level, ve todo) y 'external' (acceso restringido).
-  -- 'preventa' se mantiene por compat de BD pero auth.js lo normaliza a
-  -- member+function=preventa. Este DO solo actúa si 'director' aún no
-  -- está en el constraint — idempotente con re-runs.
-  DO $do_role_check_v2$
-  BEGIN
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_constraint
-      WHERE conname = 'users_role_check'
-        AND pg_get_constraintdef(oid) ILIKE '%director%'
-    ) THEN
-      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
-      ALTER TABLE users ADD CONSTRAINT users_role_check
-        CHECK (role IN ('superadmin','admin','director','lead','member','viewer','external','preventa'));
-    END IF;
-  END
-  $do_role_check_v2$;
+  -- SPEC-CRM-00 v1.1 PR4 — RBAC 7 roles: 'director' y 'external' ya están
+  -- en el users_role_check de arriba (línea ~476). No se necesita un segundo
+  -- bloque DO. Eliminado en hotfix 2026-05-02 para evitar re-deploy failure.
 `;
 
 /* ==================================================================
@@ -2210,13 +2199,27 @@ const migrate = async () => {
     const hasPgVector = await ensurePgVector(client);
 
     await client.query('BEGIN');
-    await client.query(V1_SCHEMA);
-    await client.query(V2_NEW_TABLES);
-    await client.query(V2_ALTERS);
-    await client.query(AI_READINESS_SQL);
-    await client.query(V2_SEEDS_SQL);
-    await client.query(SPEC_II_00_SQL);
-    await client.query(SPEC_II_00_HOLIDAY_SEED_SQL);
+
+    const blocks = [
+      ['V1_SCHEMA',                V1_SCHEMA],
+      ['V2_NEW_TABLES',            V2_NEW_TABLES],
+      ['V2_ALTERS',                V2_ALTERS],
+      ['AI_READINESS_SQL',         AI_READINESS_SQL],
+      ['V2_SEEDS_SQL',             V2_SEEDS_SQL],
+      ['SPEC_II_00_SQL',           SPEC_II_00_SQL],
+      ['SPEC_II_00_HOLIDAY_SEED',  SPEC_II_00_HOLIDAY_SEED_SQL],
+    ];
+    for (const [label, sql] of blocks) {
+      try {
+        await client.query(sql);
+        // eslint-disable-next-line no-console
+        console.log(`[migrate] ${label} ✓`);
+      } catch (blockErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[migrate] ${label} FAILED:`, blockErr.message);
+        throw blockErr;
+      }
+    }
 
     // Normalizar nombres de empleados a Title Case (primera letra de cada
     // palabra en mayúscula, resto en minúscula). Idempotente: initcap(lower())
