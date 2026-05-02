@@ -622,10 +622,10 @@ const V2_ALTERS = `
   --    busca dinámicamente porque su nombre exacto depende de la versión
   --    en la que se creó la tabla.
   --
-  --    HOTFIX 2026-05-01: Postgres reescribe `CHECK (status IN ('open', ...))`
-  --    a `CHECK ((status)::text = ANY (ARRAY['open'::varchar, ...]))` cuando
-  --    hay >1 valor — la representación canónica NO contiene la palabra `IN`.
-  --    El pattern original `'%status%IN%open%'` nunca matcheó en RDS, el
+  --    HOTFIX 2026-05-01: Postgres reescribe CHECK (status IN ('open', ...))
+  --    a CHECK ((status)::text = ANY (ARRAY['open'::varchar, ...])) cuando
+  --    hay >1 valor — la representacion canonica NO contiene la palabra IN.
+  --    El pattern original '%status%IN%open%' nunca matcheo en RDS, el
   --    constraint legacy quedó vivo, y el primer UPDATE a 'lead' violó la
   --    restricción → toda la transacción de migración hizo rollback en dev.
   --    La señal específica del enum legacy es el literal 'cancelled', que
@@ -898,7 +898,7 @@ const V2_ALTERS = `
     ELSIF NEW.revenue_type = 'one_time' THEN
       -- Si la app envía one_time_amount_usd, se usa. Si no, se respeta el
       -- booking enviado (compat legacy). Cuando la app esté 100% migrada
-      -- esta rama colapsa a `COALESCE(NEW.one_time_amount_usd, 0)`.
+      -- esta rama colapsa a COALESCE(NEW.one_time_amount_usd, 0).
       NEW.booking_amount_usd := COALESCE(NEW.one_time_amount_usd, NEW.booking_amount_usd, 0);
     END IF;
 
