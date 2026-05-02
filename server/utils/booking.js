@@ -116,13 +116,45 @@ function validateLossReason({ loss_reason, loss_reason_detail } = {}) {
   return null;
 }
 
+// SPEC-CRM-00 v1.1 PR3 — Margin model.
+const MARGIN_LOW_THRESHOLD = 20; // %
+
+/**
+ * Computes margin_pct = (booking - cost) / booking × 100.
+ * Returns null when booking_amount_usd ≤ 0 (division by zero guard).
+ * Result is rounded to 2 decimal places.
+ *
+ * @param {{ booking_amount_usd: number, estimated_cost_usd: number }} input
+ * @returns {number|null}
+ */
+function computeMargin({ booking_amount_usd, estimated_cost_usd } = {}) {
+  const booking = Number(booking_amount_usd) || 0;
+  const cost    = Number(estimated_cost_usd)  || 0;
+  if (booking <= 0) return null;
+  return Math.round(((booking - cost) / booking * 100) * 100) / 100;
+}
+
+/**
+ * Validates optional estimated_cost_usd for the check-margin endpoint.
+ * Returns null when valid (including null → auto-compute path).
+ */
+function validateMarginInput({ estimated_cost_usd } = {}) {
+  if (estimated_cost_usd == null) return null; // auto-compute path is always valid
+  const n = Number(estimated_cost_usd);
+  if (isNaN(n) || n < 0) return 'estimated_cost_usd debe ser un número no negativo';
+  return null;
+}
+
 module.exports = {
   REVENUE_TYPES,
   FUNDING_SOURCES,
   LOSS_REASONS,
   LOSS_REASON_DETAIL_MIN,
+  MARGIN_LOW_THRESHOLD,
   computeBooking,
   validateRevenueModel,
   validateFunding,
   validateLossReason,
+  computeMargin,
+  validateMarginInput,
 };

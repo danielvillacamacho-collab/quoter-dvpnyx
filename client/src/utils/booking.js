@@ -89,6 +89,20 @@ export function validateFunding({ funding_source, funding_amount_usd } = {}) {
   return null;
 }
 
+// SPEC-CRM-00 v1.1 PR3 — Margin model.
+export const MARGIN_LOW_THRESHOLD = 20; // %
+
+/**
+ * Computes margin_pct = (booking - cost) / booking × 100.
+ * Returns null when booking_amount_usd ≤ 0.
+ */
+export function computeMargin({ booking_amount_usd, estimated_cost_usd } = {}) {
+  const booking = Number(booking_amount_usd) || 0;
+  const cost    = Number(estimated_cost_usd)  || 0;
+  if (booking <= 0) return null;
+  return Math.round(((booking - cost) / booking * 100) * 100) / 100;
+}
+
 export function validateLossReason({ loss_reason, loss_reason_detail } = {}) {
   const valid = LOSS_REASONS.map((r) => r.value);
   if (!valid.includes(loss_reason)) return 'Selecciona una razón de pérdida válida';

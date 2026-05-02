@@ -1174,6 +1174,65 @@ const V2_ALTERS = `
     'DEPRECATED 2026-04: usar employee_costs.updated_at del último período.';
   COMMENT ON COLUMN employees.cost_updated_by IS
     'DEPRECATED 2026-04: usar employee_costs.updated_by del último período.';
+
+  -- ==================================================================
+  -- SPEC-CRM-00 v1.1 PR3 (Mayo 2026) — margin_pct + estimated_cost_usd
+  -- ==================================================================
+  -- margin_pct se calcula vía POST /api/opportunities/:id/check-margin.
+  -- El endpoint acepta estimated_cost_usd explícito o lo auto-computa
+  -- desde cost_hour / rate_hour de las líneas de cotización activa.
+  -- Si margin_pct < 20 % se emite opportunity.margin_low (Alerta A4).
+  -- Los dos campos son opcionales / nullable: no se exige que existan
+  -- para crear/actualizar la oportunidad.
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS estimated_cost_usd NUMERIC(18,2) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS margin_pct         NUMERIC(5,2)  NULL;
+
+  -- margin_pct no puede exceder 100 % (si cost >= 0 y booking > 0, esto
+  -- se cumple siempre; el constraint es una red de seguridad explícita).
+  DO $do_margin_pct_range$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_margin_pct_range') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_margin_pct_range
+        CHECK (margin_pct IS NULL OR margin_pct <= 100);
+    END IF;
+  END
+  $do_margin_pct_range$;
+
+  DO $do_estimated_cost_nonneg$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_estimated_cost_nonneg') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_estimated_cost_nonneg
+        CHECK (estimated_cost_usd IS NULL OR estimated_cost_usd >= 0);
+    END IF;
+  END
+  $do_estimated_cost_nonneg$;
+
+  -- Partial index orientado a reportes y alertas A4: solo rows con margen
+  -- calculado y por debajo del umbral (20 %).
+  CREATE INDEX IF NOT EXISTS opportunities_margin_low_idx
+    ON opportunities(id)
+    WHERE margin_pct IS NOT NULL AND margin_pct < 20 AND deleted_at IS NULL;
+
+  -- ==================================================================
+  -- SPEC-CRM-00 v1.1 PR4 (Mayo 2026) — RBAC 7 roles
+  -- ==================================================================
+  -- Añade 'director' (VP-level, ve todo) y 'external' (acceso restringido).
+  -- 'preventa' se mantiene por compat de BD pero auth.js lo normaliza a
+  -- member+function=preventa. Este DO solo actúa si 'director' aún no
+  -- está en el constraint — idempotente con re-runs.
+  DO $do_role_check_v2$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'users_role_check'
+        AND pg_get_constraintdef(oid) ILIKE '%director%'
+    ) THEN
+      ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+      ALTER TABLE users ADD CONSTRAINT users_role_check
+        CHECK (role IN ('superadmin','admin','director','lead','member','viewer','external','preventa'));
+    END IF;
+  END
+  $do_role_check_v2$;
 `;
 
 /* ==================================================================

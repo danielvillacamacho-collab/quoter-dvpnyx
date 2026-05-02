@@ -55,6 +55,10 @@ jest.mock('../middleware/auth', () => ({
     if (!roles.includes(req.user.role)) return res.status(403).json({ error: 'Rol insuficiente' });
     next();
   },
+  // SPEC-CRM-00 v1.1 PR4 — RBAC constants consumed by opportunities.js.
+  ROLES: ['superadmin', 'admin', 'director', 'lead', 'member', 'viewer', 'external'],
+  SEE_ALL_ROLES: new Set(['superadmin', 'admin', 'director']),
+  WRITE_ROLES: new Set(['superadmin', 'admin', 'director', 'lead', 'member']),
 }));
 
 const express = require('express');
@@ -101,7 +105,131 @@ const client = request(app);
 beforeEach(() => {
   queryQueue.length = 0;
   issuedQueries.length = 0;
-  mockCurrentUser = { id: 'u1', role: 'member', function: 'comercial' };
+  // Default admin: no RBAC scoping. Tests que necesitan member/viewer/external
+  // overridean explícitamente.
+  mockCurrentUser = { id: 'u1', role: 'admin', function: 'comercial' };
+});
+
+// SPEC-CRM-00 v1.1 PR4 — RBAC scoping + alerts.
+describe('SPEC-CRM-00 v1.1 PR4: RBAC scoping', () => {
+  it('director sees all opportunities (no squad/owner filter)', async () => {
+    mockCurrentUser = { id: 'u1', role: 'director', squad_id: 's1' };
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities');
+    const sql = issuedQueries[0].sql;
+    expect(sql).not.toMatch(/squad_id/);
+    expect(sql).not.toMatch(/account_owner_id/);
+  });
+
+  it('lead only sees opportunities from their squad', async () => {
+    mockCurrentUser = { id: 'u2', role: 'lead', squad_id: 's7' };
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities');
+    const sql = issuedQueries[0].sql;
+    expect(sql).toMatch(/o\.squad_id =/);
+    expect(issuedQueries[0].params).toContain('s7');
+  });
+
+  it('member only sees own opportunities (account_owner or presales_lead)', async () => {
+    mockCurrentUser = { id: 'u3', role: 'member' };
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities');
+    const sql = issuedQueries[0].sql;
+    expect(sql).toMatch(/account_owner_id/);
+    expect(sql).toMatch(/presales_lead_id/);
+  });
+
+  it('external role gets 403 on GET /', async () => {
+    mockCurrentUser = { id: 'u4', role: 'external' };
+    const res = await client.call('GET', '/api/opportunities');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/restringido/i);
+  });
+
+  it('external role gets 403 on GET /kanban', async () => {
+    mockCurrentUser = { id: 'u4', role: 'external' };
+    const res = await client.call('GET', '/api/opportunities/kanban');
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('POST /api/opportunities/check-alerts (SPEC-CRM-00 v1.1 PR4)', () => {
+  it('creates A1+A2 notifications for stale opp with overdue next_step', async () => {
+    mockCurrentUser = { id: 'u1', role: 'admin' };
+    // SELECT active opportunities
+    queryQueue.push({ rows: [{
+      id: 'o1', name: 'Deal Stale', status: 'qualified',
+      account_owner_id: 'u5', days_in_stage: 45,
+      next_step: 'Call cliente', next_step_due_date: '2026-01-15',
+      expected_close_date: '2026-12-30',
+      champion_identified: true, economic_buyer_identified: true,
+    }] });
+    // INSERT for A1 → created
+    queryQueue.push({ rows: [{ id: 'n1' }] });
+    // INSERT for A2 → created
+    queryQueue.push({ rows: [{ id: 'n2' }] });
+    const res = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res.status).toBe(200);
+    expect(res.body.checked).toBe(1);
+    expect(res.body.created).toBe(2);
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ alert: 'a1_stale' }),
+        expect.objectContaining({ alert: 'a2_next_step' }),
+      ]),
+    );
+  });
+
+  it('creates A3 notification for opp in solution_design without champion', async () => {
+    mockCurrentUser = { id: 'u1', role: 'admin' };
+    queryQueue.push({ rows: [{
+      id: 'o2', name: 'Deal No Champ', status: 'solution_design',
+      account_owner_id: 'u5', days_in_stage: 5,
+      next_step_due_date: null, expected_close_date: null,
+      champion_identified: false, economic_buyer_identified: true,
+    }] });
+    queryQueue.push({ rows: [{ id: 'n3' }] }); // A3 INSERT
+    const res = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(1);
+    expect(res.body.details[0].alert).toBe('a3_meddpicc');
+  });
+
+  it('dedup: returns 0 created when notifications already exist (empty RETURNING)', async () => {
+    mockCurrentUser = { id: 'u1', role: 'admin' };
+    queryQueue.push({ rows: [{
+      id: 'o1', name: 'Deal', status: 'qualified',
+      account_owner_id: 'u5', days_in_stage: 45,
+      next_step_due_date: null, expected_close_date: null,
+      champion_identified: true, economic_buyer_identified: true,
+    }] });
+    queryQueue.push({ rows: [] }); // A1 INSERT → dedup'd (empty rows)
+    const res = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(0);
+  });
+
+  it('rejects external and viewer roles with 403', async () => {
+    mockCurrentUser = { id: 'u1', role: 'viewer' };
+    const res1 = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res1.status).toBe(403);
+
+    mockCurrentUser = { id: 'u1', role: 'external' };
+    const res2 = await client.call('POST', '/api/opportunities/check-alerts', {});
+    expect(res2.status).toBe(403);
+  });
+
+  it('lead scoping: only scans squad opportunities', async () => {
+    mockCurrentUser = { id: 'u2', role: 'lead', squad_id: 's3' };
+    queryQueue.push({ rows: [] }); // SELECT (empty — scoped to squad)
+    await client.call('POST', '/api/opportunities/check-alerts', {});
+    const sql = issuedQueries[0].sql;
+    expect(sql).toMatch(/o\.squad_id =/);
+    expect(issuedQueries[0].params).toContain('s3');
+  });
 });
 
 /* ---------- GET / ---------- */
@@ -647,6 +775,105 @@ describe('DELETE /api/opportunities/:id (admin+)', () => {
     const res = await client.call('DELETE', '/api/opportunities/o1');
     expect(res.status).toBe(200);
     expect(res.body.message).toMatch(/eliminada/i);
+  });
+});
+
+// SPEC-CRM-00 v1.1 PR3 — check-margin endpoint + Alerta A4.
+describe('POST /api/opportunities/:id/check-margin', () => {
+  const { emitEvent } = require('../utils/events');
+  const baseOpp = { id: 'o1', booking_amount_usd: 100000 };
+
+  it('computes margin correctly with explicit estimated_cost_usd (high margin)', async () => {
+    queryQueue.push({ rows: [baseOpp] });                   // SELECT opp
+    queryQueue.push({ rows: [{ id: 'o1', booking_amount_usd: 100000, estimated_cost_usd: 60000, margin_pct: 40 }] }); // UPDATE RETURNING
+    const res = await client.call('POST', '/api/opportunities/o1/check-margin', { estimated_cost_usd: 60000 });
+    expect(res.status).toBe(200);
+    expect(res.body.margin_pct).toBe(40);
+    expect(res.body.estimated_cost_usd).toBe(60000);
+    expect(res.body.booking_amount_usd).toBe(100000);
+    expect(res.body.alert_fired).toBe(false);
+    // No debe emitir opportunity.margin_low cuando margen >= umbral.
+    const marginEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'opportunity.margin_low');
+    expect(marginEvt).toBeUndefined();
+  });
+
+  it('auto-computes from quotation lines when estimated_cost_usd is not provided', async () => {
+    queryQueue.push({ rows: [baseOpp] });                              // SELECT opp
+    queryQueue.push({ rows: [{ estimated_cost_usd: 45000 }] });       // auto-compute from lines
+    queryQueue.push({ rows: [{ id: 'o1', booking_amount_usd: 100000, estimated_cost_usd: 45000, margin_pct: 55 }] }); // UPDATE
+    const res = await client.call('POST', '/api/opportunities/o1/check-margin', {});
+    expect(res.status).toBe(200);
+    expect(res.body.margin_pct).toBe(55);
+    // Verifica que se lanzó la query de auto-cómputo (JOIN quotation_lines).
+    const autoQ = issuedQueries.find((q) => /quotation_lines/.test(q.sql));
+    expect(autoQ).toBeTruthy();
+  });
+
+  it('emits opportunity.margin_low (Alerta A4) when margin < 20%', async () => {
+    queryQueue.push({ rows: [baseOpp] });                    // SELECT opp
+    // explicit cost → costo = 88000, margen = 12%
+    queryQueue.push({ rows: [{ id: 'o1', booking_amount_usd: 100000, estimated_cost_usd: 88000, margin_pct: 12 }] });
+    const res = await client.call('POST', '/api/opportunities/o1/check-margin', { estimated_cost_usd: 88000 });
+    expect(res.status).toBe(200);
+    expect(res.body.margin_pct).toBe(12);
+    expect(res.body.alert_fired).toBe(true);
+    const marginEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'opportunity.margin_low');
+    expect(marginEvt).toBeTruthy();
+    expect(marginEvt[1].payload.margin_pct).toBe(12);
+    expect(marginEvt[1].payload.threshold).toBe(20);
+  });
+
+  it('returns 400 when booking_amount_usd is 0 (cannot compute margin)', async () => {
+    // Snapshot call count before this test so accumulated calls from
+    // prior tests don't pollute the assertion.
+    const callsBefore = emitEvent.mock.calls.length;
+    queryQueue.push({ rows: [{ id: 'o1', booking_amount_usd: 0 }] });
+    const res = await client.call('POST', '/api/opportunities/o1/check-margin', {});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/booking_amount_usd debe ser > 0/);
+    expect(emitEvent.mock.calls.length).toBe(callsBefore); // no new events
+  });
+
+  it('returns 400 when estimated_cost_usd is negative', async () => {
+    const res = await client.call('POST', '/api/opportunities/o1/check-margin', { estimated_cost_usd: -500 });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/no negativo/);
+    expect(issuedQueries).toHaveLength(0);
+  });
+
+  it('returns 404 when opportunity does not exist', async () => {
+    queryQueue.push({ rows: [] });
+    const res = await client.call('POST', '/api/opportunities/o99/check-margin', {});
+    expect(res.status).toBe(404);
+  });
+
+  it('status transition includes A4 warning when margin_pct < 20% at proposal_validated', async () => {
+    // Simulamos una opp en qualified con margin_pct=12 que avanza a proposal_validated.
+    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: 12 }] }); // SELECT current (FOR UPDATE)
+    // UPDATE opp → after row incluye margin_pct=12
+    queryQueue.push({ rows: [{ id: 'o1', status: 'proposal_validated', booking_amount_usd: 50000, margin_pct: 12 }] });
+    const res = await client.call('POST', '/api/opportunities/o1/status', { new_status: 'proposal_validated' });
+    expect(res.status).toBe(200);
+    const a4 = res.body.warnings.find((w) => w.code === 'a4_margin_low');
+    expect(a4).toBeTruthy();
+    expect(a4.message).toMatch(/A4/);
+    expect(a4.message).toMatch(/12%/);
+  });
+
+  it('status transition does NOT include A4 warning when margin_pct >= 20%', async () => {
+    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: 35 }] });
+    queryQueue.push({ rows: [{ id: 'o1', status: 'proposal_validated', booking_amount_usd: 50000, margin_pct: 35 }] });
+    const res = await client.call('POST', '/api/opportunities/o1/status', { new_status: 'proposal_validated' });
+    expect(res.status).toBe(200);
+    expect(res.body.warnings.some((w) => w.code === 'a4_margin_low')).toBe(false);
+  });
+
+  it('status transition does NOT include A4 warning when margin_pct is null (not yet computed)', async () => {
+    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: null }] });
+    queryQueue.push({ rows: [{ id: 'o1', status: 'proposal_validated', booking_amount_usd: 50000, margin_pct: null }] });
+    const res = await client.call('POST', '/api/opportunities/o1/status', { new_status: 'proposal_validated' });
+    expect(res.status).toBe(200);
+    expect(res.body.warnings.some((w) => w.code === 'a4_margin_low')).toBe(false);
   });
 });
 
