@@ -3,9 +3,10 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
 import StatusBadge from '../shell/StatusBadge';
 import { STAGES, TRANSITIONS as PIPELINE_TRANSITIONS, isPostponed, isWon } from '../utils/pipeline';
-// SPEC-CRM-00 v1.1 PR2 — labels para revenue + funding + loss reasons.
+// SPEC-CRM-00 v1.1 PR2/PR3 — labels + margin.
 import {
   REVENUE_TYPES, FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  MARGIN_LOW_THRESHOLD,
   validateLossReason,
 } from '../utils/booking';
 
@@ -163,6 +164,31 @@ export default function OpportunityDetail() {
     } finally { setBusy(false); }
   };
 
+  // SPEC-CRM-00 v1.1 PR3 — Calcula y persiste margin_pct.
+  // Prompt para costo estimado (vacío → auto-computa desde cotizaciones).
+  const checkMargin = async () => {
+    // eslint-disable-next-line no-alert
+    const costInput = window.prompt(
+      `Ingresa el costo estimado en USD (o cancela para auto-calcular desde las líneas de cotización):\n\nBooking actual: ${fmtUsd(opp.booking_amount_usd)}`,
+      '',
+    );
+    if (costInput === null) return; // cancelled
+
+    const body = costInput.trim() !== '' ? { estimated_cost_usd: Number(costInput) } : {};
+    setBusy(true);
+    try {
+      const result = await apiPost(`/api/opportunities/${id}/check-margin`, body);
+      if (result.alert_fired) {
+        // eslint-disable-next-line no-alert
+        alert(`⚠ Alerta A4 — Margen bajo: ${result.margin_pct}%\nEl margen está por debajo del umbral mínimo (${MARGIN_LOW_THRESHOLD}%). Considera revisar la cotización.`);
+      }
+      await load();
+    } catch (e) {
+      // eslint-disable-next-line no-alert
+      alert(e.message);
+    } finally { setBusy(false); }
+  };
+
   if (loading) return <div style={s.page}><div style={{ color: 'var(--text-light)' }}>Cargando…</div></div>;
   if (err || !opp) return <div style={s.page}><div style={{ color: 'var(--danger)' }}>{err || 'Oportunidad no encontrada'}</div></div>;
 
@@ -281,6 +307,52 @@ export default function OpportunityDetail() {
           <Field label="Booking total">{opp.booking_amount_usd != null ? fmtUsd(opp.booking_amount_usd) : '—'}</Field>
           <Field label="Weighted">{opp.weighted_amount_usd != null ? fmtUsd(opp.weighted_amount_usd) : '—'}</Field>
         </div>
+      </div>
+
+      {/* SPEC-CRM-00 v1.1 PR3 — Margen + Alerta A4. */}
+      <div style={s.card} data-testid="opportunity-margin-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={s.h2}>
+            📊 Margen
+            {opp.margin_pct != null && opp.margin_pct < MARGIN_LOW_THRESHOLD && (
+              <span
+                style={{ marginLeft: 10, background: '#fee2e2', color: '#b91c1c', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}
+                aria-label="Alerta A4: margen bajo"
+              >
+                ⚠ A4 Margen bajo
+              </span>
+            )}
+          </h2>
+          <button
+            type="button"
+            style={s.btnOutline}
+            onClick={checkMargin}
+            disabled={busy}
+            aria-label="Calcular margen de la oportunidad"
+          >
+            🧮 Calcular Margen
+          </button>
+        </div>
+        <div style={s.grid}>
+          <Field label="Costo estimado">
+            {opp.estimated_cost_usd != null ? fmtUsd(opp.estimated_cost_usd) : '—'}
+          </Field>
+          <Field label="Margen (%)">
+            {opp.margin_pct != null ? (
+              <span style={{ color: opp.margin_pct < MARGIN_LOW_THRESHOLD ? 'var(--danger)' : 'var(--success)', fontWeight: 700 }}>
+                {opp.margin_pct}%
+              </span>
+            ) : '—'}
+          </Field>
+          <Field label="Booking (base)">
+            {opp.booking_amount_usd != null ? fmtUsd(opp.booking_amount_usd) : '—'}
+          </Field>
+        </div>
+        {opp.margin_pct == null && (
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-light)' }}>
+            Margen no calculado todavía. Haz clic en "Calcular Margen" para computarlo desde las cotizaciones o ingresar el costo estimado.
+          </div>
+        )}
       </div>
 
       {/* SPEC-CRM-00 v1.1 PR2 — Stakeholders / Funding / Drive. */}

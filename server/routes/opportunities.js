@@ -57,10 +57,12 @@ router.use(auth);
 // SSOT en server/utils/pipeline.js para que cualquier cambio del modelo
 // se propague aquí automáticamente.
 const { STAGE_BY_ID, STAGES, isTerminal, isPostponed } = require('../utils/pipeline');
-// SPEC-CRM-00 v1.1 PR2 — Revenue model + funding + loss reasons.
+// SPEC-CRM-00 v1.1 PR2/PR3 — Revenue model + funding + loss reasons + margin.
 const {
   REVENUE_TYPES, FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  MARGIN_LOW_THRESHOLD,
   computeBooking, validateRevenueModel, validateFunding, validateLossReason,
+  computeMargin, validateMarginInput,
 } = require('../utils/booking');
 const VALID_STATUSES = STAGES.map((s) => s.id);
 const TERMINAL = new Set(STAGES.filter((s) => s.terminal).map((s) => s.id)); // closed_won, closed_lost
@@ -934,6 +936,16 @@ router.post('/:id/status', async (req, res) => {
         && ['proposal_validated', 'negotiation', 'verbal_commit', 'closed_won'].includes(new_status)) {
       warnings.push({ code: 'amount_zero', message: 'El monto USD está en 0. Recomendado actualizarlo.' });
     }
+    // SPEC-CRM-00 v1.1 PR3 — Alerta A4: margen bajo al avanzar etapas clave.
+    // Solo dispara si margin_pct ya fue calculado (no null).
+    if (after.margin_pct != null
+        && Number(after.margin_pct) < MARGIN_LOW_THRESHOLD
+        && ['proposal_validated', 'negotiation', 'verbal_commit', 'closed_won'].includes(new_status)) {
+      warnings.push({
+        code: 'a4_margin_low',
+        message: `⚠ Alerta A4: margen de ${after.margin_pct}% está por debajo del umbral mínimo (${MARGIN_LOW_THRESHOLD}%). Revisa la cotización antes de avanzar.`,
+      });
+    }
 
     await connection.query('COMMIT');
     res.json({ ...after, warnings });
@@ -944,6 +956,109 @@ router.post('/:id/status', async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   } finally {
     connection.release();
+  }
+});
+
+/* -------- CHECK MARGIN (SPEC-CRM-00 v1.1 PR3) --------
+ * Calcula margin_pct = (booking - cost) / booking × 100 y lo persiste.
+ *
+ * Body:
+ *   estimated_cost_usd?: number  — si se omite, se auto-computa desde
+ *     las líneas de cotización (cost_hour / rate_hour × total).
+ *
+ * Si margin_pct < MARGIN_LOW_THRESHOLD (20 %) emite opportunity.margin_low
+ * (Alerta A4).
+ *
+ * Responde: { margin_pct, estimated_cost_usd, booking_amount_usd, alert_fired }
+ */
+router.post('/:id/check-margin', async (req, res) => {
+  const { estimated_cost_usd: costIn } = req.body || {};
+
+  const inputErr = validateMarginInput({ estimated_cost_usd: costIn });
+  if (inputErr) return res.status(400).json({ error: inputErr });
+
+  try {
+    const { rows: [opp] } = await pool.query(
+      `SELECT id, booking_amount_usd FROM opportunities WHERE id=$1 AND deleted_at IS NULL`,
+      [req.params.id],
+    );
+    if (!opp) return res.status(404).json({ error: 'Oportunidad no encontrada' });
+
+    const booking = Number(opp.booking_amount_usd || 0);
+    if (booking <= 0) {
+      return res.status(400).json({
+        error: 'booking_amount_usd debe ser > 0 para calcular margen. Actualiza el revenue model primero.',
+      });
+    }
+
+    let estimatedCost;
+    if (costIn != null) {
+      estimatedCost = Number(costIn);
+    } else {
+      // Auto-computa desde quotation_lines.
+      // Estrategia: si rate_hour > 0 → (cost_hour / rate_hour) × total
+      //             si no             → cost_hour × horas × meses × 4.33 × qty
+      // Las líneas sin cost_hour contribuyen 0 al costo estimado.
+      const { rows: [costRow] } = await pool.query(
+        `SELECT COALESCE(SUM(
+           CASE
+             WHEN ql.rate_hour IS NOT NULL AND ql.rate_hour > 0 AND ql.total IS NOT NULL
+               THEN (COALESCE(ql.cost_hour, 0) / ql.rate_hour) * ql.total
+             WHEN ql.cost_hour IS NOT NULL
+               THEN ql.cost_hour
+                    * COALESCE(ql.hours_per_week, 0)
+                    * COALESCE(ql.duration_months::numeric, 0) * 4.33
+                    * COALESCE(ql.quantity::numeric, 1)
+             ELSE 0
+           END
+         ), 0)::numeric AS estimated_cost_usd
+           FROM quotation_lines ql
+           JOIN quotations q ON q.id = ql.quotation_id
+          WHERE q.opportunity_id = $1`,
+        [req.params.id],
+      );
+      estimatedCost = Number(costRow.estimated_cost_usd || 0);
+    }
+
+    const marginPct = computeMargin({ booking_amount_usd: booking, estimated_cost_usd: estimatedCost });
+
+    const { rows: [updated] } = await pool.query(
+      `UPDATE opportunities
+          SET estimated_cost_usd = $1,
+              margin_pct         = $2,
+              updated_at         = NOW()
+        WHERE id=$3 AND deleted_at IS NULL
+        RETURNING id, booking_amount_usd, estimated_cost_usd, margin_pct`,
+      [estimatedCost, marginPct, req.params.id],
+    );
+
+    const alertFired = marginPct != null && marginPct < MARGIN_LOW_THRESHOLD;
+    if (alertFired) {
+      await emitEvent(pool, {
+        event_type: 'opportunity.margin_low',
+        entity_type: 'opportunity',
+        entity_id: opp.id,
+        actor_user_id: req.user.id,
+        payload: {
+          margin_pct: marginPct,
+          booking_amount_usd: booking,
+          estimated_cost_usd: estimatedCost,
+          threshold: MARGIN_LOW_THRESHOLD,
+        },
+        req,
+      });
+    }
+
+    res.json({
+      margin_pct:           updated.margin_pct,
+      estimated_cost_usd:   updated.estimated_cost_usd,
+      booking_amount_usd:   updated.booking_amount_usd,
+      alert_fired:          alertFired,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('POST /opportunities/:id/check-margin failed:', err);
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 

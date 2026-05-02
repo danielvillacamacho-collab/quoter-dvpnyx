@@ -30,6 +30,8 @@ describe('OpportunityDetail', () => {
     revenue_type: 'one_time', one_time_amount_usd: 50000, booking_amount_usd: 50000, weighted_amount_usd: 25000,
     champion_identified: true, economic_buyer_identified: false,
     funding_source: 'client_direct',
+    // SPEC-CRM-00 v1.1 PR3 — margen calculado.
+    estimated_cost_usd: 32500, margin_pct: 35,
   };
 
   it('renders the opportunity summary with client link + opportunity_number', async () => {
@@ -196,6 +198,98 @@ describe('OpportunityDetail', () => {
       );
     });
     promptSpy.mockRestore();
+  });
+
+  // SPEC-CRM-00 v1.1 PR3 — Margin card + check-margin + Alerta A4.
+  describe('SPEC-CRM-00 v1.1 PR3: Margin card', () => {
+    it('renders margin card with margin_pct and estimated_cost_usd', async () => {
+      apiV2.apiGet.mockResolvedValue(baseOpp);
+      mount();
+      const card = await screen.findByTestId('opportunity-margin-card');
+      expect(within(card).getByText('35%')).toBeInTheDocument();
+      expect(within(card).getAllByText(/USD 32,500/).length).toBeGreaterThan(0);
+    });
+
+    it('shows A4 badge when margin_pct is below threshold (< 20%)', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp, margin_pct: 12, estimated_cost_usd: 44000,
+      });
+      mount();
+      const card = await screen.findByTestId('opportunity-margin-card');
+      expect(within(card).getByLabelText('Alerta A4: margen bajo')).toBeInTheDocument();
+      expect(within(card).getByText(/12%/)).toBeInTheDocument();
+    });
+
+    it('does NOT show A4 badge when margin_pct >= 20%', async () => {
+      apiV2.apiGet.mockResolvedValue(baseOpp); // margin_pct = 35
+      mount();
+      await screen.findByTestId('opportunity-margin-card');
+      expect(screen.queryByLabelText('Alerta A4: margen bajo')).toBeNull();
+    });
+
+    it('shows placeholder text when margin_pct is null (not yet computed)', async () => {
+      apiV2.apiGet.mockResolvedValue({
+        ...baseOpp, margin_pct: null, estimated_cost_usd: null,
+      });
+      mount();
+      const card = await screen.findByTestId('opportunity-margin-card');
+      expect(within(card).getByText(/Margen no calculado todavía/)).toBeInTheDocument();
+    });
+
+    it('"Calcular Margen" button calls POST check-margin with explicit cost and reloads', async () => {
+      apiV2.apiGet
+        .mockResolvedValueOnce(baseOpp)                // initial load
+        .mockResolvedValue({ ...baseOpp, margin_pct: 25, estimated_cost_usd: 37500 }); // reload after POST
+      apiV2.apiPost.mockResolvedValue({
+        margin_pct: 25, estimated_cost_usd: 37500, booking_amount_usd: 50000, alert_fired: false,
+      });
+      const promptSpy = jest.spyOn(window, 'prompt').mockReturnValue('37500');
+      mount();
+      await screen.findByTestId('opportunity-margin-card');
+      fireEvent.click(screen.getByLabelText('Calcular margen de la oportunidad'));
+      await waitFor(() => {
+        expect(apiV2.apiPost).toHaveBeenCalledWith(
+          '/api/opportunities/o1/check-margin',
+          expect.objectContaining({ estimated_cost_usd: 37500 }),
+        );
+      });
+      promptSpy.mockRestore();
+    });
+
+    it('"Calcular Margen" sends empty body when prompt is blank (auto-compute)', async () => {
+      apiV2.apiGet.mockResolvedValueOnce(baseOpp).mockResolvedValue(baseOpp);
+      apiV2.apiPost.mockResolvedValue({
+        margin_pct: 40, estimated_cost_usd: 30000, booking_amount_usd: 50000, alert_fired: false,
+      });
+      const promptSpy = jest.spyOn(window, 'prompt').mockReturnValue('');
+      mount();
+      await screen.findByTestId('opportunity-margin-card');
+      fireEvent.click(screen.getByLabelText('Calcular margen de la oportunidad'));
+      await waitFor(() => {
+        expect(apiV2.apiPost).toHaveBeenCalledWith(
+          '/api/opportunities/o1/check-margin',
+          {}, // empty body → auto-compute
+        );
+      });
+      promptSpy.mockRestore();
+    });
+
+    it('shows A4 alert dialog when check-margin returns alert_fired=true', async () => {
+      apiV2.apiGet.mockResolvedValueOnce(baseOpp).mockResolvedValue({ ...baseOpp, margin_pct: 10 });
+      apiV2.apiPost.mockResolvedValue({
+        margin_pct: 10, estimated_cost_usd: 45000, booking_amount_usd: 50000, alert_fired: true,
+      });
+      const promptSpy = jest.spyOn(window, 'prompt').mockReturnValue('45000');
+      const alertSpy  = jest.spyOn(window, 'alert').mockImplementation(() => {});
+      mount();
+      await screen.findByTestId('opportunity-margin-card');
+      fireEvent.click(screen.getByLabelText('Calcular margen de la oportunidad'));
+      await waitFor(() => {
+        expect(alertSpy).toHaveBeenCalledWith(expect.stringMatching(/A4/));
+      });
+      promptSpy.mockRestore();
+      alertSpy.mockRestore();
+    });
   });
 
   // SPEC-CRM-00 v1.1 — Postponed via prompt, validates future date, posts payload.
