@@ -127,6 +127,26 @@ describe('GET /api/opportunities', () => {
     expect(firstSql).toMatch(/o\.status =/);
     expect(firstSql).toMatch(/o\.client_id =/);
   });
+
+  // SPEC-CRM-00 v1.1 PR2 — filtros nuevos.
+  it('aplica revenue_type + has_champion + funding_source filters', async () => {
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities?revenue_type=recurring&has_champion=true&funding_source=aws_mdf');
+    const firstSql = issuedQueries[0].sql;
+    expect(firstSql).toMatch(/o\.revenue_type =/);
+    expect(firstSql).toMatch(/o\.champion_identified = true/);
+    expect(firstSql).toMatch(/o\.funding_source =/);
+  });
+
+  it('ignora revenue_type / funding_source con valores fuera del enum (no inyecta SQL)', async () => {
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/opportunities?revenue_type=foo&funding_source=bar');
+    const firstSql = issuedQueries[0].sql;
+    expect(firstSql).not.toMatch(/o\.revenue_type =/);
+    expect(firstSql).not.toMatch(/o\.funding_source =/);
+  });
 });
 
 /* ---------- GET /:id ---------- */
@@ -227,6 +247,106 @@ describe('POST /api/opportunities', () => {
     expect(call).toBeTruthy();
     expect(call[1].entity_id).toBe('o-new');
     expect(call[1].payload.opportunity_number).toBe('OPP-MEXI-2026-00042');
+  });
+
+  // ============================================================
+  // SPEC-CRM-00 v1.1 PR2 — Revenue model + Champion/EB + Funding
+  // ============================================================
+  describe('SPEC-CRM-00 v1.1 PR2: Revenue model', () => {
+    it('rechaza recurring sin mrr_usd', async () => {
+      queryQueue.push({ rows: [{ id: 'c1', active: true, country: 'Colombia' }] });
+      const res = await client.call('POST', '/api/opportunities', {
+        ...validBody, revenue_type: 'recurring', contract_length_months: 12,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/mrr_usd/);
+    });
+
+    it('rechaza recurring sin contract_length_months', async () => {
+      queryQueue.push({ rows: [{ id: 'c1', active: true, country: 'Colombia' }] });
+      const res = await client.call('POST', '/api/opportunities', {
+        ...validBody, revenue_type: 'recurring', mrr_usd: 5000,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/contract_length_months/);
+    });
+
+    it('rechaza mixed sin one_time_amount_usd', async () => {
+      queryQueue.push({ rows: [{ id: 'c1', active: true, country: 'Colombia' }] });
+      const res = await client.call('POST', '/api/opportunities', {
+        ...validBody, revenue_type: 'mixed', mrr_usd: 5000, contract_length_months: 12,
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/one_time_amount_usd/);
+    });
+
+    it('crea opp recurring y persiste mrr_usd × months como booking', async () => {
+      queryQueue.push({ rows: [{ id: 'c1', active: true, country: 'Colombia' }] });
+      queryQueue.push({ rows: [{ next_seq: 1 }] });
+      queryQueue.push({ rows: [{
+        id: 'o-rec', name: 'Recurring Deal', revenue_type: 'recurring',
+        mrr_usd: 5000, contract_length_months: 24, booking_amount_usd: 120000,
+      }] });
+      const res = await client.call('POST', '/api/opportunities', {
+        ...validBody, name: 'Recurring Deal',
+        revenue_type: 'recurring', mrr_usd: 5000, contract_length_months: 24,
+      });
+      expect(res.status).toBe(201);
+      const insertParams = issuedQueries[issuedQueries.length - 1].params;
+      expect(insertParams[12]).toBe('recurring');                  // revenue_type
+      expect(insertParams[14]).toBe(5000);                          // mrr_usd
+      expect(insertParams[15]).toBe(24);                            // contract_length_months
+      expect(insertParams[21]).toBe(120000);                        // computedBooking
+    });
+
+    it('crea opp mixed con booking = one_time + mrr × months', async () => {
+      queryQueue.push({ rows: [{ id: 'c1', active: true, country: 'Colombia' }] });
+      queryQueue.push({ rows: [{ next_seq: 1 }] });
+      queryQueue.push({ rows: [{ id: 'o-mix', name: 'Mixed' }] });
+      const res = await client.call('POST', '/api/opportunities', {
+        ...validBody, name: 'Mixed',
+        revenue_type: 'mixed', one_time_amount_usd: 20000,
+        mrr_usd: 3000, contract_length_months: 12,
+      });
+      expect(res.status).toBe(201);
+      const insertParams = issuedQueries[issuedQueries.length - 1].params;
+      expect(insertParams[21]).toBe(56000); // 20000 + 3000*12
+    });
+
+    it('legacy compat: POST sin revenue_type → default one_time con booking 0', async () => {
+      queryQueue.push({ rows: [{ id: 'c1', active: true, country: 'Colombia' }] });
+      queryQueue.push({ rows: [{ next_seq: 1 }] });
+      queryQueue.push({ rows: [{ id: 'o', name: 'Deal A' }] });
+      const res = await client.call('POST', '/api/opportunities', validBody);
+      expect(res.status).toBe(201);
+      const insertParams = issuedQueries[issuedQueries.length - 1].params;
+      expect(insertParams[12]).toBe('one_time');  // revenue_type defaulted
+      expect(insertParams[13]).toBe(0);            // one_time_amount_usd = 0
+      expect(insertParams[18]).toBe('client_direct'); // funding_source defaulted
+    });
+
+    it('rechaza funding_source != client_direct sin funding_amount_usd', async () => {
+      queryQueue.push({ rows: [{ id: 'c1', active: true, country: 'Colombia' }] });
+      const res = await client.call('POST', '/api/opportunities', {
+        ...validBody, funding_source: 'aws_mdf',
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/funding_amount_usd/);
+    });
+
+    it('persiste flags Champion + Economic Buyer + drive_url', async () => {
+      queryQueue.push({ rows: [{ id: 'c1', active: true, country: 'Colombia' }] });
+      queryQueue.push({ rows: [{ next_seq: 1 }] });
+      queryQueue.push({ rows: [{ id: 'o' }] });
+      await client.call('POST', '/api/opportunities', {
+        ...validBody, champion_identified: true, economic_buyer_identified: true,
+        drive_url: 'https://drive.google.com/folder/abc',
+      });
+      const insertParams = issuedQueries[issuedQueries.length - 1].params;
+      expect(insertParams[16]).toBe(true);   // champion_identified
+      expect(insertParams[17]).toBe(true);   // economic_buyer_identified
+      expect(insertParams[20]).toBe('https://drive.google.com/folder/abc'); // drive_url
+    });
   });
 
   it('trims the name before inserting', async () => {
@@ -359,7 +479,62 @@ describe('POST /api/opportunities/:id/status', () => {
     expect(res.status).toBe(200);
     const lostEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'opportunity.lost');
     expect(lostEvt).toBeTruthy();
-    expect(lostEvt[1].payload).toEqual({ reason: 'price', notes: 'too expensive' });
+    // Compat: el payload conserva `reason`/`notes` pero ahora también
+    // expone los campos formales del v1.1 (loss_reason, loss_reason_detail).
+    expect(lostEvt[1].payload.reason).toBe('price');
+    expect(lostEvt[1].payload.notes).toBe('too expensive');
+  });
+
+  // ============================================================
+  // SPEC-CRM-00 v1.1 PR2 — Loss reason formal (enum extendido + detail)
+  // ============================================================
+  describe('SPEC-CRM-00 v1.1 PR2: Loss reason formal', () => {
+    it('rechaza closed_lost cuando loss_reason_detail < 30 chars', async () => {
+      queryQueue.push({ rows: [{ id: 'o1', status: 'proposal_validated' }] });
+      const res = await client.call('POST', '/api/opportunities/o1/status', {
+        new_status: 'closed_lost', loss_reason: 'price', loss_reason_detail: 'corto',
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/30 caracteres/);
+    });
+
+    it('rechaza loss_reason fuera del enum extendido', async () => {
+      queryQueue.push({ rows: [{ id: 'o1', status: 'proposal_validated' }] });
+      const res = await client.call('POST', '/api/opportunities/o1/status', {
+        new_status: 'closed_lost', loss_reason: 'made_up', loss_reason_detail: 'a'.repeat(40),
+      });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toMatch(/loss_reason/);
+    });
+
+    it('persiste loss_reason + loss_reason_detail y los emite en el evento', async () => {
+      const { emitEvent } = require('../utils/events');
+      emitEvent.mockClear();
+      queryQueue.push({ rows: [{ id: 'o1', status: 'negotiation' }] });
+      queryQueue.push({ rows: [] }); // UPDATE quotations rejected (nada)
+      queryQueue.push({ rows: [{ id: 'o1', status: 'closed_lost', loss_reason: 'competitor_won' }] });
+      const detail = 'Cliente eligió competidor por feature X que no soportamos. Plan: roadmap Q3.';
+      const res = await client.call('POST', '/api/opportunities/o1/status', {
+        new_status: 'closed_lost', loss_reason: 'competitor_won', loss_reason_detail: detail,
+      });
+      expect(res.status).toBe(200);
+      const updateOppCall = issuedQueries.find((q) => /UPDATE opportunities SET\s+status/m.test(q.sql));
+      expect(updateOppCall.params).toContain('competitor_won');
+      expect(updateOppCall.params).toContain(detail);
+      const lostEvt = emitEvent.mock.calls.find((c) => c[1].event_type === 'opportunity.lost');
+      expect(lostEvt[1].payload.loss_reason).toBe('competitor_won');
+      expect(lostEvt[1].payload.loss_reason_detail).toBe(detail);
+    });
+
+    it('legacy compat: outcome_reason sin loss_reason sigue funcionando', async () => {
+      queryQueue.push({ rows: [{ id: 'o1', status: 'negotiation' }] });
+      queryQueue.push({ rows: [] });
+      queryQueue.push({ rows: [{ id: 'o1', status: 'closed_lost' }] });
+      const res = await client.call('POST', '/api/opportunities/o1/status', {
+        new_status: 'closed_lost', outcome_reason: 'price', outcome_notes: 'x',
+      });
+      expect(res.status).toBe(200);
+    });
   });
 
   // ============================================================
