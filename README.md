@@ -14,7 +14,8 @@ SaaS interno de **Double V Partners** que integra el ciclo **quote → contract 
 
 | # | Documento | Para quién | Tiempo |
 |---|---|---|---|
-| 1 | [`HANDOFF.md`](HANDOFF.md) | **Equipo entrante** — punto de entrada | 10 min |
+| **0** | [`STATE_OF_THE_UNION.md`](STATE_OF_THE_UNION.md) | **Equipo senior entrante (2026-05-15)** — carta de aterrizaje día 1 | **15 min** |
+| 1 | [`HANDOFF.md`](HANDOFF.md) | Punto de entrada técnico | 10 min |
 | 2 | [`docs/PROJECT_STATE_HANDOFF.md`](docs/PROJECT_STATE_HANDOFF.md) | Estado real del sistema, deudas, decisiones | 20 min |
 | 3 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Diagramas, flujos, stack, AI layer | 15 min |
 | 4 | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) | Patrones de código actuales (server + client) | 15 min |
