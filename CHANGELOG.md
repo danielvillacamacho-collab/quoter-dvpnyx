@@ -15,7 +15,82 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ## [Unreleased] — entregas en curso
 
-### chore(housekeeping): pase de limpieza 2026-05-01
+### chore(handoff): cleanups pre-handoff equipo senior — 2026-05-02
+
+Pase de saneamiento previo al handoff al equipo senior del 2026-05-15. Cambios cosméticos / de documentación, **cero modificación funcional**.
+
+- `client/src/App.js`: borrado de import muerto `ComingSoon`.
+- `README.md` + `HANDOFF.md`: reemplazo de la promesa `quote → contract → staff → bill` por `quote → contract → staff → time tracking` + nota explícita de que la facturación queda en Holded.
+- `docs/PROJECT_STATE_HANDOFF.md`: corrige afirmación falsa — `/api/notifications` **no es stub** (la SPA hace polling de `/unread-count` cada 60s desde `Layout`). Aclara que los stubs reales (`squads`, `events`) devuelven `501` con JSON.
+- `client/src/modules/TimeMe.test.js`: cabecera explicativa identificando los 2 sospechosos primarios de los fallos pre-existentes.
+- Nuevo: [`docs/AUDIT_2026-05.md`](docs/AUDIT_2026-05.md) — hoja de ruta de los 13 días previos al handoff (matriz módulo-por-módulo, happy paths, lista explícita de "no tocar").
+
+### feat(spec-crm-00): pipeline 9 estados + revenue + margin + RBAC + alertas — 2026-05-01 a 2026-05-02
+
+Cuatro PRs grandes que materializan el contrato CCO de SPEC-CRM-00 v1.1 sobre el módulo de oportunidades. Schema, código y tests al día; documentación operativa cubierta en este CHANGELOG y en [PROJECT_STATE_HANDOFF.md §0](docs/PROJECT_STATE_HANDOFF.md).
+
+**PR 1/4 — Pipeline 9 estados + Postponed + opportunity_number** (`c246b05`)
+
+- Pipeline migrado de 7 → 9 estados: `lead → qualified → solution_design → proposal_validated → negotiation → verbal_commit → {closed_won | closed_lost | postponed}`. Probabilidades 5/15/30/50/75/90/100/0/0.
+- `postponed` es un **limbo no terminal**: solo sale a `qualified` (reactivar) o `closed_lost`. Requiere `postponed_until_date` futura + razón opcional.
+- `opportunity_number = OPP-{cc}-{year}-{seq}` (cc = country del cliente, seq correlativo por (country, year), backfill idempotente).
+- Migración legacy: `open→lead`, `proposal→proposal_validated`, `won→closed_won`, `lost+cancelled→closed_lost`. CHECK constraints reescritos idempotentes (descubre nombre dinámicamente).
+- UX: botones de transición por estado actual (KISS), modal de Postergar con date picker (default +30d) + textarea, banner violeta en detalle cuando `status=postponed`.
+- Soft warnings (`amount_zero / backwards / close_date_past`) — el spec pide nudges, no bloqueos.
+- SSOT compartido: `server/utils/pipeline.js` + `client/src/utils/pipeline.js` + trigger DB `opp_pipeline_recalc()` deben sincronizarse en los tres puntos (comentado en cada archivo).
+- Eventos nuevos: `opportunity.postponed`, `opportunity.reactivated`.
+
+**PR 2/4 — Revenue model + Champion/EB + funding + loss reasons** (`3e6d65c`)
+
+- Modelo de revenue formal: `one_time | recurring | mixed` con booking derivado por trigger DB (`one_time → one_time_amount_usd`, `recurring → mrr × months`, `mixed → suma`).
+- Nuevas columnas en `opportunities`: `revenue_type`, `one_time_amount_usd`, `mrr_usd`, `contract_length_months`, `champion_identified`, `economic_buyer_identified`, `funding_source`, `funding_amount_usd`, `loss_reason`, `loss_reason_detail`, `drive_url`. Backfill idempotente: legacy → `one_time` con monto previo.
+- Loss reason enum extendido: `price | competitor_won | no_decision | budget_cut | champion_left | wrong_fit | timing | incumbent_win | other`. `loss_reason_detail` requerido ≥30 caracteres.
+- Helpers: `server/utils/booking.js` + `client/src/utils/booking.js` (`computeBooking`, `validateRevenueModel`, `validateFunding`, `validateLossReason`) — misma fórmula que el trigger DB.
+- API: `POST` y `PUT /api/opportunities` aceptan los nuevos campos con compat legacy (sin `revenue_type` → default `one_time`). `GET /` filtros nuevos: `revenue_type`, `has_champion`, `has_economic_buyer`, `funding_source` (valores fuera del enum se ignoran).
+- Frontend: `OpportunityForm` con radio `revenue_type` + campos condicionales según motion + booking calculado en vivo + sección "Más opciones" (champion/EB/funding/drive_url). `TransitionModal closed_lost` con dropdown del enum + textarea con contador 0/30. `OpportunityDetail` con cards Revenue / Stakeholders & Funding / Loss reason.
+- **Hotfix migración PR 1**: en RDS, `CHECK (status IN (...))` se reescribe a `CHECK ((status)::text = ANY (ARRAY[...]))`. El pattern del DO block dinámico nunca matcheó esa forma → CHECK legacy seguía vivo. Fix: buscar por literal `cancelled` (señal del enum legacy) y `ADD CONSTRAINT v11` idempotente con `DO/IF NOT EXISTS`.
+
+**PR 3/4 — margin_pct + check-margin + Alerta A4** (`e234137`)
+
+- Persiste el margen de la oportunidad: nuevas columnas `estimated_cost_usd` y `margin_pct` en `opportunities`. Constraints `opp_margin_pct_range` y `opp_estimated_cost_nonneg`. Partial index `opportunities_margin_low_idx` para reportes A4.
+- `MARGIN_LOW_THRESHOLD = 20%` en `server/utils/booking.js` y `client/src/utils/booking.js`. `computeMargin()` y `validateMarginInput()` sincronizados.
+- **Endpoint nuevo**: `POST /api/opportunities/:id/check-margin` — acepta `estimated_cost_usd` explícito o lo auto-computa desde `cost_hour/rate_hour` de las líneas; persiste ambos campos; emite `opportunity.margin_low` si < 20%.
+- `POST /:id/status` ahora devuelve warning `a4_margin_low` (no bloqueante) al avanzar a `proposal_validated`/`negotiation`/`verbal_commit`/`closed_won` con margen bajo.
+- Frontend: `OpportunityDetail` con card "Margen" + badge ⚠ A4 + botón "Calcular Margen" (prompt → auto-compute si vacío).
+
+**PR 4/4 — RBAC 7 roles + alertas A1/A2/A3/A5** (`c8643d9`)
+
+- **RBAC 7 roles** en `users.role` (`+preventa` por backward compat):
+  - `superadmin` — bypass total.
+  - `admin` — operativo, ve todo.
+  - `director` — VP-level, ve todo (nuevo).
+  - `lead` — su squad.
+  - `member` — solo sus opps (account_owner o presales_lead).
+  - `viewer` — solo lectura.
+  - `external` — acceso restringido, 403 al endpoint de oportunidades (nuevo).
+- `server/middleware/auth.js` exporta `ROLES`, `SEE_ALL_ROLES = {superadmin, admin, director}`, `WRITE_ROLES = {superadmin, admin, director, lead, member}`.
+- Scoping inline en `GET /api/opportunities` y `GET /kanban`: admin/director/superadmin ven todo; lead ve su squad; member ve solo las suyas; external → 403.
+- **Sistema de alertas CRM** (`server/utils/alerts.js`, 205 LOC):
+  - `ALERT_DEFS` con A1, A2, A3, A4, A5.
+  - `A1` — oportunidad estancada >30 días en mismo estado.
+  - `A2` — `next_step` con fecha vencida.
+  - `A3` — Champion/EB gap (a partir de `solution_design`).
+  - `A4` — margen bajo (ya entregada en PR 3).
+  - `A5` — cierre próximo, expected_close_date dentro de 7 días.
+  - `createAlertNotification()` con dedup 24h (INSERT WHERE NOT EXISTS).
+  - `runAlertScan()` con scoping por rol.
+- **Endpoints nuevos**:
+  - `POST /api/opportunities/check-alerts` — escanea y genera notificaciones (diseñado para cron diario o invocación manual).
+- A3 inline: dispara fire-and-forget en `POST /:id/status` (al avanzar a `solution_design+`) y en `PUT /:id` (al cambiar champion/EB flags).
+- Frontend: `OpportunityDetail` con badge ⚠ A3 en card MEDDPICC cuando aplica.
+
+**Fix posterior — migración idempotente** (`c6e6997` + `dbca79b`)
+
+- Hotfix de deploy: el CHECK del role en RDS se reescribió a `ANY (ARRAY[...])`. Backfill defensive de roles legacy. Block logging para que el deploy no quede mudo si la migración falla. Eliminados backticks dentro de SQL comments en el template literal de JS (causaban template-string parsing roto en imágenes RDS).
+
+**Tests al cierre de SPEC-CRM-00**: server **988 → 1018+** (con A4/A5), client **463 → 470+**. Build limpio. Mantenemos los 2 fallos pre-existentes en `TimeMe.test.js` (DST/timezone, ver header del archivo).
+
+
 
 - **Branches**: 87 ramas remotas mergeadas eliminadas (de 91 → 4 vivas). 81 locales borradas (90 → 9). El repo deja de tener "cementerio" de feature branches.
 - **Deps**: removidos `express-validator` y `uuid` del server (no se usaban — UUID se genera en DB con `uuid_generate_v4()`); removidos `jspdf`, `jspdf-autotable` y `@dnd-kit/sortable` del client (jspdf nunca se importó; sortable nunca se usó en favor de `@dnd-kit/core` directo).

@@ -42,33 +42,68 @@ Vista funcional + técnica de cada módulo del sistema. Por cada uno: qué hace,
 
 ## Opportunities
 
-**Qué hace:** pipeline comercial. Cada cliente puede tener N oportunidades. Estados forman un Kanban.
+> **Reescrito en SPEC-CRM-00 v1.1** (mayo 2026): pipeline 9 estados + revenue model + margin + RBAC scoping + alertas. Ver [`CHANGELOG.md`](../CHANGELOG.md) y [`API_REFERENCE.md#opportunities`](API_REFERENCE.md) para detalle.
+
+**Qué hace:** pipeline comercial. Cada cliente puede tener N oportunidades. Estados forman un Kanban con probabilidades calibradas.
 
 | Aspecto | Ubicación |
 |---|---|
-| Server | `server/routes/opportunities.js` |
+| Server | `server/routes/opportunities.js` (592 LOC post CRM-00) |
+| Helpers server | `server/utils/pipeline.js`, `server/utils/booking.js`, `server/utils/alerts.js` |
+| Helpers client | `client/src/utils/pipeline.js`, `client/src/utils/booking.js` |
 | UI lista | `client/src/modules/Opportunities.js` |
 | UI detalle | `client/src/modules/OpportunityDetail.js` |
 | UI Kanban | `client/src/modules/PipelineKanban.js` |
-| Tabla | `opportunities` (+ trigger `opp_pipeline_recalc`) |
-| Endpoints | listado + `/kanban` + `/:id/status` (transitions) |
+| Tablas | `opportunities` (+ trigger `opp_pipeline_recalc`), reutiliza `notifications` para alertas |
+| Endpoints | listado + `/kanban` + `/:id/status` + `/:id/check-margin` + `/check-alerts` |
 
-**Estados y transiciones:**
+**Pipeline 9 estados (post CRM-00):**
 ```
-open → qualified → proposal → negotiation → won
-                                            → lost
-                                            → cancelled
+lead → qualified → solution_design → proposal_validated → negotiation → verbal_commit → {closed_won | closed_lost | postponed}
 ```
-Las transiciones permiten saltos hacia atrás (Kanban drag-and-drop), pero generan warnings.
+Probabilidades 5/15/30/50/75/90/100/0/0. `postponed` es **limbo no terminal** — solo sale a `qualified` (reactivar) o `closed_lost`. Requiere `postponed_until_date` futura.
+
+`opportunity_number = OPP-{cc}-{year}-{seq}` correlativo por (country, year), backfill idempotente para legacy.
+
+Las transiciones permiten saltos hacia atrás (Kanban drag-and-drop), pero generan warnings (`amount_zero`, `backwards`, `close_date_past`, `a4_margin_low`) — son nudges, no bloqueos.
+
+**Migración legacy:** `open→lead`, `proposal→proposal_validated`, `won→closed_won`, `lost+cancelled→closed_lost`. Se hace una sola vez en migrate.js.
+
+**Modelo de revenue (CRM-00 PR 2):**
+- `revenue_type`: `one_time | recurring | mixed` con booking derivado por trigger DB.
+  - `one_time` → `booking = one_time_amount_usd`.
+  - `recurring` → `booking = mrr_usd × contract_length_months`.
+  - `mixed` → suma de ambos.
+- Helpers `booking.js` (server + client) replican la fórmula.
+- Champion/EB flags + funding source + drive_url.
+- Loss reason enum extendido + detail ≥30 chars.
+
+**Margin (CRM-00 PR 3):**
+- `estimated_cost_usd` + `margin_pct` persistidos.
+- `MARGIN_LOW_THRESHOLD = 20%`.
+- Endpoint `POST /:id/check-margin` auto-computa desde líneas si no se pasa el costo.
 
 **Side effects al transition:**
-- `won`: requiere `winning_quotation_id`. Si la cotización está en `sent`, pasa a `approved`. `closed_at = NOW()`. **Y ofrece crear contrato** vía `POST /api/contracts/from-quotation/:id`.
-- `lost`/`cancelled`: requiere `outcome_reason`. Cotizaciones en `sent` pasan a `rejected`.
+- `closed_won`: requiere `winning_quotation_id`. Si la cotización está en `sent`, pasa a `approved`. `closed_at = NOW()`. **Y ofrece crear contrato** vía `POST /api/contracts/from-quotation/:id`.
+- `closed_lost`: requiere `loss_reason` + `loss_reason_detail` (≥30 chars). Cotizaciones en `sent` pasan a `rejected`. Legacy `outcome_reason` sigue como fallback.
+- `postponed`: requiere `postponed_until_date` futura.
+- Avanzar a `solution_design+` dispara A3 fire-and-forget si Champion/EB están vacíos.
+- Avanzar a `proposal_validated/negotiation/verbal_commit/closed_won` con margen <20% emite warning `a4_margin_low` y evento `opportunity.margin_low`.
 
 **Trigger DB:**
-- Al insertar/actualizar, recalcula `probability` (5/20/50/75/100/0/0) y `weighted_amount_usd = booking × probability / 100`.
+- Al insertar/actualizar, calcula `booking_amount_usd` derivado de `revenue_type`, luego `weighted_amount_usd = booking × probability / 100`.
 
-**Deuda:** ninguna activa.
+**RBAC scoping (CRM-00 PR 4):**
+- `superadmin/admin/director` → ven todo.
+- `lead` → su squad.
+- `member` → solo donde es `account_owner_id` o `presales_lead_id`.
+- `external` → 403.
+
+**Sistema de alertas (CRM-00 PR 4):** ver [`ARCHITECTURE.md §6.1`](../ARCHITECTURE.md). A1-A5 con dedup 24h. A3 inline en transiciones; A1/A2/A5 vía `POST /check-alerts` (cron diario).
+
+**Eventos:** `opportunity.created`, `.updated`, `.deleted`, `.status_changed`, `.won`, `.lost`, `.cancelled`, `.postponed`, `.reactivated`, `.margin_low`.
+
+**Deuda:** ninguna activa post CRM-00. SSOT del pipeline (`pipeline.js` server + client + trigger DB) requiere sincronizar los tres puntos cuando se cambien estados — comentado en cada archivo.
 
 ---
 
