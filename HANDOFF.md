@@ -11,7 +11,7 @@ Este es el **punto de entrada**. Léelo completo (15 min) antes de abrir cualqui
 
 ## 1. ¿Qué es esto?
 
-SaaS interno de **DVP (Double V Partners)** que integra en un solo producto el ciclo **quote → contract → staff → bill**:
+SaaS interno de **DVP (Double V Partners)** que integra en un solo producto el ciclo **quote → contract → staff → time tracking** (la facturación queda en Holded; ver §5):
 
 - **Comercial**: clientes → oportunidades → cotizaciones (staff augmentation y proyecto de alcance fijo).
 - **Delivery**: contratos → solicitudes de recursos → asignaciones → time tracking.
