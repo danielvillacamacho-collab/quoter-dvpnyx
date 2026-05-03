@@ -1,14 +1,22 @@
 # Roadmap — DVPNYX Quoter
 
-Estado de cada capacidad del producto: ✅ live, 🚧 wip, ❌ no implementado, ⚠️ con caveat. Snapshot 2026-05.
+Estado de cada capacidad del producto: ✅ live, 🚧 wip, ❌ no implementado, ⚠️ con caveat. Snapshot **2026-05-02** (post SPEC-CRM-00 v1.1).
 
 ---
 
 ## ✅ Live en producción
 
-### Comercial
+### Comercial — **expandido con SPEC-CRM-00 v1.1 (mayo 2026)**
 - Master de **clientes** con CRUD + soft delete + activate/deactivate
-- **Oportunidades** con pipeline Kanban, probability/weighted automática vía trigger, transitions con side effects
+- **Oportunidades** con pipeline Kanban + **9 estados** (`lead → qualified → solution_design → proposal_validated → negotiation → verbal_commit → {closed_won | closed_lost | postponed}`), probabilidades 5/15/30/50/75/90/100/0/0, transitions con side effects
+- **Postponed** como limbo no terminal (sale a `qualified` o `closed_lost`); requiere `postponed_until_date` + razón
+- **`opportunity_number`** correlativo `OPP-{cc}-{year}-{seq}` (cc = country del cliente)
+- **Modelo de revenue**: `one_time | recurring | mixed` con booking derivado por trigger DB. Helpers `server/utils/booking.js` + `client/src/utils/booking.js` mantienen la fórmula sincronizada. Columnas: `revenue_type`, `one_time_amount_usd`, `mrr_usd`, `contract_length_months`
+- **Champion + Economic Buyer** flags + funding source (con MDF) + `drive_url`
+- **Loss reason enum extendido** (price/competitor_won/no_decision/budget_cut/champion_left/wrong_fit/timing/incumbent_win/other) con detail ≥30 chars
+- **Margen** persistido (`estimated_cost_usd`, `margin_pct`) con CHECK constraints + endpoint `POST /api/opportunities/:id/check-margin` (auto-computa desde líneas si no se pasa el costo)
+- **RBAC 7 roles** scopeado en `GET /api/opportunities` y `GET /kanban`: see-all (superadmin/admin/director) ven todo; lead ve squad; member ve solo las suyas; external → 403
+- **Sistema de alertas CRM** (A1 estancada >30d, A2 next_step vencido, A3 Champion/EB gap, A4 margen bajo, A5 cierre próximo). `POST /api/opportunities/check-alerts` para cron diario; A3 inline en transiciones
 - **Cotizador** staff_aug (lista de recursos por mes) con motor de cálculo
 - **Cotizador** fixed_scope con phases + epics + milestones + allocations
 - Conversión **quotation → contract** de un click (`POST /api/contracts/from-quotation/:id`)
@@ -93,13 +101,15 @@ Estado de cada capacidad del producto: ✅ live, 🚧 wip, ❌ no implementado, 
 
 ## 🚧 En progreso / planeados
 
-### Recién entregado (mayo 2026 inicial)
+### Recién entregado (mayo 2026)
 
+- ✅ **SPEC-CRM-00 v1.1** (4 PRs, 2026-05-01 a 2026-05-02) — pipeline 9 estados + Postponed + opportunity_number; revenue model formal con booking derivado; champion/EB + funding + loss reasons enum extendido; margin_pct + endpoint check-margin; RBAC 7 roles con scoping inline; sistema de alertas A1-A5 con dedup 24h. Detalle en [`CHANGELOG.md`](../CHANGELOG.md).
 - ✅ **Sortable tables** (Phase 17) — todas las tablas paginadas tienen click-to-sort en columnas de atributos, `<SortableTh>` accesible (aria-sort, Enter/Space), tie-breaker estable. Cableado en Contracts, Employees, Opportunities, Clients, ResourceRequests, Assignments. Pendientes: Reports, EmployeeCosts mass view (sortRows client-side).
 - ✅ **PERF-001/002/003** — visibility-gate del polling de notifications, JOIN ON filter en reports/utilization+bench, índice parcial `assignments_employee_active_idx`.
 - ✅ **INC-002 fix** — defense-in-depth con SAVEPOINT en `notify()` y `emitEvent()` cuando se llaman desde un client de transacción.
 - ✅ **INC-003 fix** — endpoints `/lookup` dedicados en employees y resource-requests, sin paginación, para alimentar dropdowns que necesitan el universo completo.
 - ✅ **Housekeeping mayo 2026** — 87 ramas remotas mergeadas eliminadas; deps no usadas removidas (`uuid`, `express-validator`, `jspdf`, `jspdf-autotable`, `@dnd-kit/sortable`); `.docx` binarios untrackeados.
+- ✅ **Cleanups pre-handoff 2026-05-02** (`#112`) — dead import borrado en `App.js`, README/HANDOFF alineados al alcance real (sin "→ bill"), corrección de stub falso de `/api/notifications` en PROJECT_STATE_HANDOFF, nota explicativa en TimeMe.test.js, [`docs/AUDIT_2026-05.md`](AUDIT_2026-05.md) como hoja de ruta de los 13 días previos al handoff.
 
 ### Próxima ola (Q3 2026 sugerida)
 
@@ -174,18 +184,18 @@ Items que conscientemente NO vamos a hacer hasta tener feedback de uso real:
 
 ---
 
-## Métricas actuales (mayo 2026)
+## Métricas actuales (mayo 2026, post SPEC-CRM-00 v1.1)
 
 | Métrica | Valor |
 |---|---|
-| Tablas en DB | ~28 |
-| Endpoints API | ~85 |
-| Módulos UI | ~25 |
-| Tests server | 638 / 638 ✅ |
-| Tests client | 325 / 327 ✅ (2 TimeMe pre-existentes) |
+| Tablas en DB | ~28 (sin contar columnas nuevas de CRM-00) |
+| Endpoints API | ~88 (incluye `check-margin`, `check-alerts`) |
+| Módulos UI | ~30 |
+| Tests server | ~1018 ✅ (post SPEC-CRM-00) |
+| Tests client | ~471 / 473 ✅ (2 TimeMe pre-existentes — DST/timezone, ver header del archivo) |
 | Build production cliente | clean, sin warnings |
 | Test coverage | server ~80%, client ~70% |
-| Líneas de código | server ~12K, client ~18K |
+| Líneas de código | server ~14K, client ~20K |
 
 ---
 

@@ -138,14 +138,18 @@ dvpnyx-quoter/
 
 ## 🔐 Roles y permisos
 
+7 roles activos (post SPEC-CRM-00 v1.1) + `preventa` legacy. Macros operativas en [`server/middleware/auth.js`](server/middleware/auth.js): `ROLES`, `SEE_ALL_ROLES`, `WRITE_ROLES`. Detalle completo y matriz de permisos en [`docs/specs/v2/02_glossary_and_roles.md`](docs/specs/v2/02_glossary_and_roles.md).
+
 | Rol | Descripción | Permisos típicos |
 |---|---|---|
-| `superadmin` | Bypass total | Todo + impersonation |
-| `admin` | Operativo | CRUD de todas las entidades, kick-off de cualquier contrato |
-| `lead` | Líder de equipo | Ve tiempo + plan-vs-real de sus reportes directos (`employees.manager_user_id = users.id`). Puede hacer kick-off si es DM del contrato |
-| `member` | Usuario estándar | Cotiza, registra horas, ve sus propios datos |
-| `viewer` | Solo lectura | Reportes |
-| `preventa` | Legacy | Middleware reescribe a `member` + `function='preventa'` |
+| `superadmin` | Bypass total | Todo + impersonation. Único que crea otros admin/superadmin. |
+| `admin` | Operativo | CRUD de todas las entidades, kick-off de cualquier contrato. Ve todo. |
+| `director` *(SPEC-CRM-00)* | VP / C-suite | Ve **todo** el pipeline + reportes. Sin permisos administrativos sobre usuarios. |
+| `lead` | Líder de equipo | Ve tiempo + plan-vs-real de sus reportes directos (`employees.manager_user_id = users.id`). Puede hacer kick-off si es DM del contrato. |
+| `member` | Usuario estándar | Cotiza, registra horas, ve sus propios datos. En oportunidades **ve solo las suyas** (account_owner o presales_lead). |
+| `viewer` | Solo lectura | Reportes. |
+| `external` *(SPEC-CRM-00)* | Acceso restringido | Usuarios fuera de DVP (clientes en demo, partners). En oportunidades retorna **403**. |
+| `preventa` (legacy) | Backward-compat | Middleware reescribe a `member` + `function='preventa'`. No usar para usuarios nuevos. |
 
 Campo adicional `users.function` (comercial / preventa / delivery_manager / capacity_manager / project_manager / fte_tecnico / people / finance / pmo / admin) para visibilidades futuras.
 
@@ -167,8 +171,8 @@ Convenciones de commits y PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 | Métrica | Valor |
 |---|---|
-| Tests backend | **638 / 638** ✅ |
-| Tests frontend | 325 / 327 (2 fallos pre-existentes en `client/src/modules/TimeMe.test.js`, sospecha DST/timezone — ver nota en cabecera del archivo) |
+| Tests backend | **1018+ / 1018+** ✅ (post SPEC-CRM-00) |
+| Tests frontend | 470+ / 472+ (2 fallos pre-existentes en `client/src/modules/TimeMe.test.js`, sospecha DST/timezone — ver nota en cabecera del archivo) |
 | Build cliente | Limpio, sin warnings |
 | Tablas en DB | 28 |
 | Endpoints API | ~85 |
