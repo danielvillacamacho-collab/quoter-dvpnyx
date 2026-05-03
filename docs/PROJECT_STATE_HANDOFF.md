@@ -137,9 +137,9 @@ Todos estos endpoints **existen, tienen tests, y están desplegados**:
 | `/api/time-entries` | ✅ | Time tracking por empleado contra asignaciones |
 | `/api/reports` | ✅ | 6 reportes críticos + dashboard personal |
 | `/api/bulk-import` | ✅ | CSV upload para empleados / clientes (admin+) |
-| `/api/squads` | ⚠️ **stub** | Devuelve array vacío. Squads **quitados de la UI** pero aún existen en DB como columna NOT NULL (ver §6) |
-| `/api/events` | ⚠️ stub | Hay tabla `events` pero la ruta aún no expone histórico |
-| `/api/notifications` | ⚠️ stub | Tabla existe, sin UI |
+| `/api/squads` | ⚠️ **stub** | Devuelve `501` con JSON `{error, spec}`. Squads **quitados de la UI** pero aún existen en DB como columna NOT NULL (ver §6). Ningún consumidor de la SPA llama este endpoint. |
+| `/api/events` | ⚠️ stub | Devuelve `501`. Hay tabla `events` poblándose, pero la ruta aún no expone histórico. Ningún consumidor de la SPA. |
+| `/api/notifications` | ✅ | Implementado. La SPA hace polling de `/unread-count` cada 60s desde el `Layout` (con visibility-gate por PERF-001) y el `NotificationsDrawer` consume el feed. |
 
 ### Frontend (`client/src/modules/`)
 Módulos con pantalla operativa:

@@ -1,6 +1,8 @@
 # DVPNYX Quoter + Capacity Planner
 
-SaaS interno de **Double V Partners** que integra **quote → contract → staff → bill**: cotizaciones de staff augmentation y proyectos de alcance fijo, contratos, solicitudes de recursos, asignación de empleados, time tracking, plan-vs-real semanal, revenue mensual y reportes ejecutivos.
+SaaS interno de **Double V Partners** que integra el ciclo **quote → contract → staff → time tracking**: cotizaciones de staff augmentation y proyectos de alcance fijo, contratos, solicitudes de recursos, asignación de empleados, time tracking, plan-vs-real semanal, revenue mensual y reportes ejecutivos.
+
+> Nota de alcance: la **facturación / invoicing** vive en otro sistema (Holded); este producto cubre desde la oportunidad hasta el reconocimiento de ingresos (`revenue_periods`). No hay integración contable automática.
 
 **Producción:** https://quoter.doublevpartners.com · **Dev:** https://dev.quoter.doublevpartners.com
 
@@ -166,7 +168,7 @@ Convenciones de commits y PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | Métrica | Valor |
 |---|---|
 | Tests backend | **638 / 638** ✅ |
-| Tests frontend | 325 / 327 (2 TimeMe pre-existentes, no bloqueantes) |
+| Tests frontend | 325 / 327 (2 fallos pre-existentes en `client/src/modules/TimeMe.test.js`, sospecha DST/timezone — ver nota en cabecera del archivo) |
 | Build cliente | Limpio, sin warnings |
 | Tablas en DB | 28 |
 | Endpoints API | ~85 |

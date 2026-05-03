@@ -1,3 +1,14 @@
+// HANDOFF NOTE (2026-05) — flaky-en-CI conocido.
+//
+// Históricamente este archivo reporta 2 tests rojos sin diagnóstico
+// publicado. Sospechosos primarios: los dos casos que dependen del cálculo
+// dinámico de "Lunes de esta semana" para pre-poblar una celda con un
+// `time_entry` existente (`deletes the entry when the cell is cleared and
+// one existed` y `PUTs when an existing cell value changes`). Ambos hacen
+// `m.toISOString().slice(0,10)` desde un `new Date()` local, lo que en
+// timezones con DST o cerca de medianoche UTC puede no coincidir con el
+// `iso()` que usa el componente. El equipo senior debería congelar el
+// reloj con `jest.useFakeTimers().setSystemTime(...)` antes de tocarlos.
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
