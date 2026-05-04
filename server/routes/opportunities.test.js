@@ -849,7 +849,7 @@ describe('POST /api/opportunities/:id/check-margin', () => {
 
   it('status transition includes A4 warning when margin_pct < 20% at proposal_validated', async () => {
     // Simulamos una opp en qualified con margin_pct=12 que avanza a proposal_validated.
-    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: 12 }] }); // SELECT current (FOR UPDATE)
+    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: 12, name: 'Deal', expected_close_date: '2026-06-30', next_step: 'Revisar' }] }); // SELECT current (FOR UPDATE)
     // UPDATE opp → after row incluye margin_pct=12
     queryQueue.push({ rows: [{ id: 'o1', status: 'proposal_validated', booking_amount_usd: 50000, margin_pct: 12 }] });
     const res = await client.call('POST', '/api/opportunities/o1/status', { new_status: 'proposal_validated' });
@@ -861,7 +861,7 @@ describe('POST /api/opportunities/:id/check-margin', () => {
   });
 
   it('status transition does NOT include A4 warning when margin_pct >= 20%', async () => {
-    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: 35 }] });
+    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: 35, name: 'Deal', expected_close_date: '2026-06-30', next_step: 'Revisar' }] });
     queryQueue.push({ rows: [{ id: 'o1', status: 'proposal_validated', booking_amount_usd: 50000, margin_pct: 35 }] });
     const res = await client.call('POST', '/api/opportunities/o1/status', { new_status: 'proposal_validated' });
     expect(res.status).toBe(200);
@@ -869,7 +869,7 @@ describe('POST /api/opportunities/:id/check-margin', () => {
   });
 
   it('status transition does NOT include A4 warning when margin_pct is null (not yet computed)', async () => {
-    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: null }] });
+    queryQueue.push({ rows: [{ id: 'o1', status: 'qualified', margin_pct: null, name: 'Deal', expected_close_date: '2026-06-30', next_step: 'Revisar' }] });
     queryQueue.push({ rows: [{ id: 'o1', status: 'proposal_validated', booking_amount_usd: 50000, margin_pct: null }] });
     const res = await client.call('POST', '/api/opportunities/o1/status', { new_status: 'proposal_validated' });
     expect(res.status).toBe(200);
