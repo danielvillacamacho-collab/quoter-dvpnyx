@@ -45,7 +45,6 @@ import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import BulkImport from './modules/BulkImport';
 import Users from './modules/Users';
-import Preferencias from './modules/Preferencias';
 import EmployeeCosts from './modules/EmployeeCosts';
 import EmployeeCostsImport from './modules/EmployeeCostsImport';
 // SPEC-CRM-01 — Contacts, Activities, Budgets
@@ -232,7 +231,6 @@ function Layout() {
           <Route path="/idle-time"                    element={<IdleTime />} />
           {isAdmin && <Route path="/admin/budgets" element={<Budgets />} />}
           <Route path="/admin/holidays"               element={<CountryHolidays />} />
-          <Route path="/preferencias" element={<Preferencias />} />
         </Routes>
         </ErrorBoundary>
         <Footer />

@@ -5,7 +5,7 @@ import {
   Home, UserPlus, FileText, Building2, Briefcase, FileCheck2,
   ClipboardList, CalendarDays, Users, Tag,
   Clock, BarChart3, BookOpen, Settings, UserCog, Upload,
-  Palette, LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
+  LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
   Contact, MessageSquare, Target, ChevronRight,
   Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
   GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
@@ -41,7 +41,6 @@ const ICONS = {
   '/reports/gente':             Users,
   '/reports/finanzas':          LineChart,
   '/wiki':                      BookOpen,
-  '/preferencias':              Palette,
   '/admin/params':              Settings,
   '/admin/exchange-rates':      Landmark,
   '/admin/employee-costs':      DollarSign,
@@ -118,7 +117,6 @@ export function buildGroups(isAdmin) {
     {
       key: 'ayuda', title: null, collapsible: false, items: [
         { path: '/wiki',         label: 'Wiki' },
-        { path: '/preferencias', label: 'Preferencias' },
       ],
     },
   ];
