@@ -674,6 +674,10 @@ const V2_ALTERS = `
   END
   $do_status_check_v11_add$;
 
+  -- Default was still 'open' from the original CREATE TABLE; update it to
+  -- match the new status vocabulary so INSERTs without explicit status work.
+  ALTER TABLE opportunities ALTER COLUMN status SET DEFAULT 'lead';
+
   -- Postponed siempre debe tener fecha de reactivación. Se nombra
   -- explícitamente para poder verificarlo en tests + drop si se quita.
   DO $do_postponed_check$
