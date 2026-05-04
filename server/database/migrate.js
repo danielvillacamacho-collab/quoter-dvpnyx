@@ -2441,6 +2441,132 @@ const migrate = async () => {
 
     await client.query('COMMIT');
 
+    // ── Fixups fuera de transacción: columnas que pueden faltar en DBs
+    // existentes por deploys parciales. Idempotente: IF NOT EXISTS.
+    const columnFixups = [
+      `ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS body_md TEXT NOT NULL DEFAULT ''`,
+      `ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL`,
+    ];
+    for (const fix of columnFixups) {
+      try {
+        await client.query(fix);
+      } catch (fixErr) {
+        // Si la tabla no existe aún, el error es inofensivo — la transacción
+        // principal ya la creó correctamente.
+        // eslint-disable-next-line no-console
+        console.warn('[migrate] column fixup skipped:', fixErr.message);
+      }
+    }
+
+    // Seed de artículos de ayuda — fuera de transacción para no bloquear
+    // el deploy si la transacción principal ya los insertó.
+    try {
+      await client.query(`
+        INSERT INTO help_articles (slug, category, sort_order, title, body_md, is_published)
+        VALUES
+          ('ayuda-bienvenida', 'general', 1,
+           'Bienvenida al Quoter DVPNYX',
+           '# Bienvenida al Quoter DVPNYX
+
+Este es el sistema interno de DVPNYX para gestionar cotizaciones, contratos, asignaciones y capacidad del equipo de entrega.
+
+## Módulos principales
+
+- **CRM / Oportunidades** — Pipeline comercial con 9 etapas, alertas y revenue forecasting.
+- **Cotizador** — Propuestas de staff augmentation o fixed scope con cálculo de márgenes.
+- **Contratos** — Lifecycle completo desde kick-off hasta cierre.
+- **Capacity Planner** — Disponibilidad del equipo y asignación de recursos.
+- **Time Tracking** — Registro de horas por asignación.
+- **Reportes** — Utilización, bench, compliance y plan vs real.',
+           true),
+          ('crm-pipeline-etapas', 'crm', 1,
+           'Pipeline CRM — Las 9 etapas',
+           '# Pipeline CRM — Las 9 etapas
+
+| Etapa | Descripción |
+|---|---|
+| Lead | Contacto inicial sin calificación |
+| Qualified | Necesidad confirmada |
+| Solution Design | Diseñando la propuesta |
+| Proposal Sent | Propuesta enviada |
+| Proposal Validated | Cliente revisó y dio feedback |
+| Negotiation | Negociando términos y precio |
+| Verbal Commit | Acuerdo verbal, pendiente firma |
+| Closed Won | Contrato firmado |
+| Closed Lost | Oportunidad perdida |
+
+También existe **Postponed** para oportunidades pausadas.
+
+## Reglas
+
+- Debes cumplir los exit criteria de cada etapa para avanzar.
+- Para Closed Lost es obligatorio registrar el motivo (mínimo 30 caracteres).',
+           true),
+          ('crm-alertas', 'crm', 2,
+           'Alertas automáticas del CRM (A1-A5)',
+           '# Alertas automáticas del CRM
+
+| Alerta | Nombre | Condición |
+|---|---|---|
+| A1 | Oportunidad fría | Sin actividad 14 días en etapas 1-4 |
+| A2 | Propuesta sin respuesta | Más de 7 días en Proposal Sent |
+| A3 | Negociación extendida | Más de 21 días en Negotiation |
+| A4 | Margen bajo | Margen proyectado bajo el umbral |
+| A5 | Verbal sin cierre | Más de 7 días en Verbal Commit |
+
+Cada alerta se deduplica: no recibirás la misma dos veces en 24 horas.',
+           true),
+          ('asignaciones-como-funciona', 'delivery', 1,
+           'Asignaciones — Motor de validación',
+           '# Asignaciones — Motor de validación
+
+Al asignar un empleado el sistema corre 4 validaciones:
+
+1. **Área** — debe coincidir con el área del resource request.
+2. **Level** — nivel del empleado debe ser >= nivel mínimo del request.
+3. **Capacidad** — el empleado no puede quedar sobrecargado (> 100%).
+4. **Overlap** — las fechas no pueden solaparse con otra asignación activa.
+
+## Overrides
+
+Si una validación falla puedes registrar un override con justificación. Queda registrado y visible para el Delivery Manager y Capacity Manager.',
+           true),
+          ('time-tracking-semanal', 'time', 1,
+           'Time Tracking — Registro de horas',
+           '# Time Tracking — Registro de horas
+
+## /time/me — Matriz diaria
+Registra horas por día y por asignación.
+
+## /time/team — Porcentaje semanal
+Registra qué porcentaje de tu semana dedicaste a cada asignación. El bench se calcula automáticamente.',
+           true),
+          ('reportes-plan-vs-real', 'reportes', 1,
+           'Reporte Plan vs Real',
+           '# Reporte Plan vs Real
+
+Compara lo planeado (asignaciones / capacidad) contra lo real (horas reportadas).
+
+| Estado | Significado |
+|---|---|
+| on_plan | Diferencia <= 10pp |
+| over | Reportó más horas de las asignadas |
+| under | Reportó menos horas de las asignadas |
+| missing | No registró horas esa semana |
+| unplanned | Registró horas sin asignación planificada |
+| no_data | Sin datos suficientes |
+
+Tolerancia: **+-10 puntos porcentuales**.',
+           true)
+        ON CONFLICT (slug) DO NOTHING
+      `);
+      // eslint-disable-next-line no-console
+      console.log('[migrate] help_articles seed ✓');
+    } catch (seedErr) {
+      // eslint-disable-next-line no-console
+      console.warn('[migrate] help_articles seed skipped:', seedErr.message);
+    }
+
     // Embeddings se aplican fuera de la transacción principal: si fallan
     // no debe abortar el resto de la migración.
     if (hasPgVector) {
