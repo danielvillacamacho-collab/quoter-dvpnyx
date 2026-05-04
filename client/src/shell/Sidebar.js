@@ -6,7 +6,7 @@ import {
   ClipboardList, CalendarDays, Users, Tag,
   Clock, BarChart3, BookOpen, Settings, UserCog, Upload,
   Palette, LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
-  Contact, MessageSquare, Target, HelpCircle, ChevronRight,
+  Contact, MessageSquare, Target, ChevronRight,
   Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
   GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
 } from 'lucide-react';
@@ -40,7 +40,6 @@ const ICONS = {
   '/reports/delivery':          FileCheck2,
   '/reports/gente':             Users,
   '/reports/finanzas':          LineChart,
-  '/help':                      HelpCircle,
   '/wiki':                      BookOpen,
   '/preferencias':              Palette,
   '/admin/params':              Settings,
@@ -118,7 +117,6 @@ export function buildGroups(isAdmin) {
     },
     {
       key: 'ayuda', title: null, collapsible: false, items: [
-        { path: '/help',         label: 'Manual de usuario' },
         { path: '/wiki',         label: 'Wiki' },
         { path: '/preferencias', label: 'Preferencias' },
       ],
