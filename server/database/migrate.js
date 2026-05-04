@@ -2282,6 +2282,18 @@ $do_deal_type_nn$;
 
 -- Update last_activity_at on clients (auto-calculated from activities)
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NULL;
+
+-- 6. Opportunity context brief (insumo estructurado para preventa)
+-- Nace del input que la country manager dio en chat para BBVA Colombia:
+-- contexto del cliente, alcance, pains, requisitos del nuevo proveedor y
+-- política/siguientes pasos. Cada sección es texto libre opcional; la UI
+-- guía con placeholders. El campo legacy "description" se mantiene para
+-- compat — es un resumen de una línea, mientras que estos 5 son el brief.
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_client       TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_scope        TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_pains        TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_requirements TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_politics     TEXT NULL;
 `;
 
 /**
