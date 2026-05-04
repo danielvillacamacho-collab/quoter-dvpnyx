@@ -30,7 +30,7 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
-const { safeRollback } = require('../utils/http');
+const { safeRollback, serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -603,6 +603,150 @@ router.post('/:contract_id/:yyyymm/close', async (req, res) => {
     serverError(res, 'POST /revenue/:contract_id/:yyyymm/close', err);
   } finally {
     conn.release();
+  }
+});
+
+
+/* -------- GET /capacity-projection --------
+ * Proyección mensual de ingresos para un contrato de capacidad,
+ * calculada a partir de las tarifas de cada asignación activa.
+ */
+const MONTH_LABELS_ES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+];
+
+function daysInMonth(year, month) {
+  // month is 1-indexed
+  return new Date(year, month, 0).getDate();
+}
+
+function toYYYYMM(year, month) {
+  return `${year}${String(month).padStart(2, '0')}`;
+}
+
+function monthLabel(year, month) {
+  return `${MONTH_LABELS_ES[month - 1]} ${year}`;
+}
+
+router.get('/capacity-projection', async (req, res) => {
+  const { contract_id } = req.query;
+  if (!contract_id) return res.status(400).json({ error: 'contract_id es requerido' });
+
+  try {
+    // 1. Verify contract exists and is type='capacity'
+    const { rows: cRows } = await pool.query(
+      `SELECT id, name, type FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
+      [contract_id]
+    );
+    if (!cRows.length) return res.status(404).json({ error: 'Contrato no encontrado' });
+    const contract = cRows[0];
+    if (contract.type !== 'capacity') {
+      return res.status(400).json({ error: `El contrato no es de tipo capacity (es '${contract.type}')` });
+    }
+
+    // 2. Fetch active assignments with a client_rate
+    const { rows: asgRows } = await pool.query(
+      `SELECT a.id, a.start_date, a.end_date, a.client_rate, a.client_rate_currency,
+              e.first_name || ' ' || e.last_name AS employee_name
+         FROM assignments a
+         LEFT JOIN employees e ON e.id = a.employee_id
+        WHERE a.contract_id = $1
+          AND a.deleted_at IS NULL
+          AND a.status NOT IN ('cancelled')
+          AND a.client_rate IS NOT NULL`,
+      [contract_id]
+    );
+
+    if (!asgRows.length) {
+      return res.json({
+        contract_id,
+        contract_name: contract.name,
+        contract_type: 'capacity',
+        months: [],
+        grand_total: 0,
+        currency_note: 'Todos los montos en la moneda de cada asignación. Conversión a USD no implementada.',
+      });
+    }
+
+    // 3. Determine date range: earliest start → latest end (or today+12m if null)
+    const today = new Date();
+    const horizonEnd = new Date(today.getFullYear(), today.getMonth() + 12, 0); // last day 12 months from now
+
+    let rangeStart = null;
+    let rangeEnd   = null;
+    for (const a of asgRows) {
+      const s = new Date(a.start_date);
+      const e = a.end_date ? new Date(a.end_date) : horizonEnd;
+      if (!rangeStart || s < rangeStart) rangeStart = s;
+      if (!rangeEnd   || e > rangeEnd)   rangeEnd   = e;
+    }
+
+    // 4. Build month-by-month projection
+    const monthsMap = new Map(); // yyyymm → { label, assignments: [], total }
+
+    let cur = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+    const endMonth = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), 1);
+
+    while (cur <= endMonth) {
+      const year  = cur.getFullYear();
+      const month = cur.getMonth() + 1; // 1-indexed
+      const yyyymm = toYYYYMM(year, month);
+      const dim = daysInMonth(year, month);
+      const monthStart = new Date(year, month - 1, 1);
+      const monthEndDay = new Date(year, month, 0); // last day of month
+
+      const assignmentRows = [];
+      for (const a of asgRows) {
+        const aStart = new Date(a.start_date);
+        const aEnd   = a.end_date ? new Date(a.end_date) : horizonEnd;
+
+        // Overlap check
+        if (aStart > monthEndDay || aEnd < monthStart) continue;
+
+        const activeStart = aStart > monthStart ? aStart : monthStart;
+        const activeEnd   = aEnd   < monthEndDay ? aEnd   : monthEndDay;
+        const daysActive  = Math.round((activeEnd - activeStart) / 86400000) + 1;
+        const proration   = daysActive / dim;
+        const amount      = parseFloat((Number(a.client_rate) * proration).toFixed(4));
+
+        assignmentRows.push({
+          assignment_id:        a.id,
+          employee_name:        a.employee_name,
+          client_rate:          Number(a.client_rate),
+          client_rate_currency: a.client_rate_currency || 'USD',
+          days_active:          daysActive,
+          days_in_month:        dim,
+          prorated_amount:      amount,
+        });
+      }
+
+      if (assignmentRows.length > 0) {
+        const total = parseFloat(assignmentRows.reduce((s, r) => s + r.prorated_amount, 0).toFixed(4));
+        monthsMap.set(yyyymm, {
+          yyyymm,
+          label: monthLabel(year, month),
+          assignments: assignmentRows,
+          total,
+        });
+      }
+
+      cur = new Date(year, month, 1); // advance to next month
+    }
+
+    const months = Array.from(monthsMap.values()).sort((a, b) => a.yyyymm.localeCompare(b.yyyymm));
+    const grand_total = parseFloat(months.reduce((s, m) => s + m.total, 0).toFixed(4));
+
+    res.json({
+      contract_id,
+      contract_name: contract.name,
+      contract_type: 'capacity',
+      months,
+      grand_total,
+      currency_note: 'Todos los montos en la moneda de cada asignación. Conversión a USD no implementada.',
+    });
+  } catch (err) {
+    serverError(res, 'GET /revenue/capacity-projection', err);
   }
 });
 

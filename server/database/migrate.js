@@ -2167,6 +2167,16 @@ const SPEC_II_00_HOLIDAY_SEED_SQL = `
 `;
 
 // ---------------------------------------------------------------------------
+// ASSIGNMENT-RATES — client_rate + client_rate_currency en assignments
+// ---------------------------------------------------------------------------
+const ASSIGNMENT_RATES_SQL = `
+-- client_rate: tarifa mensual acordada con el cliente para contratos de capacidad.
+-- Solo aplica cuando el contrato es type='capacity'. NULL = no configurada.
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS client_rate          NUMERIC(18,4) NULL;
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS client_rate_currency VARCHAR(3)    NULL DEFAULT 'USD';
+`;
+
+// ---------------------------------------------------------------------------
 // SPEC-CRM-01 — Contacts, Activities, Budgets + Opportunity enrichment
 // ---------------------------------------------------------------------------
 const SPEC_CRM_01_SQL = `
@@ -2331,6 +2341,7 @@ const migrate = async () => {
       ['SPEC_II_00_SQL',           SPEC_II_00_SQL],
       ['SPEC_II_00_HOLIDAY_SEED',  SPEC_II_00_HOLIDAY_SEED_SQL],
       ['SPEC_CRM_01',              SPEC_CRM_01_SQL],
+      ['ASSIGNMENT_RATES',         ASSIGNMENT_RATES_SQL],
     ];
     for (const [label, sql] of blocks) {
       try {

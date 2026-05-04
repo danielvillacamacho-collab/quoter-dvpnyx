@@ -307,7 +307,10 @@ const ASSIGNMENT_STATUSES = [
   { value: 'cancelled', label: 'Cancelada' },
 ];
 
+const VALID_RATE_CURRENCIES = ['USD', 'COP', 'EUR', 'MXN', 'GBP'];
+
 function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
+  const navigate = useNavigate();
   const [asg, setAsg]         = useState(null);
   const [form, setForm]       = useState(null);
   const [loading, setLoading] = useState(true);
@@ -322,12 +325,14 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
         if (cancelled) return;
         setAsg(data);
         setForm({
-          weekly_hours: data.weekly_hours ?? '',
-          start_date:   data.start_date   ? data.start_date.slice(0, 10)  : '',
-          end_date:     data.end_date     ? data.end_date.slice(0, 10)    : '',
-          role_title:   data.role_title   || '',
-          notes:        data.notes        || '',
-          status:       data.status       || 'planned',
+          weekly_hours:         data.weekly_hours ?? '',
+          start_date:           data.start_date   ? data.start_date.slice(0, 10)  : '',
+          end_date:             data.end_date     ? data.end_date.slice(0, 10)    : '',
+          role_title:           data.role_title   || '',
+          notes:                data.notes        || '',
+          status:               data.status       || 'planned',
+          client_rate:          data.client_rate  != null ? String(data.client_rate) : '',
+          client_rate_currency: data.client_rate_currency || data.contract_currency || 'USD',
         });
       })
       .catch((e) => { if (!cancelled) setErr(e.message || 'Error cargando asignación'); })
@@ -340,6 +345,7 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   const save = async (e) => {
     e.preventDefault();
     setSaving(true); setErr('');
+    const isCapacity = asg && asg.contract_type === 'capacity';
     try {
       await apiPut(`/api/assignments/${assignmentId}`, {
         weekly_hours: Number(form.weekly_hours),
@@ -348,6 +354,10 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
         role_title:   form.role_title || undefined,
         notes:        form.notes      || undefined,
         status:       form.status,
+        ...(isCapacity && {
+          client_rate:          form.client_rate !== '' ? Number(form.client_rate) : null,
+          client_rate_currency: form.client_rate_currency || 'USD',
+        }),
       });
       onSaved();
       onClose();
@@ -375,7 +385,20 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
       <div style={ms.box}>
         <div style={ms.title}>
           Editar asignación
-          {asg && <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--ds-text-soft, var(--text-light))', marginLeft: 8 }}>{asg.contract_name} · {asg.employee_first_name} {asg.employee_last_name}</span>}
+          {asg && (
+            <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--ds-text-soft, var(--text-light))', marginLeft: 8 }}>
+              {asg.contract_name} · {asg.employee_first_name} {asg.employee_last_name}
+              {asg.contract_type === 'capacity' && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/revenue?contract_id=${asg.contract_id}`)}
+                  style={{ marginLeft: 10, fontSize: 12, color: 'var(--ds-accent, var(--purple-dark))', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                >
+                  Ver proyección
+                </button>
+              )}
+            </span>
+          )}
         </div>
         {loading && <div style={{ fontSize: 13 }}>Cargando…</div>}
         {err && <div style={{ color: 'var(--ds-bad, #ef4444)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
@@ -409,6 +432,33 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
               <label style={ms.label}>Notas</label>
               <textarea style={{ ...ms.input, minHeight: 56, resize: 'vertical' }} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
             </div>
+            {asg && asg.contract_type === 'capacity' && (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginBottom: 12 }}>
+                  <div>
+                    <label style={ms.label}>Moneda</label>
+                    <select style={ms.input} value={form.client_rate_currency} onChange={(e) => set('client_rate_currency', e.target.value)}>
+                      {VALID_RATE_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={ms.label}>Tarifa mensual</label>
+                    <input
+                      style={ms.input}
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={form.client_rate}
+                      onChange={(e) => set('client_rate', e.target.value)}
+                      placeholder="Tarifa mensual acordada con el cliente"
+                    />
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--ds-text-soft, var(--text-light))', marginBottom: 12, marginTop: -6 }}>
+                  Tarifa mensual acordada con el cliente. Determina el ingreso proyectado para este contrato.
+                </div>
+              </>
+            )}
             <div style={ms.foot}>
               <button type="button" style={ms.btnGhost} onClick={onClose}>Cancelar</button>
               <button type="submit" style={ms.btnPrimary} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>

@@ -57,7 +57,7 @@ const OVERBOOK_FACTOR = 1.10;
 
 const EDITABLE_FIELDS = [
   'weekly_hours', 'start_date', 'end_date', 'role_title', 'notes',
-  'approval_required',
+  'approval_required', 'client_rate', 'client_rate_currency',
 ];
 
 /**
@@ -395,6 +395,7 @@ router.get('/:id', async (req, res) => {
          e.first_name AS employee_first_name, e.last_name AS employee_last_name,
          e.weekly_capacity_hours AS employee_capacity,
          c.name AS contract_name, c.client_id AS contract_client_id,
+         c.type AS contract_type, c.original_currency AS contract_currency,
          rr.role_title AS request_role_title,
          (SELECT COUNT(*)::int FROM time_entries WHERE assignment_id=a.id) AS time_entries_count
          FROM assignments a
@@ -429,6 +430,7 @@ router.post('/', adminOnly, async (req, res) => {
   const {
     resource_request_id, employee_id, contract_id, weekly_hours,
     start_date, end_date, role_title, notes, override_reason,
+    client_rate, client_rate_currency,
   } = body;
 
   if (!resource_request_id) return res.status(400).json({ error: 'resource_request_id es requerido' });
@@ -540,16 +542,18 @@ router.post('/', adminOnly, async (req, res) => {
     const { rows } = await conn.query(
       `INSERT INTO assignments
          (resource_request_id, employee_id, contract_id, weekly_hours,
-          start_date, end_date, status, role_title, notes,
+          start_date, end_date, status, role_title, notes, client_rate, client_rate_currency,
           approval_required, created_by,
           override_reason, override_checks, override_author_id, override_at)
-        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'planned'),$8,$9,COALESCE($10,false),$11,
-                $12,$13,$14,$15)
+        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'planned'),$8,$9,$10,COALESCE($11,'USD'),COALESCE($12,false),$13,
+                $14,$15,$16,$17)
         RETURNING *`,
       [
         resource_request_id, employee_id, contract_id, wh,
         start_date, end_date || null, body.status || null,
         role_title || null, notes || null,
+        client_rate != null ? Number(client_rate) : null,
+        client_rate_currency || null,
         body.approval_required != null ? !!body.approval_required : null,
         req.user.id,
         isOverride ? reasonTrimmed : null,
@@ -701,15 +705,17 @@ router.put('/:id', adminOnly, async (req, res) => {
     await conn.query('BEGIN');
     const { rows } = await conn.query(
       `UPDATE assignments SET
-          weekly_hours      = COALESCE($1, weekly_hours),
-          start_date        = COALESCE($2, start_date),
-          end_date          = COALESCE($3, end_date),
-          status            = COALESCE($4, status),
-          role_title        = COALESCE($5, role_title),
-          notes             = COALESCE($6, notes),
-          approval_required = COALESCE($7, approval_required),
-          updated_at        = NOW()
-        WHERE id=$8 AND deleted_at IS NULL
+          weekly_hours         = COALESCE($1, weekly_hours),
+          start_date           = COALESCE($2, start_date),
+          end_date             = COALESCE($3, end_date),
+          status               = COALESCE($4, status),
+          role_title           = COALESCE($5, role_title),
+          notes                = COALESCE($6, notes),
+          approval_required    = COALESCE($7, approval_required),
+          client_rate          = COALESCE($8, client_rate),
+          client_rate_currency = COALESCE($9, client_rate_currency),
+          updated_at           = NOW()
+        WHERE id=$10 AND deleted_at IS NULL
         RETURNING *`,
       [
         body.weekly_hours != null ? Number(body.weekly_hours) : null,
@@ -719,6 +725,8 @@ router.put('/:id', adminOnly, async (req, res) => {
         body.role_title ?? null,
         body.notes ?? null,
         body.approval_required != null ? !!body.approval_required : null,
+        body.client_rate != null ? Number(body.client_rate) : null,
+        body.client_rate_currency ?? null,
         req.params.id,
       ]
     );
