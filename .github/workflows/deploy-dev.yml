@@ -98,7 +98,6 @@ jobs:
             docker compose pull server
 
             docker compose run --rm -e NODE_ENV=development server sh -c "cd server && node database/migrate.js"
-            docker compose run --rm -e NODE_ENV=development server sh -c "cd server && node database/seed_synthetic.js" || echo "==> WARNING: synthetic seed failed (non-fatal)"
             docker compose up -d server
 
             echo "==> Service status:"
