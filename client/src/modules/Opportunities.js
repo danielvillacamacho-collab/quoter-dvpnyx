@@ -528,7 +528,8 @@ export default function Opportunities() {
   const loadUsers = useCallback(async () => {
     try {
       const r = await apiGet('/api/users?limit=200');
-      setUsers(r.data || r || []);
+      const list = Array.isArray(r?.data) ? r.data : Array.isArray(r) ? r : [];
+      setUsers(list);
     } catch {
       setUsers([]);
     }
