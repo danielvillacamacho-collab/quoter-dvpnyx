@@ -98,6 +98,7 @@ jobs:
             docker compose pull server
 
             docker compose run --rm server sh -c "cd server && node database/migrate.js"
+            docker compose run --rm server sh -c "cd server && node database/seed_synthetic.js"
             docker compose up -d server
 
             echo "==> Service status:"
