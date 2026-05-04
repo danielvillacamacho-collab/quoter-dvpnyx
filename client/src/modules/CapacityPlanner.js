@@ -170,6 +170,29 @@ const s = {
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   }),
 
+  // Empleados inactivos (terminated) — separador + fila atenuada
+  inactiveSeparator: (weeksLen) => ({
+    display: 'grid',
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
+    borderTop: '2px solid var(--ds-border, #ddd)',
+    background: 'var(--ds-bg-soft, #f4f5f7)',
+    minHeight: 32,
+  }),
+  inactiveSeparatorCell: {
+    padding: '6px 12px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--ds-text-dim, #888)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    position: 'sticky',
+    left: 0,
+    background: 'var(--ds-bg-soft, #f4f5f7)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+
   empty: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))', fontSize: 14 },
   error: { padding: 16, background: 'var(--ds-bad-soft, #fff0f0)', color: 'oklch(0.45 0.18 25)', borderRadius: 'var(--ds-radius, 8px)', fontSize: 13 },
   loading: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))' },
@@ -424,7 +447,7 @@ function UnassignedBar({ r }) {
   );
 }
 
-function EmployeeRow({ emp, weeks, onOpen }) {
+function EmployeeRow({ emp, weeks, onOpen, inactive }) {
   // Index assignments by week for O(1) lookup when rendering.
   const byWeek = useMemo(() => {
     const map = new Map();
@@ -438,17 +461,36 @@ function EmployeeRow({ emp, weeks, onOpen }) {
     return map;
   }, [emp.assignments]);
 
+  const rowStyle = inactive
+    ? { ...s.row(weeks.length), opacity: 0.6, background: 'var(--ds-bg-soft, #f9f9f9)' }
+    : s.row(weeks.length);
+
+  const empCellStyle = inactive
+    ? { ...s.empCell, background: 'var(--ds-bg-soft, #f4f4f4)' }
+    : s.empCell;
+
   return (
-    <div style={s.row(weeks.length)} data-testid={`emp-row-${emp.id}`}>
-      <div style={s.empCell}>
-        <div style={s.empName} title={emp.full_name}>{emp.full_name}</div>
+    <div style={rowStyle} data-testid={`emp-row-${emp.id}`}>
+      <div style={empCellStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <div style={s.empName} title={emp.full_name}>{emp.full_name}</div>
+          {inactive && (
+            <span style={{
+              fontSize: 9.5, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+              background: 'var(--ds-text-dim, #888)', color: '#fff',
+              textTransform: 'uppercase', letterSpacing: 0.4, flexShrink: 0,
+            }}>
+              Inactivo
+            </span>
+          )}
+        </div>
         <div style={s.empMeta}>{emp.level} · {emp.area_name || '—'}</div>
         <div style={s.empCap}>{emp.weekly_capacity_hours}h/sem</div>
       </div>
       {weeks.map((w, i) => {
         const weekInfo = emp.weekly[i] || { hours: 0, utilization_pct: 0, bucket: 'idle' };
         const asgs = byWeek.get(i) || [];
-        const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : '#fff';
+        const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : (inactive ? 'var(--ds-bg-soft, #f9f9f9)' : '#fff');
         return (
           <div key={w.index} style={s.weekCell(cellBg)} data-testid={`cell-${emp.id}-${i}`}>
             {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} />)}
@@ -996,15 +1038,23 @@ export default function CapacityPlanner() {
   const wks = data?.weeks || [];
   const projects = useMemo(() => buildProjectsView(data), [data]);
 
-  // Empleados ordenados: alfabético por defecto; por utilización cuando hay sortWeek activo.
-  const sortedEmployees = useMemo(() => {
-    const emps = data?.employees || [];
-    if (sortWeek === null || sortWeek === undefined) return emps;
-    return [...emps].sort((a, b) => {
-      const pctA = a.weekly?.[sortWeek]?.utilization_pct ?? 0;
-      const pctB = b.weekly?.[sortWeek]?.utilization_pct ?? 0;
-      return sortDir === 'asc' ? pctA - pctB : pctB - pctA;
-    });
+  // Empleados separados en activos (cualquier status salvo terminated) e inactivos.
+  // Los inactivos siempre van al fondo en su propia sección, nunca se mezclan con el sort.
+  const { sortedEmployees, inactiveEmployees } = useMemo(() => {
+    const all = data?.employees || [];
+    const active   = all.filter((e) => e.status !== 'terminated');
+    const inactive = all.filter((e) => e.status === 'terminated')
+                        .sort((a, b) => a.full_name.localeCompare(b.full_name));
+
+    const sorted = (sortWeek === null || sortWeek === undefined)
+      ? active
+      : [...active].sort((a, b) => {
+          const pctA = a.weekly?.[sortWeek]?.utilization_pct ?? 0;
+          const pctB = b.weekly?.[sortWeek]?.utilization_pct ?? 0;
+          return sortDir === 'asc' ? pctA - pctB : pctB - pctA;
+        });
+
+    return { sortedEmployees: sorted, inactiveEmployees: inactive };
   }, [data, sortWeek, sortDir]);
 
   return (
@@ -1168,11 +1218,31 @@ export default function CapacityPlanner() {
 
               {view === 'employees' ? (
                 <>
-                  {/* Employees */}
-                  {sortedEmployees.length === 0 && (
+                  {/* Empleados activos */}
+                  {sortedEmployees.length === 0 && inactiveEmployees.length === 0 && (
                     <div style={s.empty}>No hay empleados que cumplan los filtros.</div>
                   )}
-                  {sortedEmployees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />)}
+                  {sortedEmployees.map((emp) => (
+                    <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />
+                  ))}
+
+                  {/* Separador + empleados inactivos (terminated con historial en el viewport) */}
+                  {inactiveEmployees.length > 0 && (
+                    <>
+                      <div style={s.inactiveSeparator(wks.length)}>
+                        <div style={s.inactiveSeparatorCell}>
+                          <span>⚠ Ya no en la empresa</span>
+                          <span style={{ fontWeight: 400, fontSize: 10.5 }}>({inactiveEmployees.length})</span>
+                        </div>
+                        {wks.map((w) => (
+                          <div key={w.index} style={{ borderLeft: '1px solid var(--ds-border, #eee)' }} />
+                        ))}
+                      </div>
+                      {inactiveEmployees.map((emp) => (
+                        <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} inactive />
+                      ))}
+                    </>
+                  )}
 
                   {/* Unassigned requests (US-PLN-5 + US-RR-3: click → candidates modal) */}
                   {data.open_requests.map((r) => (
