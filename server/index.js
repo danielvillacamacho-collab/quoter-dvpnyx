@@ -8,6 +8,32 @@ const path = require('path');
 const crypto = require('crypto');
 const { serverError } = require('./utils/http');
 
+// ── Startup fixup: garantiza que help_articles tenga las columnas correctas
+// independiente del estado de la migración. Idempotente. ─────────────────────
+(async () => {
+  try {
+    const pool = require('./database/pool');
+    // Agregar columnas si faltan (DBs creadas por deploys parciales)
+    await pool.query(`ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS body_md TEXT NOT NULL DEFAULT ''`);
+    await pool.query(`ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL`);
+    // Seed artículos base si la tabla está vacía
+    await pool.query(`
+      INSERT INTO help_articles (slug, category, sort_order, title, body_md, is_published) VALUES
+        ('ayuda-bienvenida','general',1,'Bienvenida al Quoter DVPNYX','# Bienvenida al Quoter DVPNYX\n\nEste es el sistema interno de DVPNYX para gestionar cotizaciones, contratos, asignaciones y capacidad del equipo de entrega.\n\n## Módulos principales\n\n- **CRM / Oportunidades** — Pipeline comercial con 9 etapas, alertas y revenue forecasting.\n- **Cotizador** — Propuestas de staff augmentation o fixed scope con cálculo de márgenes.\n- **Contratos** — Lifecycle completo desde kick-off hasta cierre.\n- **Capacity Planner** — Disponibilidad del equipo y asignación de recursos.\n- **Time Tracking** — Registro de horas por asignación.\n- **Reportes** — Utilización, bench, compliance y plan vs real.',true),
+        ('crm-pipeline-etapas','crm',1,'Pipeline CRM — Las 9 etapas','# Pipeline CRM — Las 9 etapas\n\n| Etapa | Descripción |\n|---|---|\n| Lead | Contacto inicial sin calificación |\n| Qualified | Necesidad confirmada |\n| Solution Design | Diseñando la propuesta |\n| Proposal Sent | Propuesta enviada |\n| Proposal Validated | Cliente revisó y dio feedback |\n| Negotiation | Negociando términos y precio |\n| Verbal Commit | Acuerdo verbal, pendiente firma |\n| Closed Won | Contrato firmado |\n| Closed Lost | Oportunidad perdida |\n\nTambién existe **Postponed** para oportunidades pausadas.\n\n## Reglas\n\n- Debes cumplir los exit criteria de cada etapa para avanzar.\n- Para Closed Lost es obligatorio registrar el motivo (mínimo 30 caracteres).',true),
+        ('crm-alertas','crm',2,'Alertas automáticas del CRM (A1-A5)','# Alertas automáticas del CRM\n\n| Alerta | Nombre | Condición |\n|---|---|---|\n| A1 | Oportunidad fría | Sin actividad 14 días en etapas 1-4 |\n| A2 | Propuesta sin respuesta | Más de 7 días en Proposal Sent |\n| A3 | Negociación extendida | Más de 21 días en Negotiation |\n| A4 | Margen bajo | Margen proyectado bajo el umbral |\n| A5 | Verbal sin cierre | Más de 7 días en Verbal Commit |\n\nCada alerta se deduplica: no recibirás la misma dos veces en 24 horas.',true),
+        ('asignaciones-como-funciona','delivery',1,'Asignaciones — Motor de validación','# Asignaciones — Motor de validación\n\nAl asignar un empleado el sistema corre 4 validaciones:\n\n1. **Área** — debe coincidir con el área del resource request.\n2. **Level** — nivel del empleado debe ser >= nivel mínimo del request.\n3. **Capacidad** — el empleado no puede quedar sobrecargado (> 100%).\n4. **Overlap** — las fechas no pueden solaparse con otra asignación activa.\n\n## Overrides\n\nSi una validación falla puedes registrar un override con justificación. Queda registrado y visible para el Delivery Manager y Capacity Manager.',true),
+        ('time-tracking-semanal','time',1,'Time Tracking — Registro de horas','# Time Tracking — Registro de horas\n\n## /time/me — Matriz diaria\nRegistra horas por día y por asignación.\n\n## /time/team — Porcentaje semanal\nRegistra qué porcentaje de tu semana dedicaste a cada asignación. El bench se calcula automáticamente.',true),
+        ('reportes-plan-vs-real','reportes',1,'Reporte Plan vs Real','# Reporte Plan vs Real\n\nCompara lo planeado (asignaciones / capacidad) contra lo real (horas reportadas).\n\n| Estado | Significado |\n|---|---|\n| on_plan | Diferencia <= 10pp |\n| over | Reportó más horas de las asignadas |\n| under | Reportó menos horas de las asignadas |\n| missing | No registró horas esa semana |\n| unplanned | Registró horas sin asignación planificada |\n| no_data | Sin datos suficientes |\n\nTolerancia: +-10 puntos porcentuales.',true)
+      ON CONFLICT (slug) DO NOTHING
+    `);
+    console.log('[startup] help_articles schema + seed OK');
+  } catch (e) {
+    // Si la tabla no existe todavía (primer boot antes de migración), es inofensivo.
+    console.warn('[startup] help_articles fixup skipped:', e.message);
+  }
+})();
+
 const app = express();
 // Detrás de Traefik (1 hop). Necesario para que req.ip sea el IP real del
 // cliente y el rate-limit no agrupe todo el tráfico bajo el IP del proxy.
