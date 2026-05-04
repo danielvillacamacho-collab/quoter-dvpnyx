@@ -17,6 +17,7 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
+const { serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -79,9 +80,7 @@ router.get('/', async (req, res) => {
 
     res.json({ months, currencies, cells: cellMap });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /admin/exchange-rates failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /admin/exchange-rates', err);
   }
 });
 
@@ -117,9 +116,7 @@ router.put('/:yyyymm/:currency', adminOnly, async (req, res) => {
     );
     res.json(rows[0]);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /admin/exchange-rates/:yyyymm/:currency failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /admin/exchange-rates/:yyyymm/:currency', err);
   }
 });
 
@@ -142,9 +139,7 @@ router.delete('/:yyyymm/:currency', adminOnly, async (req, res) => {
     );
     res.json({ ok: true });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('DELETE /admin/exchange-rates/:yyyymm/:currency failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'DELETE /admin/exchange-rates/:yyyymm/:currency', err);
   }
 });
 

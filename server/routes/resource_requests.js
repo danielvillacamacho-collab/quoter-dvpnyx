@@ -105,9 +105,7 @@ router.get('/lookup', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /resource-requests/lookup failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /resource-requests/lookup', err);
   }
 });
 
@@ -165,9 +163,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /resource-requests failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /resource-requests', err);
   }
 });
 
@@ -315,9 +311,7 @@ router.get('/:id/candidates', async (req, res) => {
       },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /api/resource-requests/:id/candidates failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /api/resource-requests/:id/candidates', err);
   }
 });
 
@@ -378,9 +372,7 @@ router.post('/', adminOnly, async (req, res) => {
     });
     res.status(201).json(rr);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /resource-requests failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /resource-requests', err);
   }
 });
 
@@ -447,9 +439,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /resource-requests/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /resource-requests/:id', err);
   }
 });
 

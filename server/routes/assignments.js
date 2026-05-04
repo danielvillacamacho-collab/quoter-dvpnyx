@@ -296,9 +296,7 @@ router.get('/validate', async (req, res) => {
       },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /assignments/validate failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /assignments/validate', err);
   }
 });
 
@@ -385,9 +383,7 @@ router.get('/export.csv', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="asignaciones.csv"');
     res.send(csv);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /assignments/export.csv failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /assignments/export.csv', err);
   }
 });
 
@@ -649,9 +645,7 @@ router.post('/', adminOnly, async (req, res) => {
     }
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('POST /assignments failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /assignments', err);
   } finally {
     conn.release();
   }
@@ -739,9 +733,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     res.json(after);
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('PUT /assignments/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /assignments/:id', err);
   } finally {
     conn.release();
   }
@@ -788,9 +780,7 @@ router.delete('/:id', adminOnly, async (req, res) => {
       preserved_time_entries: te[0].count,
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('DELETE /assignments/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'DELETE /assignments/:id', err);
   }
 });
 

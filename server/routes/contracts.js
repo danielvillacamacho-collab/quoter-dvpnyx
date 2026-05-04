@@ -123,9 +123,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /contracts failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /contracts', err);
   }
 });
 
@@ -182,9 +180,7 @@ router.get('/export.csv', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="contratos.csv"');
     res.send(csv);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /contracts/export.csv failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /contracts/export.csv', err);
   }
 });
 
@@ -328,9 +324,7 @@ router.post('/', adminOnly, async (req, res) => {
     });
     res.status(201).json(c);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /contracts failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contracts', err);
   }
 });
 
@@ -452,9 +446,7 @@ router.post('/from-quotation/:quotation_id', adminOnly, async (req, res) => {
 
     res.status(201).json(c);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /contracts/from-quotation failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contracts/from-quotation', err);
   }
 });
 
@@ -554,9 +546,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /contracts/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /contracts/:id', err);
   }
 });
 
@@ -670,9 +660,7 @@ router.post('/:id/status', adminOnly, async (req, res) => {
     });
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('POST /contracts/:id/status failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contracts/:id/status', err);
   } finally {
     conn.release();
   }
@@ -956,9 +944,7 @@ router.post('/:id/kick-off', async (req, res) => {
     });
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('POST /contracts/:id/kick-off failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contracts/:id/kick-off', err);
   } finally {
     conn.release();
   }

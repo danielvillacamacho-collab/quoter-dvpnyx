@@ -151,9 +151,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total, pages: Math.ceil(total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /contacts failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /contacts', err);
   }
 });
 
@@ -170,9 +168,7 @@ router.get('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Contacto no encontrado' });
     res.json(rows[0]);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /contacts/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /contacts/:id', err);
   }
 });
 
@@ -214,9 +210,7 @@ router.post('/', async (req, res) => {
     });
     res.status(201).json(contact);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /contacts failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contacts', err);
   }
 });
 
@@ -277,9 +271,7 @@ router.put('/:id', async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /contacts/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /contacts/:id', err);
   }
 });
 

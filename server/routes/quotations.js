@@ -92,9 +92,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /quotations failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /quotations', err);
   }
 });
 
@@ -199,7 +197,7 @@ router.post('/', async (req, res) => {
     res.status(201).json(quot);
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(err); res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'quotations', err);
   } finally { client.release(); }
 });
 
@@ -396,7 +394,7 @@ router.put('/:id', async (req, res) => {
     });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error(err); res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'quotations', err);
   } finally { client.release(); }
 });
 

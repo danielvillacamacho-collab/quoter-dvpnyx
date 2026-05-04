@@ -57,9 +57,7 @@ router.get('/utilization', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /reports/utilization failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /reports/utilization', err);
   }
 });
 
@@ -93,9 +91,7 @@ router.get('/bench', async (req, res) => {
     );
     res.json({ data: rows, threshold });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /reports/bench failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /reports/bench', err);
   }
 });
 
@@ -401,9 +397,7 @@ router.get('/plan-vs-real', async (req, res) => {
 
     res.json({ week_start_date: weekStart, week_end_date: weekEnd, rows: result });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /reports/plan-vs-real failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /reports/plan-vs-real', err);
   }
 });
 
@@ -474,9 +468,7 @@ router.get('/my-dashboard', async (req, res) => {
       },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /reports/my-dashboard failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /reports/my-dashboard', err);
   }
 });
 

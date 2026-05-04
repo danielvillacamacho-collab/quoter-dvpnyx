@@ -6,7 +6,7 @@ import {
   ClipboardList, CalendarDays, LayoutGrid, Users, Layers, Tag,
   Clock, TrendingUp, BarChart3, BookOpen, Settings, UserCog, Upload,
   Palette, LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
-  Contact, MessageSquare, Target,
+  Contact, MessageSquare, Target, HelpCircle,
 } from 'lucide-react';
 
 /**
@@ -59,6 +59,7 @@ const ICONS = {
   '/reports/delivery':        FileCheck2,
   '/reports/gente':           Users,
   '/reports/finanzas':        DollarSign,
+  '/help':                    HelpCircle,
   '/wiki':                    BookOpen,
   '/admin/params':            Settings,
   '/admin/exchange-rates':    BarChart3,
@@ -141,6 +142,7 @@ export function buildGroups(isAdmin) {
     },
     {
       title: null, items: [
+        { path: '/help',         label: 'Manual de usuario' },
         { path: '/wiki',         label: 'Wiki' },
         { path: '/preferencias', label: 'Preferencias' },
       ],

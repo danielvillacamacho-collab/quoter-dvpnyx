@@ -674,6 +674,10 @@ const V2_ALTERS = `
   END
   $do_status_check_v11_add$;
 
+  -- Default was still 'open' from the original CREATE TABLE; update it to
+  -- match the new status vocabulary so INSERTs without explicit status work.
+  ALTER TABLE opportunities ALTER COLUMN status SET DEFAULT 'lead';
+
   -- Postponed siempre debe tener fecha de reactivación. Se nombra
   -- explícitamente para poder verificarlo en tests + drop si se quita.
   DO $do_postponed_check$
@@ -2280,6 +2284,85 @@ $do_deal_type_nn$;
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NULL;
 `;
 
+// ---------------------------------------------------------------------------
+// HELP_CENTER_SQL — Manual de usuario vivo (feat/help-center-vivo)
+// @docs-required: ayuda-bienvenida
+// ---------------------------------------------------------------------------
+const HELP_CENTER_SQL = `
+-- ──────────────────────────────────────────────────────────────────────────
+-- help_articles: contenido del manual de usuario vivo.
+-- Cada artículo tiene un slug único que funciona como clave estable
+-- para referencias desde código (p.ej. @docs-required: <slug>).
+-- ──────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS help_articles (
+  id              UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug            TEXT          NOT NULL UNIQUE,
+  category        TEXT          NOT NULL,
+  sort_order      INTEGER       NOT NULL DEFAULT 0,
+  title           TEXT          NOT NULL,
+  body_md         TEXT          NOT NULL DEFAULT '',
+  is_published    BOOLEAN       NOT NULL DEFAULT false,
+  created_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  updated_by      UUID          REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS help_articles_category_idx
+  ON help_articles (category, sort_order);
+CREATE INDEX IF NOT EXISTS help_articles_published_idx
+  ON help_articles (is_published, category, sort_order);
+
+-- Trigger: actualiza updated_at automáticamente
+CREATE OR REPLACE FUNCTION update_help_article_ts()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$;
+
+DO $help_trigger$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_trigger WHERE tgname = 'help_articles_updated_at'
+  ) THEN
+    CREATE TRIGGER help_articles_updated_at
+      BEFORE UPDATE ON help_articles
+      FOR EACH ROW EXECUTE FUNCTION update_help_article_ts();
+  END IF;
+END
+$help_trigger$;
+
+-- Seed inicial — idempotente vía ON CONFLICT DO NOTHING
+INSERT INTO help_articles (slug, category, sort_order, title, body_md, is_published)
+VALUES
+  ('ayuda-bienvenida', 'general', 1,
+   'Bienvenida al Quoter DVPNYX',
+   E'# Bienvenida al Quoter DVPNYX\n\nEste es el sistema interno de DVPNYX para gestionar **cotizaciones, contratos, asignaciones y capacidad** del equipo de entrega.\n\n## ¿Qué puedo hacer aquí?\n\n- **CRM / Oportunidades** — seguimiento del pipeline comercial con 9 etapas, alertas automáticas y revenue forecasting.\n- **Cotizador** — crea propuestas de staff augmentation o fixed scope con cálculo de márgenes.\n- **Contratos** — lifecycle completo desde kick-off hasta cierre.\n- **Capacity Planner** — visualiza disponibilidad del equipo y asigna recursos a contratos.\n- **Time Tracking** — registro de horas por asignación (semanal y diario).\n- **Reportes** — utilización, bench, compliance de horas y plan vs real.\n\n## ¿Tienes preguntas?\n\nRevisa los artículos de cada módulo en este manual o contacta a tu manager.',
+   true),
+  ('crm-pipeline-etapas', 'crm', 1,
+   'Pipeline CRM — Las 9 etapas',
+   E'# Pipeline CRM — Las 9 etapas\n\n| # | Etapa | Descripción |\n|---|---|---|\n| 1 | **Lead** | Contacto inicial, sin calificación aún |\n| 2 | **Qualified** | Necesidad confirmada, presupuesto y timeline tentativos |\n| 3 | **Solution Design** | Diseñando la propuesta técnica |\n| 4 | **Proposal Sent** | Propuesta enviada al cliente |\n| 5 | **Proposal Validated** | Cliente revisó y dio retroalimentación |\n| 6 | **Negotiation** | Negociación de términos y precio |\n| 7 | **Verbal Commit** | Acuerdo verbal, pendiente firma |\n| 8 | **Closed Won** ✅ | Contrato firmado |\n| 9 | **Closed Lost** ❌ | Oportunidad perdida |\n\nTambién existe el estado **Postponed** para oportunidades pausadas temporalmente.\n\n## Reglas importantes\n\n- Solo puedes avanzar de etapa si cumples los **exit criteria** de la etapa actual.\n- Para cerrar como Lost debes registrar el **motivo de pérdida** (mínimo 30 caracteres).\n- Las alertas A1–A5 te notifican automáticamente cuando una oportunidad lleva demasiado tiempo sin avanzar.',
+   true),
+  ('crm-alertas', 'crm', 2,
+   'Alertas automáticas del CRM (A1–A5)',
+   E'# Alertas automáticas del CRM\n\n| Alerta | Nombre | Condición |\n|---|---|---|\n| **A1** | Oportunidad fría | Sin actividad 14 días en etapas 1–4 |\n| **A2** | Propuesta sin respuesta | Más de 7 días en Proposal Sent |\n| **A3** | Negociación extendida | Más de 21 días en Negotiation |\n| **A4** | Margen bajo | Margen proyectado bajo el umbral |\n| **A5** | Verbal sin cierre | Más de 7 días en Verbal Commit |\n\nCada alerta se deduplica: no recibirás la misma dos veces en 24 horas para la misma oportunidad.',
+   true),
+  ('asignaciones-como-funciona', 'delivery', 1,
+   'Asignaciones — Motor de validación',
+   E'# Asignaciones — Motor de validación\n\nAl asignar un empleado el sistema corre 4 validaciones:\n\n1. **Área** — debe coincidir con el área del resource request.\n2. **Level** — nivel del empleado debe ser >= nivel mínimo del request.\n3. **Capacidad** — el empleado no puede quedar sobrecargado (> 100%).\n4. **Overlap** — las fechas no pueden solaparse con otra asignación activa en el mismo contrato.\n\n## Overrides\n\nSi una validación falla puedes registrar un override con justificación. Queda registrado y visible para el Delivery Manager y Capacity Manager.',
+   true),
+  ('time-tracking-semanal', 'time', 1,
+   'Time Tracking — Registro de horas',
+   E'# Time Tracking — Registro de horas\n\n## /time/me — Matriz diaria\nRegistra horas por día y por asignación.\n\n## /time/team — Porcentaje semanal\nRegistra qué porcentaje de tu semana dedicaste a cada asignación. El **bench** se calcula automáticamente: si reportas 60% de tus horas, el 40% restante se marca como bench.',
+   true),
+  ('reportes-plan-vs-real', 'reportes', 1,
+   'Reporte Plan vs Real',
+   E'# Reporte Plan vs Real\n\nCompara lo planeado (asignaciones / capacidad) contra lo real (horas reportadas).\n\n| Estado | Significado |\n|---|---|\n| `on_plan` | Diferencia ≤ 10pp |\n| `over` | Reportó más horas de las asignadas |\n| `under` | Reportó menos horas de las asignadas |\n| `missing` | No registró horas esa semana |\n| `unplanned` | Registró horas sin asignación planificada |\n| `no_data` | Sin datos suficientes |\n\nTolerancia: **±10 puntos porcentuales**.',
+   true)
+ON CONFLICT (slug) DO NOTHING;
+`;
+
 /**
  * Intenta crear la extensión pgvector. Si no está disponible (no instalada
  * en la imagen postgres, o falta privilegio), captura el error y devuelve
@@ -2327,6 +2410,7 @@ const migrate = async () => {
       ['SPEC_II_00_SQL',           SPEC_II_00_SQL],
       ['SPEC_II_00_HOLIDAY_SEED',  SPEC_II_00_HOLIDAY_SEED_SQL],
       ['SPEC_CRM_01',              SPEC_CRM_01_SQL],
+      ['HELP_CENTER',              HELP_CENTER_SQL],
     ];
     for (const [label, sql] of blocks) {
       try {

@@ -5,12 +5,21 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 
+const crypto = require('crypto');
+const { serverError } = require('./utils/http');
+
 const app = express();
 // Detrás de Traefik (1 hop). Necesario para que req.ip sea el IP real del
 // cliente y el rate-limit no agrupe todo el tráfico bajo el IP del proxy.
 // Más seguro que 'true' porque sólo confía en un único hop.
 app.set('trust proxy', 1);
 app.use(helmet());
+
+// ── Request ID — every request gets a unique ID for log correlation ──
+app.use((req, _res, next) => {
+  req.requestId = crypto.randomBytes(6).toString('hex');
+  next();
+});
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000', credentials: true }));
 app.use(express.json({ limit: '5mb' }));
 
@@ -114,6 +123,7 @@ app.use('/api/novelties',         require('./routes/novelties'));
 app.use('/api/holidays',          require('./routes/holidays'));
 app.use('/api/idle-time',         require('./routes/idle_time'));
 app.use('/api/reports/v2',        require('./routes/reports_v2'));    // Reports v2 — aggregate endpoints for charts
+app.use('/api/help',              require('./routes/help'));           // Manual de usuario vivo
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.
@@ -128,7 +138,10 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Error interno del servidor' }); });
+// Global error handler — safety net for unhandled errors in routes
+app.use((err, req, res, _next) => {
+  serverError(res, `UNHANDLED ${req.method} ${req.originalUrl}`, err);
+});
 
 // Only start the HTTP listener when executed directly (EC2 / local dev).
 // When required by lambda.js for API Gateway, we just export the app.

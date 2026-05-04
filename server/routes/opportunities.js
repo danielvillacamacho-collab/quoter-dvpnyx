@@ -189,9 +189,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total, pages: Math.ceil(total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /opportunities failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /opportunities', err);
   }
 });
 
@@ -299,9 +297,7 @@ router.get('/kanban', async (req, res) => {
 
     res.json({ stages, global_summary });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /opportunities/kanban failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /opportunities/kanban', err);
   }
 });
 
@@ -351,9 +347,7 @@ router.get('/export.csv', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="oportunidades.csv"');
     res.send(csv);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /opportunities/export.csv failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /opportunities/export.csv', err);
   }
 });
 
@@ -371,9 +365,7 @@ router.post('/check-alerts', async (req, res) => {
     const result = await runAlertScan(pool, { user: req.user });
     res.json(result);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /opportunities/check-alerts failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /opportunities/check-alerts', err);
   }
 });
 
@@ -413,9 +405,7 @@ router.get('/:id', async (req, res) => {
 
     res.json({ ...row, client, quotations });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /opportunities/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /opportunities/:id', err);
   }
 });
 
@@ -592,9 +582,7 @@ router.post('/', async (req, res) => {
     });
     res.status(201).json(opp);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /opportunities failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /opportunities', err);
   }
 });
 
@@ -747,9 +735,7 @@ router.put('/:id', async (req, res) => {
 
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /opportunities/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /opportunities/:id', err);
   }
 });
 
@@ -1101,9 +1087,7 @@ router.post('/:id/status', async (req, res) => {
     res.json({ ...after, warnings });
   } catch (err) {
     await safeRollback(connection, 'opportunities');
-    // eslint-disable-next-line no-console
-    console.error('POST /opportunities/:id/status failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /opportunities/:id/status', err);
   } finally {
     connection.release();
   }
@@ -1206,9 +1190,7 @@ router.post('/:id/check-margin', async (req, res) => {
       alert_fired:          alertFired,
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /opportunities/:id/check-margin failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /opportunities/:id/check-margin', err);
   }
 });
 
@@ -1240,9 +1222,7 @@ router.delete('/:id', adminOnly, async (req, res) => {
     });
     res.json({ message: 'Oportunidad eliminada' });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('DELETE /opportunities/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'DELETE /opportunities/:id', err);
   }
 });
 

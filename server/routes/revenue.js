@@ -225,9 +225,7 @@ router.get('/', async (req, res) => {
       },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /revenue failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /revenue', err);
   }
 });
 
@@ -274,9 +272,7 @@ router.get('/:contract_id/plan', async (req, res) => {
 
     res.json({ contract: cRows[0], periods });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /revenue/:contract_id/plan failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /revenue/:contract_id/plan', err);
   }
 });
 
@@ -398,9 +394,7 @@ router.put('/:contract_id/plan', async (req, res) => {
     res.json({ entries: upserted, warnings, contract: { id: contract_id, type: contract.type, total_value_usd: totalValue, original_currency: originalCurrency } });
   } catch (err) {
     await safeRollback(conn, 'revenue');
-    // eslint-disable-next-line no-console
-    console.error('PUT /revenue/:contract_id/plan failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /revenue/:contract_id/plan', err);
   } finally {
     conn.release();
   }
@@ -521,9 +515,7 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
     res.json(row);
   } catch (err) {
     await safeRollback(conn, 'revenue');
-    // eslint-disable-next-line no-console
-    console.error('PUT /revenue/:contract_id/:yyyymm failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /revenue/:contract_id/:yyyymm', err);
   } finally {
     conn.release();
   }
@@ -608,9 +600,7 @@ router.post('/:contract_id/:yyyymm/close', async (req, res) => {
     res.json(rows[0]);
   } catch (err) {
     await safeRollback(conn, 'revenue');
-    // eslint-disable-next-line no-console
-    console.error('POST /revenue/:contract_id/:yyyymm/close failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /revenue/:contract_id/:yyyymm/close', err);
   } finally {
     conn.release();
   }

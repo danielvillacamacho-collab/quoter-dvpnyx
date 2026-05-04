@@ -156,9 +156,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /time-entries failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /time-entries', err);
   }
 });
 
@@ -231,9 +229,7 @@ router.post('/', async (req, res) => {
     });
     res.status(201).json(te);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /time-entries failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /time-entries', err);
   } finally {
     conn.release();
   }
@@ -309,9 +305,7 @@ router.put('/:id', async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /time-entries/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /time-entries/:id', err);
   } finally {
     conn.release();
   }
@@ -418,9 +412,7 @@ router.post('/copy-week', async (req, res) => {
 
     res.json({ copied: created.length, created, skipped });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /time-entries/copy-week failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /time-entries/copy-week', err);
   } finally {
     conn.release();
   }
