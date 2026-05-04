@@ -45,7 +45,6 @@ import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import BulkImport from './modules/BulkImport';
 import Users from './modules/Users';
-import Preferencias from './modules/Preferencias';
 import EmployeeCosts from './modules/EmployeeCosts';
 import EmployeeCostsImport from './modules/EmployeeCostsImport';
 // SPEC-CRM-01 — Contacts, Activities, Budgets
@@ -58,7 +57,6 @@ import InternalInitiativeDetail from './modules/InternalInitiativeDetail';
 import Novelties from './modules/Novelties';
 import IdleTime from './modules/IdleTime';
 import CountryHolidays from './modules/CountryHolidays';
-import HelpCenter from './modules/HelpCenter';
 import './theme.css';
 import './App.css';
 
@@ -233,10 +231,6 @@ function Layout() {
           <Route path="/idle-time"                    element={<IdleTime />} />
           {isAdmin && <Route path="/admin/budgets" element={<Budgets />} />}
           <Route path="/admin/holidays"               element={<CountryHolidays />} />
-          <Route path="/preferencias" element={<Preferencias />} />
-          {/* Manual de usuario vivo */}
-          <Route path="/help"       element={<HelpCenter />} />
-          <Route path="/help/:slug" element={<HelpCenter />} />
         </Routes>
         </ErrorBoundary>
         <Footer />

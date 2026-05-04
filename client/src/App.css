@@ -584,20 +584,3 @@
     padding-bottom: 64px;
   }
 }
-
-/* ─── Manual de usuario — Markdown renderer ─────────────────────────────── */
-.md-body h1 { font-size: 20px; font-family: Montserrat, sans-serif; margin: 0 0 12px; color: var(--ds-text); }
-.md-body h2 { font-size: 16px; font-family: Montserrat, sans-serif; margin: 20px 0 8px; color: var(--ds-text); border-bottom: 1px solid var(--ds-border); padding-bottom: 4px; }
-.md-body h3 { font-size: 14px; font-weight: 700; margin: 16px 0 6px; color: var(--ds-text); }
-.md-body h4 { font-size: 13px; font-weight: 700; margin: 12px 0 4px; color: var(--ds-text-soft, var(--text-light)); }
-.md-body p  { margin: 0 0 10px; }
-.md-body ul, .md-body ol { padding-left: 22px; margin: 0 0 10px; }
-.md-body li { margin-bottom: 4px; }
-.md-body code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; background: var(--ds-surface-raised, rgba(0,0,0,.05)); padding: 1px 5px; border-radius: 4px; color: var(--ds-accent, var(--purple-dark)); }
-.md-body hr { border: none; border-top: 1px solid var(--ds-border); margin: 16px 0; }
-.md-body strong { font-weight: 700; }
-.md-body em { font-style: italic; }
-.md-body .md-table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
-.md-body .md-table th,
-.md-body .md-table td { border: 1px solid var(--ds-border); padding: 7px 10px; text-align: left; }
-.md-body .md-table th { background: var(--ds-surface-raised, rgba(0,0,0,.03)); font-weight: 700; }

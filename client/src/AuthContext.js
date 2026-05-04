@@ -17,7 +17,7 @@ export const useAuth = () => useContext(AuthCtx);
  * drives `--ds-row-h`, `data-scheme="dark"` flips the dark palette).
  *
  * Called on mount with the hydrated user, and again every time the user
- * changes preferences via the Preferencias page — no reload needed.
+ * changes preferences — no reload needed.
  */
 function applyPreferences(prefs) {
   if (typeof document === 'undefined') return;
