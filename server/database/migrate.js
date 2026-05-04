@@ -2162,6 +2162,124 @@ const SPEC_II_00_HOLIDAY_SEED_SQL = `
   ON CONFLICT (country_id, holiday_date) DO NOTHING;
 `;
 
+// ---------------------------------------------------------------------------
+// SPEC-CRM-01 — Contacts, Activities, Budgets + Opportunity enrichment
+// ---------------------------------------------------------------------------
+const SPEC_CRM_01_SQL = `
+-- ====================================================================
+-- SPEC-CRM-01 — Contacts, Activities, Budgets + Opportunity enrichment
+-- ====================================================================
+
+-- 1. Contacts: personas de contacto asociadas a clientes
+CREATE TABLE IF NOT EXISTS contacts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  client_id UUID NOT NULL REFERENCES clients(id),
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  job_title VARCHAR(150) NULL,
+  email_primary VARCHAR(200) NULL,
+  phone_mobile VARCHAR(50) NULL,
+  seniority VARCHAR(50) NULL CHECK (seniority IS NULL OR seniority IN ('c_level','vp','director','manager','senior','mid','junior','intern')),
+  notes TEXT NULL,
+  deleted_at TIMESTAMPTZ NULL,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS contacts_email_unique
+  ON contacts(LOWER(email_primary)) WHERE deleted_at IS NULL AND email_primary IS NOT NULL;
+CREATE INDEX IF NOT EXISTS contacts_client_idx ON contacts(client_id) WHERE deleted_at IS NULL;
+
+-- 2. Opportunity-Contact bridge (deal_role per opp)
+CREATE TABLE IF NOT EXISTS opportunity_contacts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  opportunity_id UUID NOT NULL REFERENCES opportunities(id),
+  contact_id UUID NOT NULL REFERENCES contacts(id),
+  deal_role VARCHAR(50) NULL CHECK (deal_role IS NULL OR deal_role IN (
+    'economic_buyer','champion','coach','decision_maker','influencer',
+    'technical_evaluator','procurement','legal','detractor','blocker'
+  )),
+  notes TEXT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS opp_contact_unique
+  ON opportunity_contacts(opportunity_id, contact_id);
+
+-- 3. Activities: registro de interacciones comerciales
+CREATE TABLE IF NOT EXISTS activities (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  opportunity_id UUID NULL REFERENCES opportunities(id),
+  client_id UUID NULL REFERENCES clients(id),
+  contact_id UUID NULL REFERENCES contacts(id),
+  user_id UUID NOT NULL REFERENCES users(id),
+  activity_type VARCHAR(30) NOT NULL CHECK (activity_type IN (
+    'call','email','meeting','note','proposal_sent','demo','follow_up','other'
+  )),
+  subject VARCHAR(300) NOT NULL,
+  notes TEXT NULL,
+  activity_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS activities_opp_idx ON activities(opportunity_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS activities_client_idx ON activities(client_id) WHERE deleted_at IS NULL;
+
+-- 4. Budgets: presupuestos comerciales (targets de booking)
+CREATE TABLE IF NOT EXISTS budgets (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  period_year INTEGER NOT NULL,
+  period_quarter INTEGER NULL CHECK (period_quarter IS NULL OR period_quarter BETWEEN 1 AND 4),
+  period_month INTEGER NULL CHECK (period_month IS NULL OR period_month BETWEEN 1 AND 12),
+  country VARCHAR(100) NULL,
+  owner_id UUID NULL REFERENCES users(id),
+  service_line VARCHAR(100) NULL,
+  target_usd NUMERIC(18,2) NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','closed')),
+  approved_by UUID NULL REFERENCES users(id),
+  approved_at TIMESTAMPTZ NULL,
+  notes TEXT NULL,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS budgets_period_idx ON budgets(period_year, period_quarter, period_month);
+
+-- 5. Opportunity enrichment columns
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS deal_type VARCHAR(30) NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS co_owner_id UUID NULL REFERENCES users(id);
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS drive_url TEXT NULL;
+
+-- Backfill deal_type
+UPDATE opportunities SET deal_type = 'new_business' WHERE deal_type IS NULL;
+
+-- Constraint for deal_type (only if not already present)
+DO $do_deal_type_enum$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_deal_type_enum') THEN
+    ALTER TABLE opportunities ADD CONSTRAINT opp_deal_type_enum
+      CHECK (deal_type IN ('new_business','upsell_cross_sell','renewal','resell'));
+  END IF;
+END
+$do_deal_type_enum$;
+
+-- Make deal_type NOT NULL after backfill
+ALTER TABLE opportunities ALTER COLUMN deal_type SET DEFAULT 'new_business';
+DO $do_deal_type_nn$
+BEGIN
+  -- Only set NOT NULL if all rows have a value
+  IF NOT EXISTS (SELECT 1 FROM opportunities WHERE deal_type IS NULL LIMIT 1) THEN
+    BEGIN
+      ALTER TABLE opportunities ALTER COLUMN deal_type SET NOT NULL;
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
+  END IF;
+END
+$do_deal_type_nn$;
+
+-- Update last_activity_at on clients (auto-calculated from activities)
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NULL;
+`;
+
 /**
  * Intenta crear la extensión pgvector. Si no está disponible (no instalada
  * en la imagen postgres, o falta privilegio), captura el error y devuelve
@@ -2208,6 +2326,7 @@ const migrate = async () => {
       ['V2_SEEDS_SQL',             V2_SEEDS_SQL],
       ['SPEC_II_00_SQL',           SPEC_II_00_SQL],
       ['SPEC_II_00_HOLIDAY_SEED',  SPEC_II_00_HOLIDAY_SEED_SQL],
+      ['SPEC_CRM_01',              SPEC_CRM_01_SQL],
     ];
     for (const [label, sql] of blocks) {
       try {
@@ -2248,7 +2367,7 @@ const migrate = async () => {
     }
 
     // eslint-disable-next-line no-console
-    console.log(`Migration completed successfully (V1 + V2 + AI-readiness + SPEC-II-00${hasPgVector ? ' + pgvector' : ''}).`);
+    console.log(`Migration completed successfully (V1 + V2 + AI-readiness + SPEC-II-00 + SPEC-CRM-01${hasPgVector ? ' + pgvector' : ''}).`);
   } catch (err) {
     if (client) await client.query('ROLLBACK');
     // eslint-disable-next-line no-console
