@@ -316,6 +316,17 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
   const [err, setErr]         = useState('');
+  // Rate history
+  const [rateHistory, setRateHistory] = useState([]);
+  const [showAddRate, setShowAddRate] = useState(false);
+  const [newRate, setNewRate] = useState({ effective_date: '', client_rate: '', reason: '' });
+  const [savingRate, setSavingRate] = useState(false);
+
+  const loadRateHistory = useCallback(() => {
+    apiGet(`/api/assignments/${assignmentId}/rate-history`)
+      .then(setRateHistory)
+      .catch(() => {});
+  }, [assignmentId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -339,6 +350,8 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [assignmentId]);
+
+  useEffect(() => { loadRateHistory(); }, [loadRateHistory]);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -433,8 +446,31 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
               <textarea style={{ ...ms.input, minHeight: 56, resize: 'vertical' }} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
             </div>
             {asg && asg.contract_type === 'capacity' && (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginBottom: 12 }}>
+              <div style={{ background: 'var(--ds-accent-soft, #faf7ff)', border: '1px solid var(--ds-accent-border, #e0d4f5)', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ds-accent-text, var(--purple-dark))', marginBottom: 8 }}>
+                  Historial de tarifas
+                </div>
+                {rateHistory.length > 0 ? (
+                  <div style={{ fontSize: 11, marginBottom: 8 }}>
+                    {rateHistory.map((r) => (
+                      <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid var(--ds-border, #eee)' }}>
+                        <div>
+                          <strong>{new Intl.NumberFormat('en-US', { style: 'currency', currency: r.client_rate_currency || 'USD', maximumFractionDigits: 0 }).format(r.client_rate)}</strong>
+                          <span style={{ color: 'var(--ds-text-soft, var(--text-light))', marginLeft: 6 }}>
+                            desde {r.effective_date?.slice(0, 10)}
+                          </span>
+                          {r.reason && <span style={{ color: 'var(--ds-text-soft)', marginLeft: 6, fontStyle: 'italic' }}>({r.reason})</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: 'var(--ds-text-soft, var(--text-light))', marginBottom: 8 }}>
+                    Sin historial de tarifas.
+                  </div>
+                )}
+                {/* Tarifa actual (editable, se refleja en assignments.client_rate) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginBottom: 6 }}>
                   <div>
                     <label style={ms.label}>Moneda</label>
                     <select style={ms.input} value={form.client_rate_currency} onChange={(e) => set('client_rate_currency', e.target.value)}>
@@ -442,22 +478,61 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                     </select>
                   </div>
                   <div>
-                    <label style={ms.label}>Tarifa mensual</label>
-                    <input
-                      style={ms.input}
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.client_rate}
-                      onChange={(e) => set('client_rate', e.target.value)}
-                      placeholder="Tarifa mensual acordada con el cliente"
-                    />
+                    <label style={ms.label}>Tarifa actual</label>
+                    <input style={ms.input} type="number" min="0" step="0.01" value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Tarifa mensual" />
                   </div>
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--ds-text-soft, var(--text-light))', marginBottom: 12, marginTop: -6 }}>
-                  Tarifa mensual acordada con el cliente. Determina el ingreso proyectado para este contrato.
+                {/* Agregar nueva tarifa futura */}
+                {!showAddRate ? (
+                  <button type="button" onClick={() => { setShowAddRate(true); setNewRate({ effective_date: '', client_rate: '', reason: '' }); }}
+                    style={{ fontSize: 11, color: 'var(--ds-accent, var(--purple-dark))', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0', fontWeight: 600 }}>
+                    + Agregar cambio de tarifa
+                  </button>
+                ) : (
+                  <div style={{ background: '#fff', borderRadius: 6, padding: 10, marginTop: 6, border: '1px solid var(--ds-border, #ddd)' }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Nueva tarifa</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 6 }}>
+                      <div>
+                        <label style={ms.label}>Desde</label>
+                        <input style={ms.input} type="date" value={newRate.effective_date} onChange={(e) => setNewRate((r) => ({ ...r, effective_date: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label style={ms.label}>Tarifa</label>
+                        <input style={ms.input} type="number" min="0" step="0.01" value={newRate.client_rate} onChange={(e) => setNewRate((r) => ({ ...r, client_rate: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div style={{ marginBottom: 6 }}>
+                      <label style={ms.label}>Motivo</label>
+                      <input style={ms.input} type="text" value={newRate.reason} onChange={(e) => setNewRate((r) => ({ ...r, reason: e.target.value }))} placeholder="Ej: Ascenso a L7, Incremento anual" />
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="button" disabled={savingRate || !newRate.effective_date || !newRate.client_rate}
+                        onClick={async () => {
+                          setSavingRate(true);
+                          try {
+                            await apiPost(`/api/assignments/${assignmentId}/rate-history`, {
+                              effective_date: newRate.effective_date,
+                              client_rate: Number(newRate.client_rate),
+                              client_rate_currency: form.client_rate_currency || 'USD',
+                              reason: newRate.reason || null,
+                            });
+                            loadRateHistory();
+                            set('client_rate', newRate.client_rate);
+                            setShowAddRate(false);
+                          } catch (ex) { setErr(ex.message); }
+                          finally { setSavingRate(false); }
+                        }}
+                        style={{ ...ms.btnPrimary, fontSize: 11, padding: '5px 12px' }}>
+                        {savingRate ? 'Guardando...' : 'Agregar'}
+                      </button>
+                      <button type="button" onClick={() => setShowAddRate(false)} style={{ ...ms.btnGhost, fontSize: 11, padding: '5px 12px' }}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
+                <div style={{ fontSize: 10, color: 'var(--ds-text-soft, var(--text-light))', marginTop: 6 }}>
+                  La proyección de ingresos usa el historial de tarifas para calcular el monto correcto por mes.
                 </div>
-              </>
+              </div>
             )}
             <div style={ms.foot}>
               <button type="button" style={ms.btnGhost} onClick={onClose}>Cancelar</button>

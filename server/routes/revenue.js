@@ -111,12 +111,14 @@ router.get('/', async (req, res) => {
 
     // ── Capacity auto-projection: sum prorated client_rate per month ──
     // For capacity contracts, the projected revenue is derived from
-    // actual assignments and their client_rate, NOT from the manual plan.
+    // actual assignments and their rate history, NOT from the manual plan.
+    // When rate history exists, it uses the applicable rate per day based
+    // on effective_date. Falls back to assignment.client_rate if no history.
     const capacityIds = contracts.filter((c) => c.type === 'capacity').map((c) => c.id);
     const capacityProjections = new Map(); // contract_id → { yyyymm → amount }
     if (capacityIds.length) {
       const { rows: capAsg } = await pool.query(
-        `SELECT a.contract_id, a.start_date, a.end_date, a.client_rate,
+        `SELECT a.id, a.contract_id, a.start_date, a.end_date, a.client_rate,
                 a.client_rate_currency
            FROM assignments a
           WHERE a.contract_id = ANY($1::uuid[])
@@ -125,12 +127,47 @@ router.get('/', async (req, res) => {
             AND a.client_rate IS NOT NULL`,
         [capacityIds],
       );
+      // Load rate history for all these assignments in one query.
+      const asgIds = capAsg.map((a) => a.id);
+      let rateHistoryByAsg = new Map();
+      if (asgIds.length) {
+        const { rows: rateRows } = await pool.query(
+          `SELECT assignment_id, effective_date, client_rate, client_rate_currency
+             FROM assignment_rate_history
+            WHERE assignment_id = ANY($1::uuid[])
+            ORDER BY assignment_id, effective_date ASC`,
+          [asgIds],
+        );
+        for (const r of rateRows) {
+          if (!rateHistoryByAsg.has(r.assignment_id)) rateHistoryByAsg.set(r.assignment_id, []);
+          rateHistoryByAsg.get(r.assignment_id).push({
+            effective: new Date(r.effective_date),
+            rate: Number(r.client_rate),
+          });
+        }
+      }
+
+      // Helper: find the applicable rate for a given date from history.
+      // Returns the rate whose effective_date is <= date (latest one).
+      function rateForDate(history, date) {
+        if (!history || !history.length) return null;
+        let applicable = null;
+        for (const h of history) {
+          if (h.effective <= date) applicable = h.rate;
+          else break; // sorted ASC, so first one after date means we stop
+        }
+        return applicable;
+      }
+
       // Build month-by-month proration for each capacity assignment.
       for (const a of capAsg) {
-        const rate = Number(a.client_rate);
-        if (!rate) continue;
+        const fallbackRate = Number(a.client_rate);
+        if (!fallbackRate) continue;
+        const history = rateHistoryByAsg.get(a.id);
+        const hasHistory = history && history.length > 0;
         const aStart = new Date(a.start_date);
         const aEnd = a.end_date ? new Date(a.end_date) : null;
+
         for (const m of months) {
           const year = Number(m.slice(0, 4));
           const month = Number(m.slice(4)); // 1-indexed
@@ -142,8 +179,35 @@ router.get('/', async (req, res) => {
           if (aEnd && aEnd < monthStart) continue;
           const activeStart = aStart > monthStart ? aStart : monthStart;
           const activeEnd = aEnd && aEnd < monthEnd ? aEnd : monthEnd;
-          const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
-          const prorated = parseFloat((rate * daysActive / dim).toFixed(4));
+
+          let monthAmount = 0;
+          if (hasHistory && history.length > 1) {
+            // Day-by-day calculation when multiple rates exist.
+            // Group consecutive days with same rate for efficiency.
+            let curDay = new Date(activeStart);
+            while (curDay <= activeEnd) {
+              const dayRate = rateForDate(history, curDay) || fallbackRate;
+              // Find how many consecutive days have this same rate.
+              let streak = 1;
+              const nextDay = new Date(curDay);
+              nextDay.setDate(nextDay.getDate() + 1);
+              while (nextDay <= activeEnd) {
+                const nr = rateForDate(history, nextDay) || fallbackRate;
+                if (nr !== dayRate) break;
+                streak++;
+                nextDay.setDate(nextDay.getDate() + 1);
+              }
+              monthAmount += dayRate * streak / dim;
+              curDay.setDate(curDay.getDate() + streak);
+            }
+          } else {
+            // Single rate (or no history) — simple proration.
+            const rate = hasHistory ? history[0].rate : fallbackRate;
+            const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
+            monthAmount = rate * daysActive / dim;
+          }
+
+          const prorated = parseFloat(monthAmount.toFixed(4));
           if (!capacityProjections.has(a.contract_id)) capacityProjections.set(a.contract_id, {});
           const byMonth = capacityProjections.get(a.contract_id);
           byMonth[m] = (byMonth[m] || 0) + prorated;
@@ -750,9 +814,38 @@ router.get('/capacity-projection', async (req, res) => {
       });
     }
 
+    // 2b. Load rate history for all assignments.
+    const asgIds = asgRows.map((a) => a.id);
+    const rateHistoryByAsg = new Map();
+    if (asgIds.length) {
+      const { rows: rateRows } = await pool.query(
+        `SELECT assignment_id, effective_date, client_rate
+           FROM assignment_rate_history
+          WHERE assignment_id = ANY($1::uuid[])
+          ORDER BY assignment_id, effective_date ASC`,
+        [asgIds],
+      );
+      for (const r of rateRows) {
+        if (!rateHistoryByAsg.has(r.assignment_id)) rateHistoryByAsg.set(r.assignment_id, []);
+        rateHistoryByAsg.get(r.assignment_id).push({
+          effective: new Date(r.effective_date),
+          rate: Number(r.client_rate),
+        });
+      }
+    }
+    function rateForDateCP(history, date) {
+      if (!history || !history.length) return null;
+      let applicable = null;
+      for (const h of history) {
+        if (h.effective <= date) applicable = h.rate;
+        else break;
+      }
+      return applicable;
+    }
+
     // 3. Determine date range: earliest start → latest end (or today+12m if null)
     const today = new Date();
-    const horizonEnd = new Date(today.getFullYear(), today.getMonth() + 12, 0); // last day 12 months from now
+    const horizonEnd = new Date(today.getFullYear(), today.getMonth() + 12, 0);
 
     let rangeStart = null;
     let rangeEnd   = null;
@@ -763,42 +856,64 @@ router.get('/capacity-projection', async (req, res) => {
       if (!rangeEnd   || e > rangeEnd)   rangeEnd   = e;
     }
 
-    // 4. Build month-by-month projection
-    const monthsMap = new Map(); // yyyymm → { label, assignments: [], total }
+    // 4. Build month-by-month projection (rate-history aware)
+    const monthsMap = new Map();
 
     let cur = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
     const endMonth = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), 1);
 
     while (cur <= endMonth) {
       const year  = cur.getFullYear();
-      const month = cur.getMonth() + 1; // 1-indexed
+      const month = cur.getMonth() + 1;
       const yyyymm = toYYYYMM(year, month);
       const dim = daysInMonth(year, month);
       const monthStart = new Date(year, month - 1, 1);
-      const monthEndDay = new Date(year, month, 0); // last day of month
+      const monthEndDay = new Date(year, month, 0);
 
       const assignmentRows = [];
       for (const a of asgRows) {
         const aStart = new Date(a.start_date);
         const aEnd   = a.end_date ? new Date(a.end_date) : horizonEnd;
-
-        // Overlap check
         if (aStart > monthEndDay || aEnd < monthStart) continue;
 
         const activeStart = aStart > monthStart ? aStart : monthStart;
         const activeEnd   = aEnd   < monthEndDay ? aEnd   : monthEndDay;
-        const daysActive  = Math.round((activeEnd - activeStart) / 86400000) + 1;
-        const proration   = daysActive / dim;
-        const amount      = parseFloat((Number(a.client_rate) * proration).toFixed(4));
+        const history = rateHistoryByAsg.get(a.id);
+        const hasHistory = history && history.length > 0;
+        const fallbackRate = Number(a.client_rate);
+        let amount = 0;
+
+        if (hasHistory && history.length > 1) {
+          // Day-by-day with rate changes.
+          let curDay = new Date(activeStart);
+          while (curDay <= activeEnd) {
+            const dayRate = rateForDateCP(history, curDay) || fallbackRate;
+            let streak = 1;
+            const nextDay = new Date(curDay);
+            nextDay.setDate(nextDay.getDate() + 1);
+            while (nextDay <= activeEnd) {
+              if ((rateForDateCP(history, nextDay) || fallbackRate) !== dayRate) break;
+              streak++;
+              nextDay.setDate(nextDay.getDate() + 1);
+            }
+            amount += dayRate * streak / dim;
+            curDay.setDate(curDay.getDate() + streak);
+          }
+        } else {
+          const rate = hasHistory ? history[0].rate : fallbackRate;
+          const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
+          amount = rate * daysActive / dim;
+        }
 
         assignmentRows.push({
           assignment_id:        a.id,
           employee_name:        a.employee_name,
-          client_rate:          Number(a.client_rate),
+          client_rate:          hasHistory ? (rateForDateCP(history, monthStart) || fallbackRate) : fallbackRate,
           client_rate_currency: a.client_rate_currency || 'USD',
-          days_active:          daysActive,
+          days_active:          Math.round((activeEnd - activeStart) / 86400000) + 1,
           days_in_month:        dim,
-          prorated_amount:      amount,
+          prorated_amount:      parseFloat(amount.toFixed(4)),
+          has_rate_changes:     hasHistory && history.length > 1,
         });
       }
 
@@ -812,7 +927,7 @@ router.get('/capacity-projection', async (req, res) => {
         });
       }
 
-      cur = new Date(year, month, 1); // advance to next month
+      cur = new Date(year, month, 1);
     }
 
     const months = Array.from(monthsMap.values()).sort((a, b) => a.yyyymm.localeCompare(b.yyyymm));
@@ -824,7 +939,7 @@ router.get('/capacity-projection', async (req, res) => {
       contract_type: 'capacity',
       months,
       grand_total,
-      currency_note: 'Todos los montos en la moneda de cada asignación. Conversión a USD no implementada.',
+      currency_note: 'Montos en moneda de cada asignación. Se usa historial de tarifas cuando hay cambios.',
     });
   } catch (err) {
     serverError(res, 'GET /revenue/capacity-projection', err);

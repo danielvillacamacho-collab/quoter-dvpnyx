@@ -564,6 +564,16 @@ router.post('/', adminOnly, async (req, res) => {
     );
     const asg = rows[0];
 
+    // Auto-create initial rate history entry when client_rate is provided.
+    if (client_rate != null && Number(client_rate) > 0) {
+      await conn.query(
+        `INSERT INTO assignment_rate_history
+           (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
+         VALUES ($1, $2, $3, $4, 'Tarifa inicial', $5)`,
+        [asg.id, start_date, Number(client_rate), client_rate_currency || 'USD', req.user.id],
+      );
+    }
+
     await emitEvent(conn, {
       event_type: 'assignment.created', entity_type: 'assignment', entity_id: asg.id,
       actor_user_id: req.user.id,
@@ -731,6 +741,26 @@ router.put('/:id', adminOnly, async (req, res) => {
       ]
     );
     const after = rows[0];
+
+    // If client_rate changed, add a rate history entry.
+    const rateChanged = body.client_rate != null &&
+      Number(body.client_rate) !== Number(before.client_rate || 0);
+    if (rateChanged && Number(body.client_rate) > 0) {
+      // effective_date: use body.rate_effective_date if provided, else today.
+      const effectiveDate = body.rate_effective_date || new Date().toISOString().slice(0, 10);
+      await conn.query(
+        `INSERT INTO assignment_rate_history
+           (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          after.id, effectiveDate, Number(body.client_rate),
+          body.client_rate_currency || after.client_rate_currency || 'USD',
+          body.rate_reason || 'Cambio de tarifa',
+          req.user.id,
+        ],
+      );
+    }
+
     await emitEvent(conn, {
       event_type: 'assignment.updated', entity_type: 'assignment', entity_id: after.id,
       actor_user_id: req.user.id,
@@ -789,6 +819,94 @@ router.delete('/:id', adminOnly, async (req, res) => {
     });
   } catch (err) {
     serverError(res, 'DELETE /assignments/:id', err);
+  }
+});
+
+/* ======================================================================
+ * Rate History — historial de tarifas por asignación.
+ * Permite registrar cambios de tarifa (ascensos, incrementos anuales,
+ * renegociaciones) con fecha efectiva. La proyección de revenue usa
+ * la tarifa vigente para cada mes según effective_date.
+ * ====================================================================== */
+
+/* GET /assignments/:id/rate-history */
+router.get('/:id/rate-history', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT h.id, h.effective_date, h.client_rate, h.client_rate_currency,
+              h.reason, h.created_by, h.created_at, u.name AS created_by_name
+         FROM assignment_rate_history h
+         LEFT JOIN users u ON u.id = h.created_by
+        WHERE h.assignment_id = $1
+        ORDER BY h.effective_date ASC, h.created_at ASC`,
+      [req.params.id],
+    );
+    res.json(rows);
+  } catch (err) {
+    serverError(res, 'GET /assignments/:id/rate-history', err);
+  }
+});
+
+/* POST /assignments/:id/rate-history — agregar nueva tarifa */
+router.post('/:id/rate-history', adminOnly, async (req, res) => {
+  const { effective_date, client_rate, client_rate_currency, reason } = req.body || {};
+  if (!effective_date) return res.status(400).json({ error: 'effective_date es requerido' });
+  if (client_rate == null || Number(client_rate) <= 0) return res.status(400).json({ error: 'client_rate debe ser mayor a 0' });
+
+  try {
+    const { rows: asg } = await pool.query(
+      `SELECT id, client_rate_currency FROM assignments WHERE id=$1 AND deleted_at IS NULL`,
+      [req.params.id],
+    );
+    if (!asg.length) return res.status(404).json({ error: 'Asignación no encontrada' });
+
+    const ccy = client_rate_currency || asg[0].client_rate_currency || 'USD';
+    const { rows } = await pool.query(
+      `INSERT INTO assignment_rate_history
+         (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [req.params.id, effective_date, Number(client_rate), ccy, reason || null, req.user.id],
+    );
+
+    // Update the assignment's current client_rate to the latest entry.
+    await pool.query(
+      `UPDATE assignments SET client_rate = $2, client_rate_currency = $3, updated_at = NOW()
+        WHERE id = $1`,
+      [req.params.id, Number(client_rate), ccy],
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    serverError(res, 'POST /assignments/:id/rate-history', err);
+  }
+});
+
+/* DELETE /assignments/:id/rate-history/:rate_id — eliminar una entrada */
+router.delete('/:id/rate-history/:rate_id', adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `DELETE FROM assignment_rate_history WHERE id=$1 AND assignment_id=$2 RETURNING *`,
+      [req.params.rate_id, req.params.id],
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Entrada no encontrada' });
+
+    // Update assignment's client_rate to the latest remaining entry.
+    const { rows: latest } = await pool.query(
+      `SELECT client_rate, client_rate_currency FROM assignment_rate_history
+        WHERE assignment_id=$1 ORDER BY effective_date DESC, created_at DESC LIMIT 1`,
+      [req.params.id],
+    );
+    if (latest.length) {
+      await pool.query(
+        `UPDATE assignments SET client_rate = $2, client_rate_currency = $3, updated_at = NOW() WHERE id = $1`,
+        [req.params.id, latest[0].client_rate, latest[0].client_rate_currency],
+      );
+    }
+
+    res.json({ message: 'Entrada eliminada' });
+  } catch (err) {
+    serverError(res, 'DELETE /assignments/:id/rate-history/:rate_id', err);
   }
 });
 
