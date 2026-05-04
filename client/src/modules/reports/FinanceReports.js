@@ -120,13 +120,13 @@ export default function FinanceReports() {
 
   /* ── data fetching ─────────────────────────────────────────────── */
   const { data: revenueRaw, loading: loadingRev, error: errorRev } =
-    useReportData(`/api/revenue?from=${fromMonth}&to=${toMonth}`, [year]);
+    useReportData(`/api/revenue?from=${fromMonth}&to=${toMonth}`);
 
   const { data: budgetSummary, loading: loadingBudSum } =
-    useReportData(`/api/budgets/summary?period_year=${year}`, [year]);
+    useReportData(`/api/budgets/summary?period_year=${year}`);
 
   const { data: budgetsRaw, loading: loadingBud, error: errorBud } =
-    useReportData(`/api/budgets?period_year=${year}&limit=100`, [year]);
+    useReportData(`/api/budgets?period_year=${year}&limit=100`);
 
   /* ── derived: revenue monthly chart data ───────────────────────── */
   const monthlyData = useMemo(() => {

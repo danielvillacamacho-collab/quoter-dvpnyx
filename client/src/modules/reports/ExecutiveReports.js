@@ -55,16 +55,16 @@ const chartGridStyle = {
 export default function ExecutiveReports() {
   /* ── data fetching ─────────────────────────────────────────────────── */
   const { data: delivery, loading: loadingDelivery, error: errorDelivery } =
-    useReportData('/api/reports/v2/delivery', []);
+    useReportData('/api/reports/v2/delivery');
 
   const { data: people, loading: loadingPeople, error: errorPeople } =
-    useReportData(`/api/reports/v2/people?from=${peopleFrom}&to=${peopleTo}`, []);
+    useReportData(`/api/reports/v2/people?from=${peopleFrom}&to=${peopleTo}`);
 
   const { data: oppsRaw, loading: loadingOpps, error: errorOpps } =
-    useReportData('/api/opportunities?limit=500', []);
+    useReportData('/api/opportunities?limit=500');
 
   const { data: revenue, loading: loadingRevenue, error: errorRevenue } =
-    useReportData(`/api/revenue?from=${revenueFrom}&to=${revenueTo}`, []);
+    useReportData(`/api/revenue?from=${revenueFrom}&to=${revenueTo}`);
 
   /* ── derived KPIs ──────────────────────────────────────────────────── */
   const deliveryKpis = delivery?.kpis ?? {};
