@@ -1,93 +1,67 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
+import React, { useState, useCallback } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import Avatar from './Avatar';
 import {
   Home, UserPlus, FileText, Building2, Briefcase, FileCheck2,
-  ClipboardList, CalendarDays, LayoutGrid, Users, Layers, Tag,
-  Clock, TrendingUp, BarChart3, BookOpen, Settings, UserCog, Upload,
+  ClipboardList, CalendarDays, Users, Tag,
+  Clock, BarChart3, BookOpen, Settings, UserCog, Upload,
   Palette, LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
-  Contact, MessageSquare, Target, HelpCircle,
+  Contact, MessageSquare, Target, HelpCircle, ChevronRight,
+  Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
+  GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
 } from 'lucide-react';
-
-/**
- * App Shell — Sidebar.
- *
- * Visual direction comes from the DVPNYX design handoff (see
- * `UI de claude design/design_handoff_dvpnyx_ui`): soft neutral
- * background, hair-thin border, 232×100vh grid column, 52px brand
- * header matching the Topbar, sectioned nav with uppercase micro
- * labels, and a user footer with logout action.
- *
- * Visibility rules:
- *   - The "Gente → Áreas / Skills" and the entire "Configuración"
- *     block are admin-only, mirroring the previous inline markup in
- *     App.js. Non-admin users simply don't see them.
- *
- * Accessibility:
- *   - <nav aria-label="Navegación principal"> so screen readers can
- *     jump to it. Each item uses <NavLink>, which applies the
- *     .active class when the current pathname matches — no manual
- *     comparison needed, which also makes detail-route matching
- *     consistent (e.g. /clients/:id keeps Clientes highlighted).
- *   - Icons are aria-hidden so the accessible name is just the label.
- *
- * The outer wrapper keeps the legacy `.sidebar` class (+ `.ds-sidebar`
- * for the new styles) because App.test.js and the mobile hamburger
- * overlay query-select on `.sidebar`.
- */
+import cx from './Sidebar.module.css';
 
 const ICONS = {
-  '/':                        Home,
-  '/quotation/new/staff_aug': UserPlus,
+  '/':                          Home,
+  '/quotation/new/staff_aug':   UserPlus,
   '/quotation/new/fixed_scope': FileText,
-  '/clients':                 Building2,
-  '/opportunities':           Briefcase,
-  '/pipeline':                LayoutGrid,
-  '/revenue':                 BarChart3,
-  '/contracts':               FileCheck2,
-  '/resource-requests':       ClipboardList,
-  '/assignments':             CalendarDays,
-  '/capacity/planner':        LayoutGrid,
-  '/employees':               Users,
-  '/admin/areas':             Layers,
-  '/admin/skills':            Tag,
-  '/time/me':                 Clock,
-  '/time/team':               TrendingUp,
-  '/reports':                 BarChart3,
-  '/reports/ejecutivo':       TrendingUp,
-  '/reports/comercial':       Briefcase,
-  '/reports/delivery':        FileCheck2,
-  '/reports/gente':           Users,
-  '/reports/finanzas':        DollarSign,
-  '/help':                    HelpCircle,
-  '/wiki':                    BookOpen,
-  '/admin/params':            Settings,
-  '/admin/exchange-rates':    BarChart3,
-  '/admin/employee-costs':    DollarSign,
-  '/admin/users':             UserCog,
-  '/admin/bulk-import':       Upload,
-  '/admin/holidays':          Globe,
-  '/internal-initiatives':    Rocket,
-  '/novelties':               CalendarOff,
-  '/idle-time':               Activity,
-  '/contacts':                Contact,
-  '/activities':              MessageSquare,
-  '/admin/budgets':           Target,
-  '/preferencias':            Palette,
+  '/clients':                   Building2,
+  '/opportunities':             Briefcase,
+  '/pipeline':                  Kanban,
+  '/contacts':                  Contact,
+  '/activities':                MessageSquare,
+  '/contracts':                 FileCheck2,
+  '/resource-requests':         ClipboardList,
+  '/assignments':               CalendarDays,
+  '/capacity/planner':          GanttChart,
+  '/employees':                 Users,
+  '/admin/areas':               FolderKanban,
+  '/admin/skills':              Tag,
+  '/time/me':                   Clock,
+  '/time/team':                 Timer,
+  '/internal-initiatives':      Rocket,
+  '/novelties':                 Sparkles,
+  '/idle-time':                 Coffee,
+  '/revenue':                   Wallet,
+  '/reports':                   PieChart,
+  '/reports/ejecutivo':         LayoutDashboard,
+  '/reports/comercial':         Briefcase,
+  '/reports/delivery':          FileCheck2,
+  '/reports/gente':             Users,
+  '/reports/finanzas':          LineChart,
+  '/help':                      HelpCircle,
+  '/wiki':                      BookOpen,
+  '/preferencias':              Palette,
+  '/admin/params':              Settings,
+  '/admin/exchange-rates':      Landmark,
+  '/admin/employee-costs':      DollarSign,
+  '/admin/users':               UserCog,
+  '/admin/bulk-import':         Upload,
+  '/admin/holidays':            Globe,
+  '/admin/budgets':             Target,
 };
 
-/** Build the grouped nav model; admin-only sections are filtered here. */
+/** Build the grouped nav model. */
 export function buildGroups(isAdmin) {
   const groups = [
     {
-      title: null, items: [
+      key: 'home', title: null, collapsible: false, items: [
         { path: '/', label: 'Dashboard' },
       ],
     },
     {
-      title: 'Comercial', items: [
-        { path: '/quotation/new/staff_aug',  label: 'Nueva Staff Aug' },
-        { path: '/quotation/new/fixed_scope', label: 'Nuevo Proyecto' },
+      key: 'comercial', title: 'Comercial', collapsible: true, items: [
         { path: '/clients',                  label: 'Clientes' },
         { path: '/contacts',                 label: 'Contactos' },
         { path: '/opportunities',            label: 'Oportunidades' },
@@ -96,7 +70,13 @@ export function buildGroups(isAdmin) {
       ],
     },
     {
-      title: 'Delivery', items: [
+      key: 'cotizaciones', title: 'Cotizaciones', collapsible: true, items: [
+        { path: '/quotation/new/staff_aug',   label: 'Staff Augmentation' },
+        { path: '/quotation/new/fixed_scope', label: 'Proyecto (fixed)' },
+      ],
+    },
+    {
+      key: 'delivery', title: 'Delivery', collapsible: true, items: [
         { path: '/contracts',         label: 'Contratos' },
         { path: '/resource-requests', label: 'Solicitudes' },
         { path: '/assignments',       label: 'Asignaciones' },
@@ -104,7 +84,7 @@ export function buildGroups(isAdmin) {
       ],
     },
     {
-      title: 'Gente', items: [
+      key: 'gente', title: 'Gente', collapsible: true, items: [
         { path: '/employees', label: 'Empleados' },
         ...(isAdmin ? [
           { path: '/admin/areas',  label: 'Áreas'  },
@@ -113,25 +93,21 @@ export function buildGroups(isAdmin) {
       ],
     },
     {
-      title: 'Time Tracking', items: [
+      key: 'tiempo', title: 'Tiempo', collapsible: true, items: [
         { path: '/time/me',   label: 'Mis horas' },
-        { path: '/time/team', label: 'Tiempo semanal' },
+        { path: '/time/team', label: 'Equipo semanal' },
       ],
     },
     {
-      title: 'Iniciativas internas', items: [
+      key: 'operaciones', title: 'Operaciones', collapsible: true, items: [
         { path: '/internal-initiatives', label: 'Iniciativas' },
         { path: '/novelties',            label: 'Novedades' },
-        { path: '/idle-time',            label: 'Capacidad y bench' },
+        { path: '/idle-time',            label: 'Bench & capacidad' },
+        { path: '/revenue',              label: 'Revenue' },
       ],
     },
     {
-      title: 'Finanzas', items: [
-        { path: '/revenue', label: 'Reconocimiento' },
-      ],
-    },
-    {
-      title: 'Reportes', items: [
+      key: 'reportes', title: 'Reportes', collapsible: true, items: [
         { path: '/reports',           label: 'Hub' },
         { path: '/reports/ejecutivo', label: 'Ejecutivo' },
         { path: '/reports/comercial', label: 'Comercial' },
@@ -141,7 +117,7 @@ export function buildGroups(isAdmin) {
       ],
     },
     {
-      title: null, items: [
+      key: 'ayuda', title: null, collapsible: false, items: [
         { path: '/help',         label: 'Manual de usuario' },
         { path: '/wiki',         label: 'Wiki' },
         { path: '/preferencias', label: 'Preferencias' },
@@ -150,7 +126,7 @@ export function buildGroups(isAdmin) {
   ];
   if (isAdmin) {
     groups.push({
-      title: 'Configuración', items: [
+      key: 'config', title: 'Configuración', collapsible: true, items: [
         { path: '/admin/params',          label: 'Parámetros'      },
         { path: '/admin/exchange-rates',  label: 'Tasas de cambio' },
         { path: '/admin/employee-costs',  label: 'Costos del equipo' },
@@ -164,12 +140,77 @@ export function buildGroups(isAdmin) {
   return groups;
 }
 
-/** Safe initials for the avatar (never blanks out even on missing name). */
 function initials(name) {
   if (!name) return 'DV';
   const parts = String(name).trim().split(/\s+/).slice(0, 2);
   const letters = parts.map((p) => p[0] || '').join('');
   return letters.toUpperCase() || 'DV';
+}
+
+const STORAGE_KEY = 'dvpnyx-sidebar-collapsed';
+
+function loadCollapsed() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+  } catch { return {}; }
+}
+
+function SidebarSection({ group, collapsed, onToggle, itemClass, onNavigate, pathname }) {
+  const isOpen = !collapsed;
+
+  if (!group.collapsible) {
+    return (
+      <div className="ds-sb-section">
+        {group.title && <div className="ds-sb-section-label">{group.title}</div>}
+        {group.items.map((it) => {
+          const Icon = ICONS[it.path];
+          return (
+            <NavLink key={it.path} to={it.path} end={it.path === '/'} className={itemClass} onClick={onNavigate}>
+              {Icon ? <Icon className="ds-sb-ico" aria-hidden="true" /> : null}
+              <span>{it.label}</span>
+            </NavLink>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const hasActiveChild = group.items.some((it) =>
+    it.path === '/' ? pathname === '/' : pathname.startsWith(it.path)
+  );
+
+  return (
+    <div className="ds-sb-section">
+      <button
+        type="button"
+        className={cx.sectionHeader}
+        onClick={() => onToggle(group.key)}
+        aria-expanded={isOpen}
+      >
+        <ChevronRight
+          className={`${cx.chevron} ${isOpen ? cx.chevronOpen : ''}`}
+          aria-hidden="true"
+        />
+        <span>{group.title}</span>
+        {!isOpen && hasActiveChild && (
+          <span className="ds-dot-inline" style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--ds-accent)', marginLeft: 'auto', flexShrink: 0 }} />
+        )}
+      </button>
+      <div className={`${cx.sectionBody} ${!isOpen ? cx.sectionBodyClosed : ''}`}>
+        <div className={cx.sectionInner}>
+          {group.items.map((it) => {
+            const Icon = ICONS[it.path];
+            return (
+              <NavLink key={it.path} to={it.path} end={it.path === '/'} className={itemClass} onClick={onNavigate}>
+                {Icon ? <Icon className="ds-sb-ico" aria-hidden="true" /> : null}
+                <span>{it.label}</span>
+              </NavLink>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function Sidebar({
@@ -180,9 +221,17 @@ export default function Sidebar({
   onLogout,
 }) {
   const groups = buildGroups(isAdmin);
+  const location = useLocation();
+  const [collapsed, setCollapsed] = useState(loadCollapsed);
 
-  // NavLink gives us `isActive` → feeds our own class to preserve the
-  // existing visual contract (".active" → accent-soft + accent-text).
+  const toggleSection = useCallback((key) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
   const itemClass = ({ isActive }) => (isActive ? 'ds-sb-item active' : 'ds-sb-item');
 
   return (
@@ -197,28 +246,16 @@ export default function Sidebar({
       </div>
 
       <nav className="ds-sb-scroll" aria-label="Secciones">
-        {groups.map((g, gi) => (
-          <div className="ds-sb-section" key={gi}>
-            {g.title && <div className="ds-sb-section-label">{g.title}</div>}
-            {g.items.map((it) => {
-              const Icon = ICONS[it.path];
-              // Dashboard has to match exactly `/` — NavLink's `end`
-              // prop prevents it from being active on every deeper path.
-              const end = it.path === '/';
-              return (
-                <NavLink
-                  key={it.path}
-                  to={it.path}
-                  end={end}
-                  className={itemClass}
-                  onClick={onNavigate}
-                >
-                  {Icon ? <Icon className="ds-sb-ico" aria-hidden="true" /> : null}
-                  <span>{it.label}</span>
-                </NavLink>
-              );
-            })}
-          </div>
+        {groups.map((g) => (
+          <SidebarSection
+            key={g.key}
+            group={g}
+            collapsed={!!collapsed[g.key]}
+            onToggle={toggleSection}
+            itemClass={itemClass}
+            onNavigate={onNavigate}
+            pathname={location.pathname}
+          />
         ))}
       </nav>
 

@@ -82,7 +82,7 @@ describe('ExecutiveKpis strip on /', () => {
     api.getDashboardOverview.mockRejectedValue(new Error('boom'));
     render(<App />);
     // Quotations section still renders normally.
-    await waitFor(() => expect(screen.getByText('Cotizaciones')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Cotizaciones').length).toBeGreaterThan(0));
     expect(screen.queryByTestId('exec-kpis')).toBeNull();
   });
 
@@ -90,7 +90,7 @@ describe('ExecutiveKpis strip on /', () => {
     // Return an unresolved promise so the effect never settles.
     api.getDashboardOverview.mockReturnValue(new Promise(() => {}));
     render(<App />);
-    await waitFor(() => expect(screen.getByText('Cotizaciones')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Cotizaciones').length).toBeGreaterThan(0));
     expect(screen.queryByTestId('exec-kpis')).toBeNull();
   });
 });

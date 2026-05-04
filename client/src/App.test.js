@@ -98,7 +98,7 @@ describe('Login', () => {
     fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'pass1234' } });
     fireEvent.click(screen.getByRole('button', { name: /ingresar/i }));
 
-    await waitFor(() => expect(screen.getByText('Cotizaciones')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Cotizaciones').length).toBeGreaterThan(0));
   });
 
   it('shows change-password form when must_change_password is true', async () => {
@@ -162,7 +162,7 @@ describe('Dashboard', () => {
   it('hides admin nav links for preventa role', async () => {
     api.getQuotations.mockResolvedValue([]);
     render(<App />);
-    await waitFor(() => expect(screen.getByText('Cotizaciones')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText('Cotizaciones').length).toBeGreaterThan(0));
     expect(screen.queryByText(/⚙️/)).toBeNull();
     expect(screen.queryByText(/👤 Usuarios/)).toBeNull();
   });
@@ -277,7 +277,7 @@ describe('ProjectEditor — fixed_scope stepper', () => {
     await waitFor(() => expect(screen.getByText(/📝 Datos del Proyecto/)).toBeInTheDocument());
     // stepper nav contains all 6 step labels (multiple "Proyecto" matches expected)
     expect(screen.getAllByText(/Proyecto/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Equipo/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Equipo/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Fases/)).toBeInTheDocument();
     expect(screen.getByText(/Asignación/)).toBeInTheDocument();
     expect(screen.getByText(/Épicas/)).toBeInTheDocument();
