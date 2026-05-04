@@ -109,13 +109,14 @@ router.get('/', async (req, res) => {
       });
     }
 
-    // ── Capacity auto-projection: sum prorated client_rate per month ──
-    // For capacity contracts, the projected revenue is derived from
-    // actual assignments and their rate history, NOT from the manual plan.
+    // ── Capacity auto-REAL: sum prorated client_rate per month ──
+    // For capacity contracts, the REAL revenue is derived automatically
+    // from actual assignments and their rate history. The manually
+    // declared plan stays as the Projected/Plan value.
     // When rate history exists, it uses the applicable rate per day based
     // on effective_date. Falls back to assignment.client_rate if no history.
     const capacityIds = contracts.filter((c) => c.type === 'capacity').map((c) => c.id);
-    const capacityProjections = new Map(); // contract_id → { yyyymm → amount }
+    const capacityReals = new Map(); // contract_id → { yyyymm → amount }
     if (capacityIds.length) {
       const { rows: capAsg } = await pool.query(
         `SELECT a.id, a.contract_id, a.start_date, a.end_date, a.client_rate,
@@ -208,8 +209,8 @@ router.get('/', async (req, res) => {
           }
 
           const prorated = parseFloat(monthAmount.toFixed(4));
-          if (!capacityProjections.has(a.contract_id)) capacityProjections.set(a.contract_id, {});
-          const byMonth = capacityProjections.get(a.contract_id);
+          if (!capacityReals.has(a.contract_id)) capacityReals.set(a.contract_id, {});
+          const byMonth = capacityReals.get(a.contract_id);
           byMonth[m] = (byMonth[m] || 0) + prorated;
         }
       }
@@ -240,23 +241,26 @@ router.get('/', async (req, res) => {
       const cells = {};
       const ccyOrig = String(c.original_currency || 'USD').toUpperCase();
       const isCapacity = c.type === 'capacity';
-      const capProj = isCapacity ? (capacityProjections.get(c.id) || {}) : null;
+      const capReal = isCapacity ? (capacityReals.get(c.id) || {}) : null;
       let row_proj_disp = 0; let row_real_disp = 0;
       let row_proj_orig = 0; let row_real_orig = 0;
       months.forEach((m) => {
         const cell = (periodsByContract.get(c.id) || {})[m] || null;
 
-        // For capacity contracts, projected comes from assignments (auto),
-        // not from the manually declared plan. The plan's projected_usd
-        // is kept as `plan_amount_original` for comparison.
-        const autoProjOrig = isCapacity ? (capProj[m] || 0) : 0;
-        const projOrig = isCapacity ? autoProjOrig : Number(cell?.projected_usd || 0);
+        // Projected: always from the manually declared plan (revenue_periods).
+        const projOrig = Number(cell?.projected_usd || 0);
 
-        // If capacity and no cell AND no auto projection, skip entirely.
+        // Real: for capacity → auto-computed from assignments+rates.
+        //       for others   → manually entered (cell.real_usd).
+        const autoRealOrig = isCapacity ? (capReal[m] || 0) : 0;
+        const realOrig = isCapacity
+          ? (autoRealOrig > 0 ? autoRealOrig : null)
+          : (cell?.real_usd != null ? Number(cell.real_usd) : null);
+
+        // Skip empty cells (no plan AND no real).
         if (!cell && !isCapacity) { cells[m] = null; return; }
-        if (!cell && isCapacity && autoProjOrig === 0) { cells[m] = null; return; }
+        if (!cell && isCapacity && autoRealOrig === 0) { cells[m] = null; return; }
 
-        const realOrig = cell?.real_usd != null ? Number(cell.real_usd) : null;
         const projConv = fxUtils.convert(projOrig, ccyOrig, displayCurrency, m, rates);
         const realConv = realOrig == null
           ? { amount: null, rateUsed: null }
@@ -270,23 +274,14 @@ router.get('/', async (req, res) => {
           row_real_disp += realConv.amount != null ? realConv.amount : 0;
         }
 
-        // plan_amount_original: what the capacity manager declared (if any).
-        const planOrig = cell ? Number(cell.projected_usd || 0) : 0;
-        const planConv = isCapacity && planOrig > 0
-          ? fxUtils.convert(planOrig, ccyOrig, displayCurrency, m, rates)
-          : { amount: null };
-
         cells[m] = {
           projected_amount_original: projOrig,
           projected_amount_display:  projConv.amount,
           projected_pct: cell?.projected_pct != null ? Number(cell.projected_pct) : null,
-          // For capacity: plan declared by manager (separate from auto-projection).
-          plan_amount_original: isCapacity ? planOrig : null,
-          plan_amount_display:  isCapacity ? planConv.amount : null,
-          auto_projected: isCapacity, // flag: projection is auto-computed
           real_amount_original: realOrig,
           real_amount_display:  realConv.amount,
           real_pct: cell?.real_pct != null ? Number(cell.real_pct) : null,
+          auto_real: isCapacity, // flag: real is auto-computed from assignments
           projected_usd: projOrig,
           real_usd: realOrig,
           fx_missing: (projOrig > 0 && projConv.amount == null) || (realOrig != null && realConv.amount == null),
@@ -299,7 +294,7 @@ router.get('/', async (req, res) => {
         };
       });
       return {
-        contract: { ...c, auto_projected: isCapacity },
+        contract: { ...c, auto_real: isCapacity },
         cells,
         row_total: {
           projected_amount_display: row_proj_disp,
