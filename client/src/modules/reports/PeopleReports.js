@@ -111,11 +111,11 @@ export default function PeopleReports() {
 
   /* ── data fetching ─────────────────────────────────────────────────── */
   const { data: compRaw, loading: loadingComp, error: errorComp } =
-    useReportData(`/api/reports/time-compliance?from=${from}&to=${to}`, [from, to]);
+    useReportData(`/api/reports/time-compliance?from=${from}&to=${to}`);
   const { data: hiringRaw, loading: loadingHiring } =
-    useReportData('/api/reports/hiring-needs', []);
+    useReportData('/api/reports/hiring-needs');
   const { data: benchRaw, loading: loadingBench } =
-    useReportData('/api/reports/bench?threshold=0.30', []);
+    useReportData('/api/reports/bench?threshold=0.30');
 
   const compData = compRaw?.data ?? [];
   const hiringData = hiringRaw?.data ?? [];

@@ -1,17 +1,20 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { apiGet } from '../../../utils/apiV2';
 
-export default function useReportData(url, deps = []) {
+export default function useReportData(url) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const urlRef = useRef(url);
+  urlRef.current = url;
 
   const reload = useCallback(async () => {
-    if (!url) return;
+    const currentUrl = urlRef.current;
+    if (!currentUrl) return;
     setLoading(true);
     setError('');
     try {
-      const res = await apiGet(url);
+      const res = await apiGet(currentUrl);
       setData(res);
     } catch (e) {
       setError(e.message || 'Error al cargar datos');
@@ -19,15 +22,15 @@ export default function useReportData(url, deps = []) {
     } finally {
       setLoading(false);
     }
-  }, [url, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
+    if (!url) { setLoading(false); return; }
     let cancelled = false;
+    setLoading(true);
+    setError('');
 
     (async () => {
-      if (!url) return;
-      setLoading(true);
-      setError('');
       try {
         const res = await apiGet(url);
         if (!cancelled) setData(res);
@@ -42,7 +45,7 @@ export default function useReportData(url, deps = []) {
     })();
 
     return () => { cancelled = true; };
-  }, [url, ...deps]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [url]);
 
   return { data, loading, error, reload };
 }

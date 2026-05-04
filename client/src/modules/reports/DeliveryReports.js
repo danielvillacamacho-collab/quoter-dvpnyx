@@ -132,13 +132,13 @@ export default function DeliveryReports() {
   /* ── data fetching ─────────────────────────────────────────────────── */
   const qs = toQueryString();
   const { data: summary, loading: loadingSummary, error: errorSummary } =
-    useReportData(`/api/reports/v2/delivery${qs}`, [qs]);
+    useReportData(`/api/reports/v2/delivery${qs}`);
   const { data: utilRaw, loading: loadingUtil } =
-    useReportData(`/api/reports/utilization${qs}`, [qs]);
+    useReportData(`/api/reports/utilization${qs}`);
   const { data: covRaw, loading: loadingCov } =
-    useReportData('/api/reports/coverage', []);
+    useReportData('/api/reports/coverage');
   const { data: reqRaw, loading: loadingReq } =
-    useReportData('/api/reports/pending-requests', []);
+    useReportData('/api/reports/pending-requests');
 
   const kpis = summary?.kpis ?? {};
   const utilizationByArea = summary?.utilization_by_area ?? [];

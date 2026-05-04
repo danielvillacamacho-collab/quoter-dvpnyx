@@ -124,11 +124,11 @@ function sortRows(rows, field, dir) {
 export default function ComercialReports() {
   /* ── data fetching ──────────────────────────────────────────────── */
   const { data: oppsRaw, loading: loadingOpps } =
-    useReportData('/api/opportunities?limit=500', []);
+    useReportData('/api/opportunities?limit=500');
   const { data: actsRaw, loading: loadingActs } =
-    useReportData('/api/activities?limit=500', []);
+    useReportData('/api/activities?limit=500');
   const { data: cliRaw, loading: loadingCli } =
-    useReportData('/api/clients?limit=500', []);
+    useReportData('/api/clients?limit=500');
 
   const opps = oppsRaw?.data ?? [];
   const acts = actsRaw?.data ?? [];
