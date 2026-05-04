@@ -54,6 +54,11 @@ const ICONS = {
   '/time/me':                 Clock,
   '/time/team':               TrendingUp,
   '/reports':                 BarChart3,
+  '/reports/ejecutivo':       TrendingUp,
+  '/reports/comercial':       Briefcase,
+  '/reports/delivery':        FileCheck2,
+  '/reports/gente':           Users,
+  '/reports/finanzas':        DollarSign,
   '/wiki':                    BookOpen,
   '/admin/params':            Settings,
   '/admin/exchange-rates':    BarChart3,
@@ -125,8 +130,17 @@ export function buildGroups(isAdmin) {
       ],
     },
     {
+      title: 'Reportes', items: [
+        { path: '/reports',           label: 'Hub' },
+        { path: '/reports/ejecutivo', label: 'Ejecutivo' },
+        { path: '/reports/comercial', label: 'Comercial' },
+        { path: '/reports/delivery',  label: 'Delivery' },
+        { path: '/reports/gente',     label: 'Gente' },
+        { path: '/reports/finanzas',  label: 'Finanzas' },
+      ],
+    },
+    {
       title: null, items: [
-        { path: '/reports',      label: 'Reportes' },
         { path: '/wiki',         label: 'Wiki' },
         { path: '/preferencias', label: 'Preferencias' },
       ],
