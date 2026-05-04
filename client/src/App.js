@@ -31,6 +31,12 @@ import CapacityPlanner from './modules/CapacityPlanner';
 import TimeMe from './modules/TimeMe';
 import TimeTeam from './modules/TimeTeam';
 import Reports from './modules/Reports';
+import ReportsHub from './modules/reports/ReportsHub';
+import ExecutiveReports from './modules/reports/ExecutiveReports';
+import ComercialReports from './modules/reports/ComercialReports';
+import DeliveryReports from './modules/reports/DeliveryReports';
+import PeopleReports from './modules/reports/PeopleReports';
+import FinanceReports from './modules/reports/FinanceReports';
 import DashboardMe from './modules/DashboardMe';
 import ClientDetail from './modules/ClientDetail';
 import OpportunityDetail from './modules/OpportunityDetail';
@@ -207,7 +213,12 @@ function Layout() {
           <Route path="/time" element={<TimeMe />} />
           <Route path="/time/me" element={<TimeMe />} />
           <Route path="/time/team" element={<TimeTeam />} />
-          <Route path="/reports" element={<Reports />} />
+          <Route path="/reports" element={<ReportsHub />} />
+          <Route path="/reports/ejecutivo" element={<ExecutiveReports />} />
+          <Route path="/reports/comercial" element={<ComercialReports />} />
+          <Route path="/reports/delivery" element={<DeliveryReports />} />
+          <Route path="/reports/gente" element={<PeopleReports />} />
+          <Route path="/reports/finanzas" element={<FinanceReports />} />
           <Route path="/reports/:type" element={<Reports />} />
           <Route path="/dashboard/me" element={<DashboardMe />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
