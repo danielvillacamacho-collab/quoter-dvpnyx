@@ -2358,7 +2358,7 @@ VALUES
    true),
   ('reportes-plan-vs-real', 'reportes', 1,
    'Reporte Plan vs Real',
-   E'# Reporte Plan vs Real\n\nCompara lo planeado (asignaciones / capacidad) contra lo real (horas reportadas).\n\n| Estado | Significado |\n|---|---|\n| `on_plan` | Diferencia ≤ 10pp |\n| `over` | Reportó más horas de las asignadas |\n| `under` | Reportó menos horas de las asignadas |\n| `missing` | No registró horas esa semana |\n| `unplanned` | Registró horas sin asignación planificada |\n| `no_data` | Sin datos suficientes |\n\nTolerancia: **±10 puntos porcentuales**.',
+   E'# Reporte Plan vs Real\n\nCompara lo planeado (asignaciones / capacidad) contra lo real (horas reportadas).\n\n| Estado | Significado |\n|---|---|\n| \`on_plan\` | Diferencia ≤ 10pp |\n| \`over\` | Reportó más horas de las asignadas |\n| \`under\` | Reportó menos horas de las asignadas |\n| \`missing\` | No registró horas esa semana |\n| \`unplanned\` | Registró horas sin asignación planificada |\n| \`no_data\` | Sin datos suficientes |\n\nTolerancia: **±10 puntos porcentuales**.',
    true)
 ON CONFLICT (slug) DO NOTHING;
 `;
