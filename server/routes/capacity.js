@@ -87,8 +87,23 @@ router.get('/planner', async (req, res) => {
     const viewportEnd   = weekWindows[weekWindows.length - 1].end_date;
 
     /* ── 1. Employees (filtered) ─────────────────────────────── */
-    const empParams = [];
-    const empWhere = [`e.deleted_at IS NULL`, `e.status <> 'terminated'`];
+    // Terminated employees are included ONLY if they have at least one
+    // assignment visible in the current viewport. This lets the planner
+    // see historical work of people who left the company without
+    // polluting the list with ex-employees who have no open assignments.
+    const empParams = [viewportStart, viewportEnd]; // $1, $2 reserved for terminated subquery
+    const empWhere = [
+      `e.deleted_at IS NULL`,
+      `(e.status <> 'terminated' OR EXISTS (
+          SELECT 1 FROM assignments _asg
+           WHERE _asg.employee_id = e.id
+             AND _asg.deleted_at IS NULL
+             AND _asg.status <> 'cancelled'
+             AND _asg.start_date <= $2::date
+             AND (_asg.end_date IS NULL OR _asg.end_date >= $1::date)
+        )
+      )`,
+    ];
     if (p.areaId) { empParams.push(p.areaId); empWhere.push(`e.area_id = $${empParams.length}`); }
     if (p.levelMin) {
       // Postgres orders L1..L11 lexicographically wrong ('L10' < 'L2'), so
@@ -266,8 +281,11 @@ router.get('/planner', async (req, res) => {
       };
     });
 
-    const meta = aggregateMeta(employees, openRequests);
-    const alerts = computeAlerts(employees, openRequests, weekWindows);
+    // Terminated employees appear in the planner for historical context but
+    // must not inflate/deflate the header metrics or trigger new alerts.
+    const activeEmployees = employees.filter((e) => e.status !== 'terminated');
+    const meta = aggregateMeta(activeEmployees, openRequests);
+    const alerts = computeAlerts(activeEmployees, openRequests, weekWindows);
 
     res.json({
       window: {
