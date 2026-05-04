@@ -109,6 +109,48 @@ router.get('/', async (req, res) => {
       });
     }
 
+    // ── Capacity auto-projection: sum prorated client_rate per month ──
+    // For capacity contracts, the projected revenue is derived from
+    // actual assignments and their client_rate, NOT from the manual plan.
+    const capacityIds = contracts.filter((c) => c.type === 'capacity').map((c) => c.id);
+    const capacityProjections = new Map(); // contract_id → { yyyymm → amount }
+    if (capacityIds.length) {
+      const { rows: capAsg } = await pool.query(
+        `SELECT a.contract_id, a.start_date, a.end_date, a.client_rate,
+                a.client_rate_currency
+           FROM assignments a
+          WHERE a.contract_id = ANY($1::uuid[])
+            AND a.deleted_at IS NULL
+            AND a.status NOT IN ('cancelled')
+            AND a.client_rate IS NOT NULL`,
+        [capacityIds],
+      );
+      // Build month-by-month proration for each capacity assignment.
+      for (const a of capAsg) {
+        const rate = Number(a.client_rate);
+        if (!rate) continue;
+        const aStart = new Date(a.start_date);
+        const aEnd = a.end_date ? new Date(a.end_date) : null;
+        for (const m of months) {
+          const year = Number(m.slice(0, 4));
+          const month = Number(m.slice(4)); // 1-indexed
+          const dim = new Date(year, month, 0).getDate();
+          const monthStart = new Date(year, month - 1, 1);
+          const monthEnd = new Date(year, month - 1, dim);
+          // Overlap check
+          if (aStart > monthEnd) continue;
+          if (aEnd && aEnd < monthStart) continue;
+          const activeStart = aStart > monthStart ? aStart : monthStart;
+          const activeEnd = aEnd && aEnd < monthEnd ? aEnd : monthEnd;
+          const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
+          const prorated = parseFloat((rate * daysActive / dim).toFixed(4));
+          if (!capacityProjections.has(a.contract_id)) capacityProjections.set(a.contract_id, {});
+          const byMonth = capacityProjections.get(a.contract_id);
+          byMonth[m] = (byMonth[m] || 0) + prorated;
+        }
+      }
+    }
+
     // Cargar TODOS los rates relevantes — todas las monedas que aparecen
     // en los contratos + display_currency. Carga una sola query y el
     // helper buildRatesMap maneja fallback al rate más reciente disponible.
@@ -133,13 +175,24 @@ router.get('/', async (req, res) => {
     const rowsOut = contracts.map((c) => {
       const cells = {};
       const ccyOrig = String(c.original_currency || 'USD').toUpperCase();
+      const isCapacity = c.type === 'capacity';
+      const capProj = isCapacity ? (capacityProjections.get(c.id) || {}) : null;
       let row_proj_disp = 0; let row_real_disp = 0;
       let row_proj_orig = 0; let row_real_orig = 0;
       months.forEach((m) => {
         const cell = (periodsByContract.get(c.id) || {})[m] || null;
-        if (!cell) { cells[m] = null; return; }
-        const projOrig = Number(cell.projected_usd || 0);
-        const realOrig = cell.real_usd != null ? Number(cell.real_usd) : null;
+
+        // For capacity contracts, projected comes from assignments (auto),
+        // not from the manually declared plan. The plan's projected_usd
+        // is kept as `plan_amount_original` for comparison.
+        const autoProjOrig = isCapacity ? (capProj[m] || 0) : 0;
+        const projOrig = isCapacity ? autoProjOrig : Number(cell?.projected_usd || 0);
+
+        // If capacity and no cell AND no auto projection, skip entirely.
+        if (!cell && !isCapacity) { cells[m] = null; return; }
+        if (!cell && isCapacity && autoProjOrig === 0) { cells[m] = null; return; }
+
+        const realOrig = cell?.real_usd != null ? Number(cell.real_usd) : null;
         const projConv = fxUtils.convert(projOrig, ccyOrig, displayCurrency, m, rates);
         const realConv = realOrig == null
           ? { amount: null, rateUsed: null }
@@ -152,28 +205,37 @@ router.get('/', async (req, res) => {
           row_real_orig += realOrig;
           row_real_disp += realConv.amount != null ? realConv.amount : 0;
         }
+
+        // plan_amount_original: what the capacity manager declared (if any).
+        const planOrig = cell ? Number(cell.projected_usd || 0) : 0;
+        const planConv = isCapacity && planOrig > 0
+          ? fxUtils.convert(planOrig, ccyOrig, displayCurrency, m, rates)
+          : { amount: null };
+
         cells[m] = {
           projected_amount_original: projOrig,
           projected_amount_display:  projConv.amount,
-          projected_pct: cell.projected_pct != null ? Number(cell.projected_pct) : null,
+          projected_pct: cell?.projected_pct != null ? Number(cell.projected_pct) : null,
+          // For capacity: plan declared by manager (separate from auto-projection).
+          plan_amount_original: isCapacity ? planOrig : null,
+          plan_amount_display:  isCapacity ? planConv.amount : null,
+          auto_projected: isCapacity, // flag: projection is auto-computed
           real_amount_original: realOrig,
           real_amount_display:  realConv.amount,
-          real_pct: cell.real_pct != null ? Number(cell.real_pct) : null,
-          // Aliases legacy (mantienen el nombre `_usd` aunque el contenido
-          // sea moneda original — eng team va a renombrar).
+          real_pct: cell?.real_pct != null ? Number(cell.real_pct) : null,
           projected_usd: projOrig,
           real_usd: realOrig,
           fx_missing: (projOrig > 0 && projConv.amount == null) || (realOrig != null && realConv.amount == null),
-          status: cell.status,
-          notes: cell.notes,
-          closed_at: cell.closed_at,
-          closed_by: cell.closed_by,
-          updated_at: cell.updated_at,
-          updated_by: cell.updated_by,
+          status: cell?.status || 'open',
+          notes: cell?.notes || null,
+          closed_at: cell?.closed_at || null,
+          closed_by: cell?.closed_by || null,
+          updated_at: cell?.updated_at || null,
+          updated_by: cell?.updated_by || null,
         };
       });
       return {
-        contract: c,
+        contract: { ...c, auto_projected: isCapacity },
         cells,
         row_total: {
           projected_amount_display: row_proj_disp,
@@ -181,7 +243,6 @@ router.get('/', async (req, res) => {
           projected_amount_original: row_proj_orig,
           real_amount_original:      row_real_orig,
           original_currency:         ccyOrig,
-          // Legacy aliases:
           projected_usd: row_proj_orig,
           real_usd:      row_real_orig,
         },
@@ -428,10 +489,21 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
     const contract = cRows[0];
     const isProject = contract.type === 'project';
 
-    const { rows: existing } = await conn.query(
+    let { rows: existing } = await conn.query(
       `SELECT * FROM revenue_periods WHERE contract_id=$1 AND yyyymm=$2 FOR UPDATE`,
       [contract_id, yyyymm],
     );
+    // For capacity contracts, auto-create the row if it doesn't exist
+    // (projected is computed from assignments, so no manual plan needed).
+    if (!existing.length && contract.type === 'capacity') {
+      const { rows: created } = await conn.query(
+        `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, created_by, updated_by)
+           VALUES ($1, $2, 0, $3, $3)
+         RETURNING *`,
+        [contract_id, yyyymm, req.user.id],
+      );
+      existing = created;
+    }
     if (!existing.length) {
       await conn.query('ROLLBACK');
       return res.status(409).json({ error: 'Aún no hay plan declarado para este mes. Usa "Editar plan" antes de capturar reales.' });
@@ -542,10 +614,19 @@ router.post('/:contract_id/:yyyymm/close', async (req, res) => {
     const isProject = cRows[0].type === 'project';
     const totalValue = Number(cRows[0].total_value_usd || 0);
 
-    const { rows: existing } = await conn.query(
+    let { rows: existing } = await conn.query(
       `SELECT * FROM revenue_periods WHERE contract_id=$1 AND yyyymm=$2 FOR UPDATE`,
       [contract_id, yyyymm],
     );
+    if (!existing.length && cRows[0].type === 'capacity') {
+      const { rows: created } = await conn.query(
+        `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, created_by, updated_by)
+           VALUES ($1, $2, 0, $3, $3)
+         RETURNING *`,
+        [contract_id, yyyymm, req.user.id],
+      );
+      existing = created;
+    }
     if (!existing.length) {
       await conn.query('ROLLBACK');
       return res.status(404).json({ error: 'Período no existe — agrega proyección antes de cerrar' });
