@@ -2307,6 +2307,10 @@ CREATE TABLE IF NOT EXISTS help_articles (
   updated_by      UUID          REFERENCES users(id) ON DELETE SET NULL
 );
 
+-- Defensivo: si la tabla existía sin body_md (deploy parcial), agregar la columna
+ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS body_md TEXT NOT NULL DEFAULT '';
+ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL;
+
 CREATE INDEX IF NOT EXISTS help_articles_category_idx
   ON help_articles (category, sort_order);
 CREATE INDEX IF NOT EXISTS help_articles_published_idx
