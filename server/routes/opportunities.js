@@ -54,6 +54,7 @@ const SORTABLE = {
   created_at:           'o.created_at',
   updated_at:           'o.updated_at',
   client_name:          'c.name',
+  deal_type:            'o.deal_type',
 };
 
 router.use(auth);
@@ -108,6 +109,8 @@ const EDITABLE_FIELDS = [
   'revenue_type', 'one_time_amount_usd', 'mrr_usd', 'contract_length_months',
   'champion_identified', 'economic_buyer_identified',
   'funding_source', 'funding_amount_usd', 'drive_url',
+  // SPEC-CRM-01 — deal enrichment
+  'deal_type', 'co_owner_id',
 ];
 
 /* -------- LIST -------- */
@@ -140,6 +143,11 @@ router.get('/', async (req, res) => {
     if (req.query.has_champion === 'false') wheres.push(`o.champion_identified = false`);
     if (req.query.has_economic_buyer === 'true')  wheres.push(`o.economic_buyer_identified = true`);
     if (req.query.has_economic_buyer === 'false') wheres.push(`o.economic_buyer_identified = false`);
+    // SPEC-CRM-01 — deal_type filter
+    const VALID_DEAL_TYPES = ['new_business', 'upsell_cross_sell', 'renewal', 'resell'];
+    if (req.query.deal_type && VALID_DEAL_TYPES.includes(req.query.deal_type)) {
+      wheres.push(`o.deal_type = ${add(req.query.deal_type)}`);
+    }
 
     // SPEC-CRM-00 v1.1 PR4 — RBAC scoping.
     if (req.user.role === 'external') {
@@ -164,9 +172,11 @@ router.get('/', async (req, res) => {
       pool.query(
         `SELECT o.*,
            c.name AS client_name,
-           (SELECT COUNT(*)::int FROM quotations q WHERE q.opportunity_id=o.id) AS quotations_count
+           (SELECT COUNT(*)::int FROM quotations q WHERE q.opportunity_id=o.id) AS quotations_count,
+           co.name AS co_owner_name
            FROM opportunities o
            LEFT JOIN clients c ON c.id = o.client_id
+           LEFT JOIN users co ON co.id = o.co_owner_id
            ${where}
            ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
@@ -436,6 +446,9 @@ router.post('/', async (req, res) => {
     funding_amount_usd,
     drive_url,
     booking_amount_usd: legacyBookingAmount,
+    // SPEC-CRM-01 — deal enrichment
+    deal_type: dealTypeIn,
+    co_owner_id,
   } = req.body || {};
 
   if (!client_id) return res.status(400).json({ error: 'client_id es requerido' });
@@ -460,6 +473,12 @@ router.post('/', async (req, res) => {
   if (revenueErr) return res.status(400).json({ error: revenueErr });
   const fundingErr = validateFunding({ funding_source, funding_amount_usd });
   if (fundingErr) return res.status(400).json({ error: fundingErr });
+  // SPEC-CRM-01 — deal_type validation
+  const VALID_DEAL_TYPES_CREATE = ['new_business', 'upsell_cross_sell', 'renewal', 'resell'];
+  const deal_type = dealTypeIn || 'new_business';
+  if (!VALID_DEAL_TYPES_CREATE.includes(deal_type)) {
+    return res.status(400).json({ error: `deal_type inválido: ${deal_type}` });
+  }
 
   try {
     // Verify the client exists and is not soft-deleted. We also pull the
@@ -525,9 +544,10 @@ router.post('/', async (req, res) => {
           country, opportunity_number,
           revenue_type, one_time_amount_usd, mrr_usd, contract_length_months,
           champion_identified, economic_buyer_identified,
-          funding_source, funding_amount_usd, drive_url, booking_amount_usd)
+          funding_source, funding_amount_usd, drive_url, booking_amount_usd,
+          deal_type, co_owner_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
-               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
        RETURNING *`,
       [
         client_id,
@@ -552,6 +572,8 @@ router.post('/', async (req, res) => {
         funding_amount_usd != null ? Number(funding_amount_usd) : null,
         drive_url || null,
         computedBooking,
+        deal_type,
+        co_owner_id || null,
       ],
     );
     const opp = rows[0];
@@ -664,6 +686,8 @@ router.put('/:id', async (req, res) => {
           funding_source            = COALESCE($16, funding_source),
           funding_amount_usd        = COALESCE($17, funding_amount_usd),
           drive_url                 = COALESCE($18, drive_url),
+          deal_type                 = COALESCE($19, deal_type),
+          co_owner_id               = COALESCE($20, co_owner_id),
           updated_at                = NOW()
         WHERE id=$9 AND deleted_at IS NULL
         RETURNING *`,
@@ -686,6 +710,8 @@ router.put('/:id', async (req, res) => {
         body.funding_source ?? null,
         body.funding_amount_usd != null ? Number(body.funding_amount_usd) : null,
         body.drive_url ?? null,
+        body.deal_type ?? null,
+        body.co_owner_id ?? null,
       ],
     );
     const after = rows[0];
@@ -771,6 +797,36 @@ router.post('/:id/status', async (req, res) => {
         valid_transitions: Array.from(allowed || []),
       });
     }
+    // SPEC-CRM-01 — Exit criteria: soft validation on forward transitions.
+    // Admin/superadmin can bypass with { override_exit_criteria: true }.
+    const canOverride = ['superadmin', 'admin'].includes(req.user.role);
+    const overrideRequested = req.body.override_exit_criteria === true;
+    const isForward = STAGE_ORDER[new_status] > STAGE_ORDER[current.status];
+    if (isForward && !isTerminal(new_status) && !isPostponed(new_status) && !(canOverride && overrideRequested)) {
+      const exitGaps = [];
+      if (new_status === 'qualified' || STAGE_ORDER[new_status] >= STAGE_ORDER['qualified']) {
+        if (!current.description && !current.name) exitGaps.push('Descripción requerida');
+      }
+      if (STAGE_ORDER[new_status] >= STAGE_ORDER['solution_design']) {
+        if (!current.expected_close_date) exitGaps.push('Fecha de cierre esperada requerida');
+        if (!current.next_step) exitGaps.push('Próximo paso requerido');
+      }
+      if (STAGE_ORDER[new_status] >= STAGE_ORDER['negotiation']) {
+        if (!current.champion_identified) exitGaps.push('Champion debe estar identificado');
+      }
+      if (STAGE_ORDER[new_status] >= STAGE_ORDER['verbal_commit']) {
+        if (!current.economic_buyer_identified) exitGaps.push('Economic Buyer debe estar identificado');
+      }
+      if (exitGaps.length > 0) {
+        await connection.query('ROLLBACK');
+        return res.status(422).json({
+          error: 'Exit criteria no cumplidos para avanzar a esta etapa',
+          exit_criteria_missing: exitGaps,
+          can_override: canOverride,
+        });
+      }
+    }
+
     if (new_status === 'closed_won' && !winning_quotation_id) {
       await connection.query('ROLLBACK');
       return res.status(400).json({ error: 'winning_quotation_id es requerido al marcar ganada' });

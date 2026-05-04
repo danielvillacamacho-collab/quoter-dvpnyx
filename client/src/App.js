@@ -42,6 +42,10 @@ import Users from './modules/Users';
 import Preferencias from './modules/Preferencias';
 import EmployeeCosts from './modules/EmployeeCosts';
 import EmployeeCostsImport from './modules/EmployeeCostsImport';
+// SPEC-CRM-01 — Contacts, Activities, Budgets
+import Contacts from './modules/Contacts';
+import Activities from './modules/Activities';
+import Budgets from './modules/Budgets';
 // SPEC-II-00 — Internal Initiatives, Novelties & Idle Time
 import InternalInitiatives from './modules/InternalInitiatives';
 import InternalInitiativeDetail from './modules/InternalInitiativeDetail';
@@ -187,6 +191,8 @@ function Layout() {
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/opportunities" element={<Opportunities />} />
+          <Route path="/contacts" element={<Contacts />} />
+          <Route path="/activities" element={<Activities />} />
           <Route path="/pipeline" element={<PipelineKanban />} />
           <Route path="/revenue" element={<Revenue />} />
           <Route path="/revenue/plan/:contract_id" element={<RevenuePlanEditor />} />
@@ -213,6 +219,7 @@ function Layout() {
           <Route path="/internal-initiatives/:id"    element={<InternalInitiativeDetail />} />
           <Route path="/novelties"                    element={<Novelties />} />
           <Route path="/idle-time"                    element={<IdleTime />} />
+          {isAdmin && <Route path="/admin/budgets" element={<Budgets />} />}
           <Route path="/admin/holidays"               element={<CountryHolidays />} />
           <Route path="/preferencias" element={<Preferencias />} />
         </Routes>

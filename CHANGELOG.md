@@ -15,6 +15,34 @@ La fuente de verdad para commits es `git log` sobre `develop`. Este archivo cubr
 
 ## [Unreleased] — entregas en curso
 
+### feat(spec-crm-01): contactos + actividades + presupuestos + deal_type + exit criteria — 2026-05-04
+
+Enriquecimiento CRM solicitado por el CCO. Materializa SPEC-CRM-01 sobre la base de SPEC-CRM-00. Cuatro tablas nuevas, tres módulos UI nuevos, y mejoras al pipeline de oportunidades.
+
+**Schema (bloque `SPEC_CRM_01_SQL` en `migrate.js`, idempotente):**
+- `contacts` — personas de contacto por cliente (nombre, email, teléfono, cargo, seniority, LinkedIn).
+- `opportunity_contacts` — bridge table con `deal_role` (economic_buyer, champion, coach, decision_maker, influencer, technical_evaluator, procurement, legal, detractor, blocker). UNIQUE (opportunity_id, contact_id).
+- `activities` — log de interacciones comerciales (tipo, fecha, asunto, notas, outcome). FK a opportunity, client, contact, user.
+- `budgets` — targets de booking comercial por período con ciclo draft→active→closed y aprobación.
+- Columnas en `opportunities`: `deal_type` (NOT NULL, backfill a `new_business`), `co_owner_id` (FK users), `drive_url`.
+- Columna en `clients`: `last_activity_at` (auto-updated por POST activities).
+
+**Server (3 rutas nuevas + update oportunidades):**
+- `routes/contacts.js` (~306 LOC) — CRUD + `/by-client/:id` + `/by-opportunity/:id` + `/opportunity-link` (upsert bridge).
+- `routes/activities.js` (~319 LOC) — CRUD + `/by-client/:id`. POST auto-actualiza `clients.last_activity_at`. Solo creador/admin puede editar/eliminar.
+- `routes/budgets.js` (~276 LOC) — CRUD admin-only + `/summary` (target vs booking real de closed_won).
+- `routes/opportunities.js` — `deal_type` y `co_owner_id` en EDITABLE_FIELDS, filtro `deal_type` en LIST, co_owner_name via LEFT JOIN, validación de deal_type en CREATE/UPDATE. **Exit criteria**: soft validation al avanzar de etapa (422 con `exit_criteria_missing` array). Admin/superadmin override con `override_exit_criteria: true`.
+
+**Cliente (3 módulos nuevos + updates):**
+- `modules/Contacts.js` (~331 LOC) — lista paginada con search, filtro seniority, create/edit modal con client selector.
+- `modules/Activities.js` (~408 LOC) — lista paginada con filtro por tipo, search, create/edit modal con carga dinámica de contactos por cliente.
+- `modules/Budgets.js` (~383 LOC) — admin-only. SummaryBar (target vs real con barra de progreso), tabla paginada, CRUD modal.
+- `modules/Opportunities.js` — filtro y columna deal_type, selector co_owner_id, deal_type en form.
+- `modules/OpportunityDetail.js` — cards de Contactos (con deal_role badges) y Actividades recientes, deal_type y co_owner en Resumen.
+- `modules/ClientDetail.js` — cards de Contactos y Actividades recientes.
+- `shell/Sidebar.js` — Contactos y Actividades en sección Comercial, Presupuestos en Configuración (admin).
+- `App.js` — rutas `/contacts`, `/activities`, `/admin/budgets`.
+
 ### chore(handoff): cleanups pre-handoff equipo senior — 2026-05-02
 
 Pase de saneamiento previo al handoff al equipo senior del 2026-05-15. Cambios cosméticos / de documentación, **cero modificación funcional**.

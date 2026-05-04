@@ -8,11 +8,11 @@ Vista funcional + técnica de cada módulo del sistema. Por cada uno: qué hace,
 
 ## Índice por área de negocio
 
-- **Comercial**: [Clients](#clients) · [Opportunities](#opportunities) · [Quotations](#quotations)
+- **Comercial**: [Clients](#clients) · [Contacts](#contacts) · [Opportunities](#opportunities) · [Activities](#activities) · [Quotations](#quotations)
 - **Delivery**: [Contracts](#contracts) · [Resource Requests](#resource-requests) · [Assignments](#assignments) · [Capacity Planner](#capacity-planner)
 - **Time Tracking**: [Time Entries (`/time/me`)](#time-entries-timeme) · [Weekly Allocations (`/time/team`)](#weekly-allocations-timeteam)
 - **Personas**: [Employees](#employees) · [Areas + Skills](#areas--skills)
-- **Finanzas**: [Revenue](#revenue) · [Exchange Rates](#exchange-rates)
+- **Finanzas**: [Revenue](#revenue) · [Exchange Rates](#exchange-rates) · [Budgets](#budgets)
 - **Reportes**: [Reports + Plan-vs-Real](#reports--plan-vs-real) · [Executive Dashboard](#executive-dashboard)
 - **Plataforma**: [Auth + Users](#auth--users) · [Notifications](#notifications) · [Bulk Import](#bulk-import) · [Parameters](#parameters) · [AI Interactions](#ai-interactions)
 
@@ -40,15 +40,37 @@ Vista funcional + técnica de cada módulo del sistema. Por cada uno: qué hace,
 
 ---
 
+## Contacts
+
+> **Nuevo en SPEC-CRM-01** (mayo 2026).
+
+**Qué hace:** personas de contacto en clientes. Cada contacto pertenece a un `client_id` y puede vincularse a N oportunidades vía `opportunity_contacts` con un deal role (economic_buyer, champion, coach, decision_maker, influencer, technical_evaluator, procurement, legal, detractor, blocker).
+
+| Aspecto | Ubicación |
+|---|---|
+| Server route | `server/routes/contacts.js` |
+| UI lista | `client/src/modules/Contacts.js` |
+| Tabla | `contacts` + `opportunity_contacts` (bridge) |
+| Endpoints | `GET /api/contacts`, `GET /:id`, `POST /`, `PUT /:id`, `DELETE /:id`, `GET /by-client/:clientId`, `GET /by-opportunity/:oppId`, `POST /opportunity-link`, `DELETE /opportunity-link/:id` |
+
+**Reglas:**
+- `seniority` enum: `c_level | vp | director | manager | senior | mid | junior | intern`.
+- `opportunity_contacts` upsert vía `ON CONFLICT (opportunity_id, contact_id)`.
+- Soft delete.
+
+**Deuda:** ninguna.
+
+---
+
 ## Opportunities
 
-> **Reescrito en SPEC-CRM-00 v1.1** (mayo 2026): pipeline 9 estados + revenue model + margin + RBAC scoping + alertas. Ver [`CHANGELOG.md`](../CHANGELOG.md) y [`API_REFERENCE.md#opportunities`](API_REFERENCE.md) para detalle.
+> **Reescrito en SPEC-CRM-00 v1.1** (mayo 2026): pipeline 9 estados + revenue model + margin + RBAC scoping + alertas. Enriquecido en **SPEC-CRM-01** con `deal_type`, `co_owner_id`, exit criteria por etapa, y vínculos a contactos/actividades. Ver [`CHANGELOG.md`](../CHANGELOG.md) y [`API_REFERENCE.md#opportunities`](API_REFERENCE.md) para detalle.
 
 **Qué hace:** pipeline comercial. Cada cliente puede tener N oportunidades. Estados forman un Kanban con probabilidades calibradas.
 
 | Aspecto | Ubicación |
 |---|---|
-| Server | `server/routes/opportunities.js` (592 LOC post CRM-00) |
+| Server | `server/routes/opportunities.js` (~1250 LOC post CRM-01) |
 | Helpers server | `server/utils/pipeline.js`, `server/utils/booking.js`, `server/utils/alerts.js` |
 | Helpers client | `client/src/utils/pipeline.js`, `client/src/utils/booking.js` |
 | UI lista | `client/src/modules/Opportunities.js` |
@@ -103,7 +125,41 @@ Las transiciones permiten saltos hacia atrás (Kanban drag-and-drop), pero gener
 
 **Eventos:** `opportunity.created`, `.updated`, `.deleted`, `.status_changed`, `.won`, `.lost`, `.cancelled`, `.postponed`, `.reactivated`, `.margin_low`.
 
-**Deuda:** ninguna activa post CRM-00. SSOT del pipeline (`pipeline.js` server + client + trigger DB) requiere sincronizar los tres puntos cuando se cambien estados — comentado en cada archivo.
+**Deal type (CRM-01):** `new_business | upsell_cross_sell | renewal | resell`. Backfilled a `new_business`, NOT NULL con CHECK.
+
+**Co-owner (CRM-01):** `co_owner_id` FK a `users` permite split credit. Visible en listado y detalle.
+
+**Exit criteria (CRM-01):** soft validation al avanzar de etapa. 422 con `exit_criteria_missing` array si faltan campos:
+- `qualified+`: descripción requerida.
+- `solution_design+`: `expected_close_date` + `next_step`.
+- `negotiation+`: `champion_identified`.
+- `verbal_commit+`: `economic_buyer_identified`.
+Admin/superadmin pueden pasar `override_exit_criteria: true` para bypasear.
+
+**Deuda:** ninguna activa post CRM-01. SSOT del pipeline (`pipeline.js` server + client + trigger DB) requiere sincronizar los tres puntos cuando se cambien estados — comentado en cada archivo.
+
+---
+
+## Activities
+
+> **Nuevo en SPEC-CRM-01** (mayo 2026).
+
+**Qué hace:** log de interacciones comerciales con clientes/oportunidades. Cada actividad tiene un tipo, fecha, asunto, notas, y puede estar vinculada a una oportunidad, cliente y contacto.
+
+| Aspecto | Ubicación |
+|---|---|
+| Server route | `server/routes/activities.js` |
+| UI lista | `client/src/modules/Activities.js` |
+| Tabla | `activities` |
+| Endpoints | `GET /api/activities`, `GET /:id`, `POST /`, `PUT /:id`, `DELETE /:id`, `GET /by-client/:clientId` |
+
+**Tipos:** `call | email | meeting | note | proposal_sent | demo | follow_up | other`.
+
+**Side effects:**
+- POST auto-actualiza `clients.last_activity_at` (resuelve `client_id` desde la oportunidad si no se pasa directo).
+- Solo el creador o admin puede editar/eliminar.
+
+**Deuda:** ninguna.
 
 ---
 
@@ -322,6 +378,30 @@ Obligatorio al crear/editar capacity y project. Validación server-side con cód
 **Deuda relevante:**
 - Sin trigger de inmutabilidad para rows `closed`. Comment dice "TODO eng team: ver SPEC-RR-00 para modelo NIIF 15 real".
 - Sin multi-currency real (usa `original_currency` + `exchange_rates`).
+
+---
+
+## Budgets
+
+> **Nuevo en SPEC-CRM-01** (mayo 2026).
+
+**Qué hace:** targets de booking comercial por período. Permite comparar metas vs actuals (booking de opps closed_won) para forecasting y gestión.
+
+| Aspecto | Ubicación |
+|---|---|
+| Server route | `server/routes/budgets.js` |
+| UI | `client/src/modules/Budgets.js` |
+| Tabla | `budgets` |
+| Endpoints | `GET /api/budgets`, `GET /:id`, `POST /`, `PUT /:id`, `DELETE /:id`, `GET /summary` |
+
+**Reglas:**
+- Admin-only para escritura.
+- Ciclo de vida: `draft → active → closed`.
+- `approved_by` / `approved_at` se auto-setean al pasar a `active`.
+- `GET /summary` agrega target USD vs booking real (closed_won del período).
+- Hard delete (config data, no transaccional).
+
+**Deuda:** ninguna.
 
 ---
 

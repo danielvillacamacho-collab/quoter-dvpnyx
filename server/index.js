@@ -102,6 +102,10 @@ app.use('/api/bulk-import',       require('./routes/bulk_import'));  // ✅ Spri
 app.use('/api/squads',            _stubs.squads);
 app.use('/api/events',            _stubs.events);
 app.use('/api/notifications',     require('./routes/notifications')); // ✅ In-app notifications
+// SPEC-CRM-01 — Contacts, Activities, Budgets (CRM enrichment)
+app.use('/api/contacts',          require('./routes/contacts'));
+app.use('/api/activities',        require('./routes/activities'));
+app.use('/api/budgets',           require('./routes/budgets'));
 app.use('/api/ai-interactions',   require('./routes/ai_interactions')); // ✅ AI agent log + decision feedback
 app.use('/api/employee-costs',    require('./routes/employee_costs')); // ✅ Employee Costs (admin-only PII)
 // SPEC-II-00 — Internal Initiatives, Novelties & Idle Time (Abril 2026)

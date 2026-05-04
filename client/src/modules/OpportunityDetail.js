@@ -44,10 +44,23 @@ function Field({ label, children }) {
   );
 }
 
+const DEAL_ROLE_LABEL = {
+  economic_buyer: 'Economic Buyer', champion: 'Champion', coach: 'Coach',
+  decision_maker: 'Decision Maker', influencer: 'Influencer',
+  technical_evaluator: 'Technical Evaluator', procurement: 'Procurement',
+  legal: 'Legal', detractor: 'Detractor', blocker: 'Blocker',
+};
+const ACTIVITY_TYPE_LABEL = {
+  call: 'Llamada', email: 'Email', meeting: 'Reunión', note: 'Nota',
+  proposal_sent: 'Propuesta', demo: 'Demo', follow_up: 'Seguimiento', other: 'Otro',
+};
+
 export default function OpportunityDetail() {
   const { id } = useParams();
   const nav = useNavigate();
   const [opp, setOpp] = useState(null);
+  const [contacts, setContacts] = useState([]);
+  const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -55,8 +68,14 @@ export default function OpportunityDetail() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await apiGet(`/api/opportunities/${id}`);
+      const [data, ctRes, actRes] = await Promise.all([
+        apiGet(`/api/opportunities/${id}`),
+        apiGet(`/api/contacts/by-opportunity/${id}`).catch(() => []),
+        apiGet(`/api/activities/by-opportunity/${id}?limit=20`).catch(() => ({ data: [] })),
+      ]);
       setOpp(data || null);
+      setContacts(Array.isArray(ctRes) ? ctRes : (ctRes?.data || []));
+      setActivities(actRes?.data || (Array.isArray(actRes) ? actRes : []));
     } catch (e) { setErr(e.message || 'Error'); }
     finally { setLoading(false); }
   }, [id]);
@@ -283,8 +302,10 @@ export default function OpportunityDetail() {
         <h2 style={s.h2}>Resumen</h2>
         <div style={s.grid}>
           <Field label="Descripción">{opp.description}</Field>
+          <Field label="Tipo de deal">{({new_business:'Venta nueva',upsell_cross_sell:'Upsell/Cross-sell',renewal:'Renovación',resell:'Resell'})[opp.deal_type] || opp.deal_type || '—'}</Field>
           <Field label="Cierre esperado">{opp.expected_close_date ? String(opp.expected_close_date).slice(0, 10) : null}</Field>
           <Field label="Owner (comercial)">{opp.account_owner_id}</Field>
+          <Field label="Co-owner">{opp.co_owner_name || opp.co_owner_id || '—'}</Field>
           <Field label="Preventa lead">{opp.presales_lead_id}</Field>
           <Field label="Outcome">{opp.outcome_reason}</Field>
         </div>
@@ -428,6 +449,77 @@ export default function OpportunityDetail() {
                   <td style={{ ...s.td, fontSize: 12 }}>{q.type}</td>
                   <td style={{ ...s.td, fontSize: 12 }}>{q.status}</td>
                   <td style={{ ...s.td, textAlign: 'right' }}>{q.total_usd ? `$${Number(q.total_usd).toLocaleString()}` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={s.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={s.h2}>Contactos ({contacts.length})</h2>
+          <Link to="/contacts" style={s.link}>Ver todos →</Link>
+        </div>
+        {contacts.length === 0 ? (
+          <div style={{ color: 'var(--text-light)', fontSize: 13, padding: 20, textAlign: 'center' }}>
+            Sin contactos vinculados a esta oportunidad.
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {['Nombre', 'Email', 'Cargo', 'Rol en el deal'].map((h) => <th key={h} style={s.th}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map((c) => (
+                <tr key={c.id}>
+                  <td style={{ ...s.td, fontWeight: 600 }}>{c.first_name} {c.last_name}</td>
+                  <td style={s.td}>{c.email_primary || '—'}</td>
+                  <td style={s.td}>{c.job_title || '—'}</td>
+                  <td style={s.td}>
+                    {c.deal_role ? (
+                      <span style={{ background: '#dbeafe', color: '#1e40af', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>
+                        {DEAL_ROLE_LABEL[c.deal_role] || c.deal_role}
+                      </span>
+                    ) : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={s.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={s.h2}>Actividades recientes ({activities.length})</h2>
+          <Link to={`/activities?opportunity_id=${opp.id}`} style={s.link}>Ver todas →</Link>
+        </div>
+        {activities.length === 0 ? (
+          <div style={{ color: 'var(--text-light)', fontSize: 13, padding: 20, textAlign: 'center' }}>
+            Sin actividades registradas.{' '}
+            <Link to="/activities" style={s.link}>Registrar una</Link>.
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {['Fecha', 'Tipo', 'Asunto', 'Usuario'].map((h) => <th key={h} style={s.th}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {activities.map((a) => (
+                <tr key={a.id}>
+                  <td style={{ ...s.td, fontSize: 12 }}>{a.activity_date ? String(a.activity_date).slice(0, 10) : '—'}</td>
+                  <td style={s.td}>
+                    <span style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>
+                      {ACTIVITY_TYPE_LABEL[a.activity_type] || a.activity_type}
+                    </span>
+                  </td>
+                  <td style={s.td}>{a.subject}</td>
+                  <td style={{ ...s.td, fontSize: 12 }}>{a.user_name || '—'}</td>
                 </tr>
               ))}
             </tbody>

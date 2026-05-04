@@ -6,6 +6,7 @@ import {
   ClipboardList, CalendarDays, LayoutGrid, Users, Layers, Tag,
   Clock, TrendingUp, BarChart3, BookOpen, Settings, UserCog, Upload,
   Palette, LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
+  Contact, MessageSquare, Target,
 } from 'lucide-react';
 
 /**
@@ -63,6 +64,9 @@ const ICONS = {
   '/internal-initiatives':    Rocket,
   '/novelties':               CalendarOff,
   '/idle-time':               Activity,
+  '/contacts':                Contact,
+  '/activities':              MessageSquare,
+  '/admin/budgets':           Target,
   '/preferencias':            Palette,
 };
 
@@ -79,7 +83,9 @@ export function buildGroups(isAdmin) {
         { path: '/quotation/new/staff_aug',  label: 'Nueva Staff Aug' },
         { path: '/quotation/new/fixed_scope', label: 'Nuevo Proyecto' },
         { path: '/clients',                  label: 'Clientes' },
+        { path: '/contacts',                 label: 'Contactos' },
         { path: '/opportunities',            label: 'Oportunidades' },
+        { path: '/activities',               label: 'Actividades' },
         { path: '/pipeline',                 label: 'Pipeline' },
       ],
     },
@@ -132,6 +138,7 @@ export function buildGroups(isAdmin) {
         { path: '/admin/params',          label: 'Parámetros'      },
         { path: '/admin/exchange-rates',  label: 'Tasas de cambio' },
         { path: '/admin/employee-costs',  label: 'Costos del equipo' },
+        { path: '/admin/budgets',         label: 'Presupuestos'    },
         { path: '/admin/holidays',        label: 'Festivos'        },
         { path: '/admin/users',           label: 'Usuarios'        },
         { path: '/admin/bulk-import',     label: 'Carga masiva'    },

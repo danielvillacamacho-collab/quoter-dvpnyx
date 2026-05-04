@@ -53,6 +53,13 @@ const OUTCOME_REASONS = [
   { value: 'other',           label: 'Otro' },
 ];
 
+const DEAL_TYPES = [
+  { value: 'new_business',      label: 'Venta nueva' },
+  { value: 'upsell_cross_sell', label: 'Upsell / Cross-sell' },
+  { value: 'renewal',           label: 'Renovación' },
+  { value: 'resell',            label: 'Resell' },
+];
+
 const EMPTY = {
   client_id: '', name: '', description: '',
   expected_close_date: '', tags: [],
@@ -62,11 +69,13 @@ const EMPTY = {
   champion_identified: false, economic_buyer_identified: false,
   funding_source: 'client_direct', funding_amount_usd: '',
   drive_url: '',
+  // SPEC-CRM-01 — deal enrichment
+  deal_type: 'new_business', co_owner_id: '',
 };
 
 const fmtUsd = (n) => `USD ${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
-function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
+function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -136,14 +145,22 @@ function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
           onChange={(e) => set('description', e.target.value)}
         />
       </div>
-      <div>
-        <label style={s.label}>Fecha esperada de cierre</label>
-        <input
-          type="date"
-          style={s.input}
-          value={form.expected_close_date || ''}
-          onChange={(e) => set('expected_close_date', e.target.value)}
-        />
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <label style={s.label}>Tipo de deal *</label>
+          <select style={s.input} value={form.deal_type} onChange={(e) => set('deal_type', e.target.value)} aria-label="Tipo de deal">
+            {DEAL_TYPES.map((dt) => <option key={dt.value} value={dt.value}>{dt.label}</option>)}
+          </select>
+        </div>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <label style={s.label}>Fecha esperada de cierre</label>
+          <input
+            type="date"
+            style={s.input}
+            value={form.expected_close_date || ''}
+            onChange={(e) => set('expected_close_date', e.target.value)}
+          />
+        </div>
       </div>
 
       {/* SPEC-CRM-00 v1.1 PR2 — Revenue model. */}
@@ -269,6 +286,13 @@ function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
               />
             </div>
           )}
+          <div>
+            <label style={s.label}>Co-owner</label>
+            <select style={s.input} value={form.co_owner_id || ''} onChange={(e) => set('co_owner_id', e.target.value || '')} aria-label="Co-owner">
+              <option value="">— Sin co-owner —</option>
+              {(users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </div>
           <div>
             <label style={s.label}>Drive URL</label>
             <input
@@ -463,7 +487,9 @@ export default function Opportunities() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [clientFilter, setClientFilter] = useState('');
+  const [dealTypeFilter, setDealTypeFilter] = useState('');
   const [clients, setClients] = useState([]);
+  const [users, setUsers] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -478,6 +504,7 @@ export default function Opportunities() {
     if (search) qs.set('search', search);
     if (statusFilter) qs.set('status', statusFilter);
     if (clientFilter) qs.set('client_id', clientFilter);
+    if (dealTypeFilter) qs.set('deal_type', dealTypeFilter);
     sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/opportunities?${qs}`);
@@ -487,7 +514,7 @@ export default function Opportunities() {
       // eslint-disable-next-line no-alert
       alert('Error cargando oportunidades: ' + e.message);
     }
-  }, [search, statusFilter, clientFilter, sort.field, sort.dir]);
+  }, [search, statusFilter, clientFilter, dealTypeFilter, sort.field, sort.dir]);
 
   const loadClients = useCallback(async () => {
     try {
@@ -498,8 +525,19 @@ export default function Opportunities() {
     }
   }, []);
 
+  const loadUsers = useCallback(async () => {
+    try {
+      const r = await apiGet('/api/users?limit=200');
+      const list = Array.isArray(r?.data) ? r.data : Array.isArray(r) ? r : [];
+      setUsers(list);
+    } catch {
+      setUsers([]);
+    }
+  }, []);
+
   useEffect(() => { load(1); }, [load]);
   useEffect(() => { loadClients(); }, [loadClients]);
+  useEffect(() => { loadUsers(); }, [loadUsers]);
 
   const onSave = async (form) => {
     setSaving(true);
@@ -521,6 +559,9 @@ export default function Opportunities() {
         funding_source: form.funding_source || 'client_direct',
         funding_amount_usd: num(form.funding_amount_usd),
         drive_url: form.drive_url || null,
+        // SPEC-CRM-01 — deal enrichment
+        deal_type: form.deal_type || 'new_business',
+        co_owner_id: form.co_owner_id || null,
       };
       if (editing?.id) {
         await apiPut(`/api/opportunities/${editing.id}`, payload);
@@ -623,6 +664,13 @@ export default function Opportunities() {
               {STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
             </select>
           </div>
+          <div style={{ minWidth: 140 }}>
+            <label style={s.label}>Tipo de deal</label>
+            <select style={s.input} value={dealTypeFilter} onChange={(e) => setDealTypeFilter(e.target.value)} aria-label="Filtro por tipo de deal">
+              <option value="">Todos</option>
+              {DEAL_TYPES.map((dt) => <option key={dt.value} value={dt.value}>{dt.label}</option>)}
+            </select>
+          </div>
         </div>
 
         <div style={{ overflowX: 'auto' }}>
@@ -632,6 +680,7 @@ export default function Opportunities() {
                 <SortableTh sort={sort} field="name" style={s.th}>Nombre</SortableTh>
                 <th style={s.th}>Cliente</th>
                 <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <SortableTh sort={sort} field="deal_type" style={s.th}>Tipo</SortableTh>
                 <th style={s.th}>Cotizaciones</th>
                 <SortableTh sort={sort} field="expected_close_date" style={s.th}>Cierre esperado</SortableTh>
                 <SortableTh sort={sort} field="created_at" style={s.th}>Creada</SortableTh>
@@ -640,10 +689,10 @@ export default function Opportunities() {
             </thead>
             <tbody>
               {state.loading && (
-                <tr><td colSpan={7} style={{ ...s.td, textAlign: 'center', color: 'var(--text-light)' }}>Cargando…</td></tr>
+                <tr><td colSpan={8} style={{ ...s.td, textAlign: 'center', color: 'var(--text-light)' }}>Cargando…</td></tr>
               )}
               {!state.loading && state.data.length === 0 && (
-                <tr><td colSpan={7} style={{ ...s.td, textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>
+                <tr><td colSpan={8} style={{ ...s.td, textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>
                   No hay oportunidades que coincidan con los filtros.
                 </td></tr>
               )}
@@ -658,6 +707,7 @@ export default function Opportunities() {
                     <td style={s.td}>
                       <StatusBadge domain="opportunity" value={o.status} label={STATUS_LABEL[o.status]} />
                     </td>
+                    <td style={{ ...s.td, fontSize: 11 }}>{(DEAL_TYPES.find((dt) => dt.value === o.deal_type) || {}).label || o.deal_type || '—'}</td>
                     <td style={{ ...s.td, textAlign: 'center' }}>{o.quotations_count ?? 0}</td>
                     <td style={s.td}>{o.expected_close_date ? String(o.expected_close_date).slice(0, 10) : '—'}</td>
                     <td style={s.td}>{o.created_at ? String(o.created_at).slice(0, 10) : '—'}</td>
@@ -703,6 +753,7 @@ export default function Opportunities() {
             <OpportunityForm
               initial={editing}
               clients={clients}
+              users={users}
               saving={saving}
               onCancel={() => { setShowForm(false); setEditing(null); }}
               onSave={onSave}
