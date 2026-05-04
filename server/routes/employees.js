@@ -100,9 +100,7 @@ router.get('/lookup', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /employees/lookup failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /employees/lookup', err);
   }
 });
 
@@ -150,9 +148,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /employees failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /employees', err);
   }
 });
 
@@ -257,9 +253,7 @@ router.post('/', adminOnly, async (req, res) => {
     });
     res.status(201).json(emp);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /employees failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /employees', err);
   }
 });
 
@@ -409,9 +403,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     res.json({ ...after, cancelled_assignments: cancelledAssignments.length });
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('PUT /employees/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /employees/:id', err);
   } finally {
     conn.release();
   }
@@ -477,9 +469,7 @@ router.get('/:id/skills', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /employees/:id/skills failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /employees/:id/skills', err);
   }
 });
 
@@ -530,9 +520,7 @@ router.post('/:id/skills', adminOnly, async (req, res) => {
     if (err && err.code === '23505') {
       return res.status(409).json({ error: 'Este empleado ya tiene ese skill asignado' });
     }
-    // eslint-disable-next-line no-console
-    console.error('POST /employees/:id/skills failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /employees/:id/skills', err);
   }
 });
 
@@ -569,9 +557,7 @@ router.put('/:id/skills/:skillId', adminOnly, async (req, res) => {
     });
     res.json(rows[0]);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /employees/:id/skills/:skillId failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /employees/:id/skills/:skillId', err);
   }
 });
 

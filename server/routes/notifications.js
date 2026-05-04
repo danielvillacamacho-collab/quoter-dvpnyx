@@ -14,6 +14,7 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
+const { serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -31,9 +32,7 @@ router.get('/', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /api/notifications failed:', err);
-    res.status(500).json({ error: 'No se pudieron cargar las notificaciones.' });
+    serverError(res, 'GET /notifications', err);
   }
 });
 
@@ -47,9 +46,7 @@ router.get('/unread-count', async (req, res) => {
     );
     res.json({ count: rows[0]?.count ?? 0 });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /api/notifications/unread-count failed:', err);
-    res.status(500).json({ error: 'No se pudo consultar el contador.' });
+    serverError(res, 'GET /notifications/unread-count', err);
   }
 });
 
@@ -65,9 +62,7 @@ router.post('/:id/read', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Notificación no encontrada.' });
     res.json(rows[0]);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /api/notifications/:id/read failed:', err);
-    res.status(500).json({ error: 'No se pudo marcar como leída.' });
+    serverError(res, 'POST /notifications/:id/read', err);
   }
 });
 
@@ -81,9 +76,7 @@ router.post('/read-all', async (req, res) => {
     );
     res.json({ updated: rowCount });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /api/notifications/read-all failed:', err);
-    res.status(500).json({ error: 'No se pudo marcar todo como leído.' });
+    serverError(res, 'POST /notifications/read-all', err);
   }
 });
 

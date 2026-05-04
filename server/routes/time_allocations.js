@@ -196,9 +196,7 @@ router.get('/', async (req, res) => {
       summary: { total_pct: totalPct, bench_pct: benchPct },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /time-allocations failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /time-allocations', err);
   }
 });
 

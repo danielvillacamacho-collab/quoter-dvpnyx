@@ -86,9 +86,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total, pages: Math.ceil(total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /clients failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /clients', err);
   }
 });
 
@@ -106,9 +104,7 @@ router.get('/:id', async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Cliente no encontrado' });
     res.json(rows[0]);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /clients/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /clients/:id', err);
   }
 });
 
@@ -162,9 +158,7 @@ router.post('/', async (req, res) => {
     });
     res.status(201).json(client);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /clients failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /clients', err);
   }
 });
 
@@ -231,9 +225,7 @@ router.put('/:id', async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /clients/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /clients/:id', err);
   }
 });
 
