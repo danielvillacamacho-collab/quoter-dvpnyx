@@ -2,6 +2,18 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
 import StatusBadge from '../shell/StatusBadge';
+import { STAGES, TRANSITIONS as PIPELINE_TRANSITIONS, isPostponed, isWon } from '../utils/pipeline';
+// SPEC-CRM-00 v1.1 PR2/PR3 — labels + margin.
+import {
+  REVENUE_TYPES, FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  MARGIN_LOW_THRESHOLD,
+  validateLossReason,
+} from '../utils/booking';
+
+const REVENUE_LABEL = Object.fromEntries(REVENUE_TYPES.map((r) => [r.value, r.label]));
+const FUNDING_LABEL = Object.fromEntries(FUNDING_SOURCES.map((f) => [f.value, f.label]));
+const LOSS_LABEL    = Object.fromEntries(LOSS_REASONS.map((l) => [l.value, l.label]));
+const fmtUsd = (n) => `USD ${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
 const s = {
   page:   { maxWidth: 1200, margin: '0 auto' },
@@ -19,20 +31,9 @@ const s = {
   link:   { color: 'var(--teal-mid)', textDecoration: 'none', fontWeight: 600 },
 };
 
-const STATUS_LABEL = {
-  open: 'Abierta', qualified: 'Calificada', proposal: 'Propuesta', negotiation: 'Negociación',
-  won: 'Ganada', lost: 'Perdida', cancelled: 'Cancelada',
-};
-const STATUS_COLOR = {
-  open: 'var(--purple-dark)', qualified: 'var(--teal-mid)', proposal: 'var(--teal-mid)',
-  negotiation: 'var(--orange)', won: 'var(--success)', lost: 'var(--danger)', cancelled: 'var(--text-light)',
-};
-const TRANSITIONS = {
-  open: ['qualified', 'cancelled'], qualified: ['proposal', 'cancelled'],
-  proposal: ['negotiation', 'won', 'lost', 'cancelled'],
-  negotiation: ['won', 'lost', 'cancelled'],
-  won: [], lost: [], cancelled: [],
-};
+// SPEC-CRM-00 v1.1 — labels y transiciones del SSOT de pipeline.
+const STATUS_LABEL = Object.fromEntries(STAGES.map((st) => [st.id, st.label]));
+const TRANSITIONS = PIPELINE_TRANSITIONS;
 
 function Field({ label, children }) {
   return (
@@ -62,7 +63,7 @@ export default function OpportunityDetail() {
   useEffect(() => { load(); }, [load]);
 
   const transition = async (target) => {
-    if (target === 'won') {
+    if (target === 'closed_won') {
       const winning = (opp.quotations || []).filter((q) => q.status !== 'rejected');
       if (winning.length === 0) {
         // eslint-disable-next-line no-alert
@@ -75,7 +76,7 @@ export default function OpportunityDetail() {
       );
       const idx = Number(pick) - 1;
       if (!Number.isFinite(idx) || !winning[idx]) return;
-      await doTransition({ new_status: 'won', winning_quotation_id: winning[idx].id });
+      await doTransition({ new_status: 'closed_won', winning_quotation_id: winning[idx].id });
       // eslint-disable-next-line no-alert
       if (window.confirm('¡Oportunidad ganada! ¿Crear un contrato desde esta cotización ahora? (un click — luego puedes ajustar los detalles)')) {
         try {
@@ -89,16 +90,64 @@ export default function OpportunityDetail() {
       }
       return;
     }
-    if (target === 'lost' || target === 'cancelled') {
+    if (target === 'closed_lost') {
+      // SPEC-CRM-00 v1.1 PR2 — loss_reason del enum extendido + detail
+      // mínimo 30 chars (validado backend; aquí soft-check para UX).
+      const enumOptions = LOSS_REASONS.map((l) => `${l.value} = ${l.label}`).join('\n');
       // eslint-disable-next-line no-alert
-      const reason = window.prompt(
-        `Razón para marcar ${STATUS_LABEL[target]}:\n(price / timing / competition / technical_fit / client_internal / other)`,
+      const lossReason = window.prompt(
+        `Razón para marcar Perdida:\n${enumOptions}\n\nEscribe el código (ej. "price"):`,
         'other'
       );
-      if (!reason) return;
+      if (!lossReason) return;
       // eslint-disable-next-line no-alert
-      const notes = window.prompt('Notas adicionales (opcional):', '');
-      await doTransition({ new_status: target, outcome_reason: reason, outcome_notes: notes || null });
+      const lossDetail = window.prompt(
+        `Descripción detallada (mín ${LOSS_REASON_DETAIL_MIN} chars):\nEj: "Cliente eligió competidor X. Plan: incluir feature Y en roadmap Q3."`,
+        ''
+      );
+      const v = validateLossReason({ loss_reason: lossReason, loss_reason_detail: lossDetail || '' });
+      if (v) {
+        // eslint-disable-next-line no-alert
+        alert(v);
+        return;
+      }
+      await doTransition({
+        new_status: target,
+        loss_reason: lossReason,
+        loss_reason_detail: lossDetail,
+        // legacy compat: seguimos enviando outcome_reason para servidores
+        // viejos. Si es un enum no aceptado por el legacy enum (e.g. champion_left),
+        // el backend ahora prioriza loss_reason — sin daño.
+        outcome_reason: lossReason,
+      });
+      return;
+    }
+    if (target === 'postponed') {
+      // SPEC-CRM-00 v1.1 — Postponed exige fecha de reactivación.
+      // Default: hoy + 30 días.
+      const defaultIso = (() => {
+        const d = new Date(); d.setDate(d.getDate() + 30);
+        return d.toISOString().slice(0, 10);
+      })();
+      // eslint-disable-next-line no-alert
+      const dateInput = window.prompt(
+        'Postergar la oportunidad — ¿en qué fecha la revisamos de nuevo? (YYYY-MM-DD)',
+        defaultIso,
+      );
+      if (!dateInput) return;
+      const today = new Date().toISOString().slice(0, 10);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateInput) || dateInput <= today) {
+        // eslint-disable-next-line no-alert
+        alert('Fecha inválida. Debe ser YYYY-MM-DD y posterior a hoy.');
+        return;
+      }
+      // eslint-disable-next-line no-alert
+      const reason = window.prompt('Razón de la postergación (opcional):', '');
+      await doTransition({
+        new_status: 'postponed',
+        postponed_until_date: dateInput,
+        postponed_reason: reason || undefined,
+      });
       return;
     }
     await doTransition({ new_status: target });
@@ -108,6 +157,31 @@ export default function OpportunityDetail() {
     setBusy(true);
     try {
       await apiPost(`/api/opportunities/${id}/status`, payload);
+      await load();
+    } catch (e) {
+      // eslint-disable-next-line no-alert
+      alert(e.message);
+    } finally { setBusy(false); }
+  };
+
+  // SPEC-CRM-00 v1.1 PR3 — Calcula y persiste margin_pct.
+  // Prompt para costo estimado (vacío → auto-computa desde cotizaciones).
+  const checkMargin = async () => {
+    // eslint-disable-next-line no-alert
+    const costInput = window.prompt(
+      `Ingresa el costo estimado en USD (o cancela para auto-calcular desde las líneas de cotización):\n\nBooking actual: ${fmtUsd(opp.booking_amount_usd)}`,
+      '',
+    );
+    if (costInput === null) return; // cancelled
+
+    const body = costInput.trim() !== '' ? { estimated_cost_usd: Number(costInput) } : {};
+    setBusy(true);
+    try {
+      const result = await apiPost(`/api/opportunities/${id}/check-margin`, body);
+      if (result.alert_fired) {
+        // eslint-disable-next-line no-alert
+        alert(`⚠ Alerta A4 — Margen bajo: ${result.margin_pct}%\nEl margen está por debajo del umbral mínimo (${MARGIN_LOW_THRESHOLD}%). Considera revisar la cotización.`);
+      }
       await load();
     } catch (e) {
       // eslint-disable-next-line no-alert
@@ -126,10 +200,16 @@ export default function OpportunityDetail() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <div>
+          {opp.opportunity_number && (
+            <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>
+              {opp.opportunity_number}
+            </div>
+          )}
           <h1 style={s.h1}>💼 {opp.name}</h1>
           <div style={s.sub}>
             Cliente:{' '}
             {opp.client ? <Link to={`/clients/${opp.client.id}`} style={s.link}>{opp.client.name}</Link> : '—'}
+            {opp.country && <> · {opp.country}</>}
             {' · '}
             <StatusBadge domain="opportunity" value={opp.status} label={STATUS_LABEL[opp.status]} />
           </div>
@@ -141,13 +221,30 @@ export default function OpportunityDetail() {
               onClick={() => transition(ns)} disabled={busy}
               aria-label={`Mover a ${STATUS_LABEL[ns]}`}
             >
-              {ns === 'won' ? '🏆 ' : ''}Mover a {STATUS_LABEL[ns]}
+              {ns === 'closed_won' ? '🏆 ' : ns === 'postponed' ? '⏸ ' : ''}Mover a {STATUS_LABEL[ns]}
             </button>
           ))}
         </div>
       </div>
 
-      {opp.status === 'won' && (
+      {opp.status === 'postponed' && (
+        <div style={{ ...s.card, background: '#f5f3ff', borderColor: '#A78BFA' }}>
+          <h2 style={{ ...s.h2, color: '#7c3aed' }}>⏸ Oportunidad postergada</h2>
+          <div style={{ fontSize: 13 }}>
+            Reactivar revisión el <strong>{opp.postponed_until_date ? String(opp.postponed_until_date).slice(0, 10) : '—'}</strong>.
+            {opp.postponed_reason && (
+              <div style={{ marginTop: 6, color: 'var(--text-light)' }}>
+                <em>{opp.postponed_reason}</em>
+              </div>
+            )}
+            <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-light)' }}>
+              Mientras esté en este estado <strong>NO entra</strong> en pipeline weighted. Para reactivar, mueve a <em>Calificada</em>.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isWon(opp.status) && (
         <div style={{ ...s.card, background: '#effff6', borderColor: 'var(--success)' }}>
           <h2 style={{ ...s.h2, color: 'var(--success)' }}>🏆 Oportunidad ganada</h2>
           <div style={{ fontSize: 13 }}>
@@ -192,6 +289,117 @@ export default function OpportunityDetail() {
           <Field label="Outcome">{opp.outcome_reason}</Field>
         </div>
       </div>
+
+      {/* SPEC-CRM-00 v1.1 PR2 — Revenue breakdown. */}
+      <div style={s.card} data-testid="opportunity-revenue-card">
+        <h2 style={s.h2}>💰 Revenue</h2>
+        <div style={s.grid}>
+          <Field label="Tipo">{REVENUE_LABEL[opp.revenue_type] || opp.revenue_type || '—'}</Field>
+          {(opp.revenue_type === 'one_time' || opp.revenue_type === 'mixed') && (
+            <Field label="One-time USD">{opp.one_time_amount_usd != null ? fmtUsd(opp.one_time_amount_usd) : '—'}</Field>
+          )}
+          {(opp.revenue_type === 'recurring' || opp.revenue_type === 'mixed') && (
+            <>
+              <Field label="MRR USD">{opp.mrr_usd != null ? fmtUsd(opp.mrr_usd) : '—'}</Field>
+              <Field label="Duración (meses)">{opp.contract_length_months ?? '—'}</Field>
+            </>
+          )}
+          <Field label="Booking total">{opp.booking_amount_usd != null ? fmtUsd(opp.booking_amount_usd) : '—'}</Field>
+          <Field label="Weighted">{opp.weighted_amount_usd != null ? fmtUsd(opp.weighted_amount_usd) : '—'}</Field>
+        </div>
+      </div>
+
+      {/* SPEC-CRM-00 v1.1 PR3 — Margen + Alerta A4. */}
+      <div style={s.card} data-testid="opportunity-margin-card">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={s.h2}>
+            📊 Margen
+            {opp.margin_pct != null && opp.margin_pct < MARGIN_LOW_THRESHOLD && (
+              <span
+                style={{ marginLeft: 10, background: '#fee2e2', color: '#b91c1c', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}
+                aria-label="Alerta A4: margen bajo"
+              >
+                ⚠ A4 Margen bajo
+              </span>
+            )}
+          </h2>
+          <button
+            type="button"
+            style={s.btnOutline}
+            onClick={checkMargin}
+            disabled={busy}
+            aria-label="Calcular margen de la oportunidad"
+          >
+            🧮 Calcular Margen
+          </button>
+        </div>
+        <div style={s.grid}>
+          <Field label="Costo estimado">
+            {opp.estimated_cost_usd != null ? fmtUsd(opp.estimated_cost_usd) : '—'}
+          </Field>
+          <Field label="Margen (%)">
+            {opp.margin_pct != null ? (
+              <span style={{ color: opp.margin_pct < MARGIN_LOW_THRESHOLD ? 'var(--danger)' : 'var(--success)', fontWeight: 700 }}>
+                {opp.margin_pct}%
+              </span>
+            ) : '—'}
+          </Field>
+          <Field label="Booking (base)">
+            {opp.booking_amount_usd != null ? fmtUsd(opp.booking_amount_usd) : '—'}
+          </Field>
+        </div>
+        {opp.margin_pct == null && (
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text-light)' }}>
+            Margen no calculado todavía. Haz clic en "Calcular Margen" para computarlo desde las cotizaciones o ingresar el costo estimado.
+          </div>
+        )}
+      </div>
+
+      {/* SPEC-CRM-00 v1.1 PR2 — Stakeholders / Funding / Drive. */}
+      <div style={s.card} data-testid="opportunity-meddpicc-card">
+        <h2 style={s.h2}>
+          🎯 Stakeholders & Funding
+          {['solution_design', 'proposal_validated', 'negotiation', 'verbal_commit'].includes(opp.status)
+            && (!opp.champion_identified || !opp.economic_buyer_identified) && (
+            <span
+              style={{ marginLeft: 10, background: '#fef3c7', color: '#92400e', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}
+              aria-label="Alerta A3: Champion o EB pendiente"
+            >
+              ⚠ A3 {!opp.champion_identified && !opp.economic_buyer_identified ? 'Champion + EB' : !opp.champion_identified ? 'Champion' : 'EB'} pendiente
+            </span>
+          )}
+        </h2>
+        <div style={s.grid}>
+          <Field label="Champion identificado">{opp.champion_identified ? '✅ Sí' : '❌ No'}</Field>
+          <Field label="Economic Buyer">{opp.economic_buyer_identified ? '✅ Sí' : '❌ No'}</Field>
+          <Field label="Funding source">{FUNDING_LABEL[opp.funding_source] || opp.funding_source || '—'}</Field>
+          {opp.funding_source && opp.funding_source !== 'client_direct' && (
+            <Field label="Funding USD">{opp.funding_amount_usd != null ? fmtUsd(opp.funding_amount_usd) : '—'}</Field>
+          )}
+          <Field label="Drive">
+            {opp.drive_url ? (
+              <a href={opp.drive_url} target="_blank" rel="noreferrer" style={s.link} aria-label="Abrir Drive de la oportunidad">
+                Abrir carpeta ↗
+              </a>
+            ) : '—'}
+          </Field>
+        </div>
+      </div>
+
+      {/* SPEC-CRM-00 v1.1 PR2 — Razón de pérdida (cuando aplique). */}
+      {opp.status === 'closed_lost' && (opp.loss_reason || opp.outcome_reason) && (
+        <div style={{ ...s.card, background: '#fff5f5', borderColor: 'var(--danger)' }} data-testid="opportunity-loss-card">
+          <h2 style={{ ...s.h2, color: 'var(--danger)' }}>📉 Razón de la pérdida</h2>
+          <Field label="Categoría">
+            {LOSS_LABEL[opp.loss_reason] || opp.loss_reason || opp.outcome_reason || '—'}
+          </Field>
+          {opp.loss_reason_detail && (
+            <div style={{ marginTop: 10, fontSize: 13, fontStyle: 'italic', color: 'var(--text-light)' }}>
+              {opp.loss_reason_detail}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={s.card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>

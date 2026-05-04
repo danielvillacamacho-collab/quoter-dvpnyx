@@ -14,7 +14,6 @@ import CommandPalette from './shell/CommandPalette';
 import StatusBadge from './shell/StatusBadge';
 import NotificationsDrawer from './shell/NotificationsDrawer';
 import { apiGet } from './utils/apiV2';
-import ComingSoon from './shell/ComingSoon';
 import ErrorBoundary from './shell/ErrorBoundary';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';

@@ -35,6 +35,11 @@ const { stringifyCsv } = require('../utils/csv');
 const { parsePagination } = require('../utils/sanitize');
 const { parseSort } = require('../utils/sort');
 const { serverError, safeRollback } = require('../utils/http');
+// SPEC-CRM-00 v1.1 PR4 — Alerts + RBAC.
+const { SEE_ALL_ROLES, WRITE_ROLES } = require('../middleware/auth');
+const {
+  ALERT_DEFS, A3_STAGES, checkA3, createAlertNotification, runAlertScan,
+} = require('../utils/alerts');
 
 const SORTABLE = {
   name:                 'o.name',
@@ -53,26 +58,43 @@ const SORTABLE = {
 
 router.use(auth);
 
-const VALID_STATUSES = ['open', 'qualified', 'proposal', 'negotiation', 'won', 'lost', 'cancelled'];
-const TERMINAL = new Set(['won', 'lost', 'cancelled']);
-const NON_TERMINAL = new Set(['open', 'qualified', 'proposal', 'negotiation']);
-// CRM-MVP-00.1: las transiciones se relajaron para soportar el drag-and-drop
-// del Kanban. La regla de integridad se mantiene: terminal es inmutable y
-// las transiciones a terminal exigen los datos requeridos (winning_quotation_id
-// para won, outcome_reason para lost/cancelled). Saltos hacia atrás o saltos
-// "ilegales" del flujo lineal SÍ son permitidos pero generan warnings que el
-// frontend muestra al usuario antes de confirmar.
-const TRANSITIONS = {
-  open:        new Set(['qualified', 'proposal', 'negotiation', 'won', 'lost', 'cancelled']),
-  qualified:   new Set(['open', 'proposal', 'negotiation', 'won', 'lost', 'cancelled']),
-  proposal:    new Set(['open', 'qualified', 'negotiation', 'won', 'lost', 'cancelled']),
-  negotiation: new Set(['open', 'qualified', 'proposal', 'won', 'lost', 'cancelled']),
-  won:         new Set(),
-  lost:        new Set(),
-  cancelled:   new Set(),
-};
-// Orden canónico para detectar saltos hacia atrás (warning en /status).
-const STAGE_ORDER = { open: 1, qualified: 2, proposal: 3, negotiation: 4, won: 5, lost: 5, cancelled: 5 };
+// SPEC-CRM-00 v1.1 — Pipeline de 9 estados. Estos sets se derivan del
+// SSOT en server/utils/pipeline.js para que cualquier cambio del modelo
+// se propague aquí automáticamente.
+const { STAGE_BY_ID, STAGES, isTerminal, isPostponed } = require('../utils/pipeline');
+// SPEC-CRM-00 v1.1 PR2/PR3 — Revenue model + funding + loss reasons + margin.
+const {
+  REVENUE_TYPES, FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  MARGIN_LOW_THRESHOLD,
+  computeBooking, validateRevenueModel, validateFunding, validateLossReason,
+  computeMargin, validateMarginInput,
+} = require('../utils/booking');
+const VALID_STATUSES = STAGES.map((s) => s.id);
+const TERMINAL = new Set(STAGES.filter((s) => s.terminal).map((s) => s.id)); // closed_won, closed_lost
+const NON_TERMINAL = new Set(STAGES.filter((s) => !s.terminal && !s.postponed).map((s) => s.id));
+// Para el drag-and-drop del Kanban relajamos transiciones a "cualquier no-terminal
+// → cualquier no-terminal" más Postponed. Las transiciones canónicas (lead→qualified
+// →solution_design→…) viven en utils/pipeline.js TRANSITIONS y son las que el
+// frontend muestra como botones por defecto. Saltos hacia atrás o "ilegales" siguen
+// permitiéndose pero generan warnings (computeTransitionWarnings) y se loguean en
+// el evento opportunity.status_changed para que la auditoría capture el patrón.
+const ACTIVE_STAGES = STAGES.filter((s) => !s.terminal).map((s) => s.id); // incluye postponed
+const TRANSITIONS = STAGES.reduce((acc, s) => {
+  if (s.terminal) {
+    acc[s.id] = new Set();         // closed_won, closed_lost — inmutables
+  } else if (s.postponed) {
+    // Postponed solo sale a qualified (per spec) o closed_lost.
+    acc[s.id] = new Set(['qualified', 'closed_lost']);
+  } else {
+    acc[s.id] = new Set([
+      ...ACTIVE_STAGES.filter((id) => id !== s.id), // cualquier otra etapa activa
+      'closed_won', 'closed_lost',
+    ]);
+  }
+  return acc;
+}, {});
+// Orden canónico para detectar saltos hacia atrás (warning soft en /status).
+const STAGE_ORDER = STAGES.reduce((acc, s) => { acc[s.id] = s.sort; return acc; }, {});
 const VALID_OUTCOME_REASONS = ['price', 'timing', 'competition', 'technical_fit', 'client_internal', 'other'];
 
 const EDITABLE_FIELDS = [
@@ -80,6 +102,12 @@ const EDITABLE_FIELDS = [
   'squad_id', 'expected_close_date', 'tags', 'external_crm_id',
   // CRM-MVP-00.1
   'booking_amount_usd', 'next_step', 'next_step_due_date',
+  // SPEC-CRM-00 v1.1 PR1 — country denormalizado + identificador legible
+  'country',
+  // SPEC-CRM-00 v1.1 PR2 — modelo de revenue + funding + flags + drive_url
+  'revenue_type', 'one_time_amount_usd', 'mrr_usd', 'contract_length_months',
+  'champion_identified', 'economic_buyer_identified',
+  'funding_source', 'funding_amount_usd', 'drive_url',
 ];
 
 /* -------- LIST -------- */
@@ -101,6 +129,29 @@ router.get('/', async (req, res) => {
     if (req.query.squad_id)  wheres.push(`o.squad_id = ${add(req.query.squad_id)}`);
     if (req.query.from_expected_close) wheres.push(`o.expected_close_date >= ${add(req.query.from_expected_close)}`);
     if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
+    // SPEC-CRM-00 v1.1 PR2 — filtros de revenue model + flags + funding.
+    if (req.query.revenue_type && REVENUE_TYPES.includes(req.query.revenue_type)) {
+      wheres.push(`o.revenue_type = ${add(req.query.revenue_type)}`);
+    }
+    if (req.query.funding_source && FUNDING_SOURCES.includes(req.query.funding_source)) {
+      wheres.push(`o.funding_source = ${add(req.query.funding_source)}`);
+    }
+    if (req.query.has_champion === 'true')  wheres.push(`o.champion_identified = true`);
+    if (req.query.has_champion === 'false') wheres.push(`o.champion_identified = false`);
+    if (req.query.has_economic_buyer === 'true')  wheres.push(`o.economic_buyer_identified = true`);
+    if (req.query.has_economic_buyer === 'false') wheres.push(`o.economic_buyer_identified = false`);
+
+    // SPEC-CRM-00 v1.1 PR4 — RBAC scoping.
+    if (req.user.role === 'external') {
+      return res.status(403).json({ error: 'Acceso restringido para usuarios externos' });
+    }
+    if (!SEE_ALL_ROLES.has(req.user.role)) {
+      if (req.user.role === 'lead' && req.user.squad_id) {
+        wheres.push(`o.squad_id = ${add(req.user.squad_id)}`);
+      } else {
+        wheres.push(`(o.account_owner_id = ${add(req.user.id)} OR o.presales_lead_id = ${add(req.user.id)})`);
+      }
+    }
 
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
     const sort = parseSort(req.query, SORTABLE, {
@@ -157,6 +208,19 @@ router.get('/kanban', async (req, res) => {
     if (req.query.from_expected_close) wheres.push(`o.expected_close_date >= ${add(req.query.from_expected_close)}`);
     if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
     if (req.query.min_amount_usd) wheres.push(`o.booking_amount_usd >= ${add(Number(req.query.min_amount_usd) || 0)}`);
+
+    // SPEC-CRM-00 v1.1 PR4 — RBAC scoping (same logic as GET /).
+    if (req.user.role === 'external') {
+      return res.status(403).json({ error: 'Acceso restringido para usuarios externos' });
+    }
+    if (!SEE_ALL_ROLES.has(req.user.role)) {
+      if (req.user.role === 'lead' && req.user.squad_id) {
+        wheres.push(`o.squad_id = ${add(req.user.squad_id)}`);
+      } else {
+        wheres.push(`(o.account_owner_id = ${add(req.user.id)} OR o.presales_lead_id = ${add(req.user.id)})`);
+      }
+    }
+
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
 
     const { rows } = await pool.query(
@@ -164,6 +228,11 @@ router.get('/kanban', async (req, res) => {
               o.expected_close_date, o.booking_amount_usd, o.weighted_amount_usd,
               o.probability, o.last_stage_change_at, o.next_step, o.next_step_due_date,
               o.created_at,
+              -- SPEC-CRM-00 v1.1 PR2 — el card del Kanban necesita estos
+              -- campos para los badges (⚠Champ, MRR breakdown, funding chip).
+              o.revenue_type, o.one_time_amount_usd, o.mrr_usd, o.contract_length_months,
+              o.champion_identified, o.economic_buyer_identified,
+              o.funding_source, o.funding_amount_usd,
               c.name AS client_name,
               u.name AS owner_name, u.email AS owner_email,
               EXTRACT(DAY FROM NOW() - o.last_stage_change_at)::int AS days_in_current_stage,
@@ -278,6 +347,26 @@ router.get('/export.csv', async (req, res) => {
   }
 });
 
+/* -------- CHECK ALERTS (SPEC-CRM-00 v1.1 PR4) --------
+ * Escanea oportunidades activas y genera notificaciones A1/A2/A3/A5
+ * (con dedup de 24 h). Diseñado para ser invocado por cron diario
+ * (o manualmente). Solo roles con permisos de escritura (member+).
+ * Responde: { checked, created, details }
+ */
+router.post('/check-alerts', async (req, res) => {
+  if (!WRITE_ROLES.has(req.user.role)) {
+    return res.status(403).json({ error: 'No tienes permisos para ejecutar el escaneo de alertas' });
+  }
+  try {
+    const result = await runAlertScan(pool, { user: req.user });
+    res.json(result);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('POST /opportunities/check-alerts failed:', err);
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
+
 /* -------- GET ONE -------- */
 router.get('/:id', async (req, res) => {
   try {
@@ -334,18 +423,54 @@ router.post('/', async (req, res) => {
     client_id, name, description,
     account_owner_id, presales_lead_id, squad_id,
     expected_close_date, tags, external_crm_id,
+    country: countryOverride,
+    // SPEC-CRM-00 v1.1 PR2 — revenue model + flags + funding + drive_url.
+    // Si la app no manda revenue_type, asumimos 'one_time' y mapeamos
+    // booking_amount_usd legacy → one_time_amount_usd. Esto preserva
+    // compat con el cliente del PR1 mientras transiciona al nuevo modelo.
+    revenue_type: revenueTypeIn,
+    one_time_amount_usd: oneTimeAmountIn,
+    mrr_usd, contract_length_months,
+    champion_identified, economic_buyer_identified,
+    funding_source: fundingSourceIn,
+    funding_amount_usd,
+    drive_url,
+    booking_amount_usd: legacyBookingAmount,
   } = req.body || {};
 
   if (!client_id) return res.status(400).json({ error: 'client_id es requerido' });
   if (!name || !String(name).trim()) return res.status(400).json({ error: 'El nombre es requerido' });
 
+  // Normalizar revenue model + funding con compat legacy.
+  // Si la app NO mandó nada del nuevo modelo asumimos one_time con
+  // monto = booking_amount_usd legacy (o 0 si tampoco hay). Esto preserva
+  // el comportamiento "Nueva Oportunidad rápida" del PR1 mientras la UI
+  // del nuevo formulario llega.
+  const revenue_type = revenueTypeIn || 'one_time';
+  let one_time_amount_usd = oneTimeAmountIn != null
+    ? oneTimeAmountIn
+    : (revenue_type === 'one_time' && legacyBookingAmount != null ? legacyBookingAmount : null);
+  if (revenue_type === 'one_time' && one_time_amount_usd == null && !revenueTypeIn) {
+    // Compat: caller "legacy" sin revenue_type ni amount → default 0.
+    one_time_amount_usd = 0;
+  }
+  const funding_source = fundingSourceIn || 'client_direct';
+
+  const revenueErr = validateRevenueModel({ revenue_type, one_time_amount_usd, mrr_usd, contract_length_months });
+  if (revenueErr) return res.status(400).json({ error: revenueErr });
+  const fundingErr = validateFunding({ funding_source, funding_amount_usd });
+  if (fundingErr) return res.status(400).json({ error: fundingErr });
+
   try {
-    // Verify the client exists and is not soft-deleted
+    // Verify the client exists and is not soft-deleted. We also pull the
+    // client's country to denormalize on the opportunity row + drive the
+    // opportunity_number country prefix.
     const { rows: clientRows } = await pool.query(
-      `SELECT id, active FROM clients WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT id, active, country FROM clients WHERE id=$1 AND deleted_at IS NULL`,
       [client_id],
     );
     if (!clientRows.length) return res.status(400).json({ error: 'Cliente no existe o está eliminado' });
+    const oppCountry = countryOverride || clientRows[0].country || null;
 
     const ownerId = account_owner_id || req.user.id;
 
@@ -379,11 +504,30 @@ router.post('/', async (req, res) => {
       return res.status(500).json({ error: 'No se pudo resolver el squad por defecto. Contacta al administrador.' });
     }
 
+    // SPEC-CRM-00 v1.1 — opportunity_number legible. Generamos en una
+    // transacción con SERIALIZABLE-like guard mediante advisory lock por
+    // (cc, año) para evitar colisión de seq cuando 2 POSTs concurrentes
+    // crean la primera opp del año en el mismo país. El fallback `XX` se
+    // usa para opps sin country definible.
+    const oppNumber = await generateOpportunityNumber(pool, oppCountry);
+
+    // booking_amount_usd se calcula en el trigger DB; si la app legacy lo
+    // mandó nosotros lo enviamos a la BD pero el trigger lo sobreescribirá
+    // según revenue_type + componentes. Lo conservamos para compat.
+    const computedBooking = computeBooking({
+      revenue_type, one_time_amount_usd, mrr_usd, contract_length_months,
+    });
+
     const { rows } = await pool.query(
       `INSERT INTO opportunities
          (client_id, name, description, account_owner_id, presales_lead_id, squad_id,
-          expected_close_date, tags, external_crm_id, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          expected_close_date, tags, external_crm_id, created_by,
+          country, opportunity_number,
+          revenue_type, one_time_amount_usd, mrr_usd, contract_length_months,
+          champion_identified, economic_buyer_identified,
+          funding_source, funding_amount_usd, drive_url, booking_amount_usd)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [
         client_id,
@@ -396,6 +540,18 @@ router.post('/', async (req, res) => {
         tags || null,
         external_crm_id || null,
         req.user.id,
+        oppCountry,
+        oppNumber,
+        revenue_type,
+        one_time_amount_usd != null ? Number(one_time_amount_usd) : null,
+        mrr_usd != null ? Number(mrr_usd) : null,
+        contract_length_months != null ? Number(contract_length_months) : null,
+        Boolean(champion_identified),
+        Boolean(economic_buyer_identified),
+        funding_source,
+        funding_amount_usd != null ? Number(funding_amount_usd) : null,
+        drive_url || null,
+        computedBooking,
       ],
     );
     const opp = rows[0];
@@ -404,7 +560,12 @@ router.post('/', async (req, res) => {
       entity_type: 'opportunity',
       entity_id: opp.id,
       actor_user_id: req.user.id,
-      payload: { name: opp.name, client_id: opp.client_id, status: opp.status },
+      payload: {
+        name: opp.name,
+        client_id: opp.client_id,
+        status: opp.status,
+        opportunity_number: opp.opportunity_number,
+      },
       req,
     });
     res.status(201).json(opp);
@@ -414,6 +575,35 @@ router.post('/', async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   }
 });
+
+/**
+ * Genera un opportunity_number "OPP-{cc}-{año}-{seq}" donde:
+ *   cc  = primeras 4 letras del país (mayúsculas, alfanuméricas), o "XX"
+ *   año = año actual UTC
+ *   seq = siguiente secuencia para esa combinación, padded a 5 dígitos
+ *
+ * En un equipo pequeño (DVPNYX) la probabilidad de carrera entre dos
+ * POSTs concurrentes para el mismo país en el mismo segundo es
+ * efectivamente cero. El UNIQUE INDEX `opportunities_number_unique` actúa
+ * como red de seguridad: si dos requests calculan el mismo seq, uno gana
+ * el INSERT y el otro recibe 23505 → 500 → cliente reintenta. Se hace
+ * fila a un sequence por (cc, año) si esto se vuelve un problema real.
+ */
+async function generateOpportunityNumber(db, country) {
+  const ccRaw = String(country || '').replace(/[^A-Za-z]/g, '').toUpperCase().slice(0, 4);
+  const cc = ccRaw || 'XX';
+  const year = new Date().getUTCFullYear();
+  const { rows } = await db.query(
+    `SELECT COALESCE(MAX(
+        CAST(SUBSTRING(opportunity_number FROM '\\d+$') AS INTEGER)
+      ), 0) + 1 AS next_seq
+       FROM opportunities
+      WHERE opportunity_number LIKE $1`,
+    [`OPP-${cc}-${year}-%`],
+  );
+  const seq = rows[0].next_seq || 1;
+  return `OPP-${cc}-${year}-${String(seq).padStart(5, '0')}`;
+}
 
 /* -------- UPDATE (editable fields only — status goes through /status) -------- */
 router.put('/:id', async (req, res) => {
@@ -429,17 +619,52 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({ error: 'El nombre no puede estar vacío' });
     }
 
+    // SPEC-CRM-00 v1.1 PR2 — si se cambia el modelo de revenue, validar
+    // consistencia. Aceptamos PATCH parcial: si solo viene 1 campo del modelo
+    // se valida contra los actuales del DB (before).
+    if (body.revenue_type != null
+      || body.one_time_amount_usd !== undefined
+      || body.mrr_usd !== undefined
+      || body.contract_length_months !== undefined) {
+      const merged = {
+        revenue_type: body.revenue_type ?? before.revenue_type,
+        one_time_amount_usd: body.one_time_amount_usd !== undefined ? body.one_time_amount_usd : before.one_time_amount_usd,
+        mrr_usd: body.mrr_usd !== undefined ? body.mrr_usd : before.mrr_usd,
+        contract_length_months: body.contract_length_months !== undefined
+          ? body.contract_length_months : before.contract_length_months,
+      };
+      const revenueErr = validateRevenueModel(merged);
+      if (revenueErr) return res.status(400).json({ error: revenueErr });
+    }
+    if (body.funding_source != null || body.funding_amount_usd !== undefined) {
+      const merged = {
+        funding_source: body.funding_source ?? before.funding_source,
+        funding_amount_usd: body.funding_amount_usd !== undefined ? body.funding_amount_usd : before.funding_amount_usd,
+      };
+      const fundingErr = validateFunding(merged);
+      if (fundingErr) return res.status(400).json({ error: fundingErr });
+    }
+
     const { rows } = await pool.query(
       `UPDATE opportunities SET
-          name                = COALESCE($1, name),
-          description         = COALESCE($2, description),
-          account_owner_id    = COALESCE($3, account_owner_id),
-          presales_lead_id    = COALESCE($4, presales_lead_id),
-          squad_id            = COALESCE($5, squad_id),
-          expected_close_date = COALESCE($6, expected_close_date),
-          tags                = COALESCE($7, tags),
-          external_crm_id     = COALESCE($8, external_crm_id),
-          updated_at          = NOW()
+          name                      = COALESCE($1, name),
+          description               = COALESCE($2, description),
+          account_owner_id          = COALESCE($3, account_owner_id),
+          presales_lead_id          = COALESCE($4, presales_lead_id),
+          squad_id                  = COALESCE($5, squad_id),
+          expected_close_date       = COALESCE($6, expected_close_date),
+          tags                      = COALESCE($7, tags),
+          external_crm_id           = COALESCE($8, external_crm_id),
+          revenue_type              = COALESCE($10, revenue_type),
+          one_time_amount_usd       = COALESCE($11, one_time_amount_usd),
+          mrr_usd                   = COALESCE($12, mrr_usd),
+          contract_length_months    = COALESCE($13, contract_length_months),
+          champion_identified       = COALESCE($14, champion_identified),
+          economic_buyer_identified = COALESCE($15, economic_buyer_identified),
+          funding_source            = COALESCE($16, funding_source),
+          funding_amount_usd        = COALESCE($17, funding_amount_usd),
+          drive_url                 = COALESCE($18, drive_url),
+          updated_at                = NOW()
         WHERE id=$9 AND deleted_at IS NULL
         RETURNING *`,
       [
@@ -452,6 +677,15 @@ router.put('/:id', async (req, res) => {
         body.tags ?? null,
         body.external_crm_id ?? null,
         req.params.id,
+        body.revenue_type ?? null,
+        body.one_time_amount_usd != null ? Number(body.one_time_amount_usd) : null,
+        body.mrr_usd != null ? Number(body.mrr_usd) : null,
+        body.contract_length_months != null ? Number(body.contract_length_months) : null,
+        body.champion_identified != null ? Boolean(body.champion_identified) : null,
+        body.economic_buyer_identified != null ? Boolean(body.economic_buyer_identified) : null,
+        body.funding_source ?? null,
+        body.funding_amount_usd != null ? Number(body.funding_amount_usd) : null,
+        body.drive_url ?? null,
       ],
     );
     const after = rows[0];
@@ -463,6 +697,28 @@ router.put('/:id', async (req, res) => {
       payload: buildUpdatePayload(before, after, EDITABLE_FIELDS),
       req,
     });
+
+    // SPEC-CRM-00 v1.1 PR4 — A3: si la opp ya está en etapa avanzada y
+    // el PUT cambió champion/EB a false, disparar alerta (fire-and-forget).
+    if (A3_STAGES.has(after.status) && after.account_owner_id
+        && (body.champion_identified !== undefined || body.economic_buyer_identified !== undefined)) {
+      const a3gaps = checkA3({
+        status: after.status,
+        champion_identified: after.champion_identified,
+        economic_buyer_identified: after.economic_buyer_identified,
+      });
+      if (a3gaps) {
+        const a3def = ALERT_DEFS.A3_MEDDPICC;
+        createAlertNotification(pool, {
+          user_id: after.account_owner_id,
+          type: a3def.type,
+          title: a3def.title(after.name || 'Oportunidad'),
+          body: a3def.body(a3gaps),
+          opp_id: after.id,
+        }).catch(() => {}); // swallow — non-fatal
+      }
+    }
+
     res.json(after);
   } catch (err) {
     // eslint-disable-next-line no-console
@@ -473,7 +729,20 @@ router.put('/:id', async (req, res) => {
 
 /* -------- STATUS TRANSITION -------- */
 router.post('/:id/status', async (req, res) => {
-  const { new_status, winning_quotation_id, outcome_reason, outcome_notes } = req.body || {};
+  const {
+    new_status,
+    winning_quotation_id,
+    outcome_reason,
+    outcome_notes,
+    // SPEC-CRM-00 v1.1 PR1 — postponed transition data
+    postponed_until_date,
+    postponed_reason,
+    // SPEC-CRM-00 v1.1 PR2 — loss model formal (enum extendido + detail
+    // mínimo 30 chars). El legacy outcome_reason se mantiene como fallback
+    // para clientes que aún no migraron su payload.
+    loss_reason,
+    loss_reason_detail,
+  } = req.body || {};
   if (!VALID_STATUSES.includes(new_status)) {
     return res.status(400).json({ error: 'Status inválido' });
   }
@@ -502,19 +771,49 @@ router.post('/:id/status', async (req, res) => {
         valid_transitions: Array.from(allowed || []),
       });
     }
-    if (new_status === 'won' && !winning_quotation_id) {
+    if (new_status === 'closed_won' && !winning_quotation_id) {
       await connection.query('ROLLBACK');
       return res.status(400).json({ error: 'winning_quotation_id es requerido al marcar ganada' });
     }
-    if ((new_status === 'lost' || new_status === 'cancelled')) {
-      if (!outcome_reason || !VALID_OUTCOME_REASONS.includes(outcome_reason)) {
+    if (new_status === 'closed_lost') {
+      // SPEC-CRM-00 v1.1 PR2 — modelo formal de loss_reason. Si el caller
+      // mandó loss_reason, validamos contra el enum extendido + detail
+      // ≥30 chars. Si no mandó loss_reason pero sí outcome_reason (legacy),
+      // aceptamos como fallback. Sin ninguno → 400.
+      if (loss_reason != null) {
+        const lossErr = validateLossReason({ loss_reason, loss_reason_detail });
+        if (lossErr) {
+          await connection.query('ROLLBACK');
+          return res.status(400).json({ error: lossErr });
+        }
+      } else if (!outcome_reason || !VALID_OUTCOME_REASONS.includes(outcome_reason)) {
         await connection.query('ROLLBACK');
-        return res.status(400).json({ error: 'outcome_reason es requerido y debe ser un valor válido' });
+        return res.status(400).json({ error: 'outcome_reason o loss_reason es requerido' });
+      }
+    }
+    // SPEC-CRM-00 v1.1 — Postponed exige fecha de reactivación.
+    // El DB constraint (opp_postponed_has_until_date) es la última red,
+    // pero validamos en API para devolver un mensaje útil al usuario.
+    if (new_status === 'postponed') {
+      if (!postponed_until_date || !/^\d{4}-\d{2}-\d{2}$/.test(String(postponed_until_date))) {
+        await connection.query('ROLLBACK');
+        return res.status(400).json({
+          error: 'postponed_until_date es requerido (formato YYYY-MM-DD) al postergar la oportunidad',
+        });
+      }
+      // Sanity check: la fecha debe ser futura. Es un warning soft pero
+      // la rechazamos para evitar postponed_until_date=ayer (bug obvio).
+      const today = new Date().toISOString().slice(0, 10);
+      if (postponed_until_date <= today) {
+        await connection.query('ROLLBACK');
+        return res.status(400).json({
+          error: 'postponed_until_date debe ser una fecha futura',
+        });
       }
     }
 
     let quotationSideEffects = null;
-    if (new_status === 'won') {
+    if (new_status === 'closed_won') {
       const { rows: qrows } = await connection.query(
         `SELECT id, status, type, project_name FROM quotations WHERE id=$1 AND opportunity_id=$2`,
         [winning_quotation_id, req.params.id],
@@ -580,7 +879,7 @@ router.post('/:id/status', async (req, res) => {
       }
     }
 
-    if (new_status === 'lost' || new_status === 'cancelled') {
+    if (new_status === 'closed_lost') {
       // `sent` -> `rejected`. `draft` and `approved` are left untouched.
       const { rows: rejectedRows } = await connection.query(
         `UPDATE quotations SET status='rejected', updated_at=NOW()
@@ -591,8 +890,13 @@ router.post('/:id/status', async (req, res) => {
       quotationSideEffects = { rejected: rejectedRows.map((r) => r.id) };
     }
 
-    const closingNow = TERMINAL.has(new_status);
-    const outcomeValue = (new_status === 'won' || new_status === 'lost' || new_status === 'cancelled') ? new_status : null;
+    const closingNow = TERMINAL.has(new_status); // closed_won | closed_lost
+    const outcomeValue = (new_status === 'closed_won' || new_status === 'closed_lost') ? new_status : null;
+
+    // Postponed: persistir fecha + razón. Salir de Postponed: limpiar campos.
+    const setPostponedDate = (new_status === 'postponed') ? postponed_until_date : null;
+    const setPostponedReason = (new_status === 'postponed') ? (postponed_reason || null) : null;
+    const clearPostponedFields = (current.status === 'postponed' && new_status !== 'postponed');
 
     const { rows: [after] } = await connection.query(
       `UPDATE opportunities SET
@@ -602,20 +906,37 @@ router.post('/:id/status', async (req, res) => {
           outcome_notes        = COALESCE($4, outcome_notes),
           winning_quotation_id = COALESCE($5, winning_quotation_id),
           closed_at            = CASE WHEN $6::boolean THEN NOW() ELSE closed_at END,
+          postponed_until_date = CASE
+                                   WHEN $7::boolean THEN NULL
+                                   WHEN $8::date IS NOT NULL THEN $8::date
+                                   ELSE postponed_until_date
+                                 END,
+          postponed_reason     = CASE
+                                   WHEN $7::boolean THEN NULL
+                                   WHEN $9::text IS NOT NULL THEN $9::text
+                                   ELSE postponed_reason
+                                 END,
+          loss_reason          = COALESCE($11, loss_reason),
+          loss_reason_detail   = COALESCE($12, loss_reason_detail),
           updated_at           = NOW()
-        WHERE id=$7 RETURNING *`,
+        WHERE id=$10 RETURNING *`,
       [
         new_status,
         outcomeValue,
         outcome_reason || null,
         outcome_notes || null,
-        new_status === 'won' ? winning_quotation_id : null,
+        new_status === 'closed_won' ? winning_quotation_id : null,
         closingNow,
+        clearPostponedFields,
+        setPostponedDate,
+        setPostponedReason,
         req.params.id,
+        new_status === 'closed_lost' && loss_reason ? loss_reason : null,
+        new_status === 'closed_lost' && loss_reason_detail ? String(loss_reason_detail).trim() : null,
       ],
     );
 
-    // Events: status_changed always; plus a specific event for won/lost/cancelled
+    // Events: status_changed always; plus stage-specific events.
     await emitEvent(connection, {
       event_type: 'opportunity.status_changed',
       entity_type: 'opportunity',
@@ -624,7 +945,7 @@ router.post('/:id/status', async (req, res) => {
       payload: { from: current.status, to: new_status, side_effects: quotationSideEffects },
       req,
     });
-    if (new_status === 'won') {
+    if (new_status === 'closed_won') {
       await emitEvent(connection, {
         event_type: 'opportunity.won',
         entity_type: 'opportunity',
@@ -633,40 +954,94 @@ router.post('/:id/status', async (req, res) => {
         payload: { winning_quotation_id },
         req,
       });
-    } else if (new_status === 'lost') {
+    } else if (new_status === 'closed_lost') {
       await emitEvent(connection, {
         event_type: 'opportunity.lost',
         entity_type: 'opportunity',
         entity_id: after.id,
         actor_user_id: req.user.id,
-        payload: { reason: outcome_reason, notes: outcome_notes || null },
+        payload: {
+          // Compat con consumidores legacy: seguimos emitiendo `reason`
+          // pero agregamos los campos formales del v1.1 cuando vienen.
+          reason: outcome_reason || loss_reason || null,
+          notes: outcome_notes || null,
+          loss_reason: loss_reason || null,
+          loss_reason_detail: loss_reason_detail ? String(loss_reason_detail).trim() : null,
+        },
         req,
       });
-    } else if (new_status === 'cancelled') {
+    } else if (new_status === 'postponed') {
       await emitEvent(connection, {
-        event_type: 'opportunity.cancelled',
+        event_type: 'opportunity.postponed',
         entity_type: 'opportunity',
         entity_id: after.id,
         actor_user_id: req.user.id,
-        payload: { reason: outcome_reason, notes: outcome_notes || null },
+        payload: {
+          until_date: postponed_until_date,
+          reason: postponed_reason || null,
+          previous_status: current.status,
+        },
+        req,
+      });
+    } else if (current.status === 'postponed') {
+      // Salir de postponed (a qualified o closed_lost) — reactivación.
+      await emitEvent(connection, {
+        event_type: 'opportunity.reactivated',
+        entity_type: 'opportunity',
+        entity_id: after.id,
+        actor_user_id: req.user.id,
+        payload: { to: new_status, was_postponed_until: current.postponed_until_date || null },
         req,
       });
     }
 
-    // CRM-MVP-00.1: warnings soft (no bloqueantes) calculados sobre la
-    // transición. Los devolvemos al cliente para que el modal del kanban
-    // los muestre. NO afectan persistencia — la transición ya pasó.
+    // SPEC-CRM-00 v1.1 — warnings soft (no bloqueantes). El frontend los
+    // muestra en el toast tras la transición.
     const warnings = [];
     const fromOrder = STAGE_ORDER[current.status] || 0;
     const toOrder = STAGE_ORDER[new_status] || 0;
-    if (fromOrder > 0 && toOrder > 0 && fromOrder > toOrder && !TERMINAL.has(new_status)) {
+    if (fromOrder > 0 && toOrder > 0 && fromOrder > toOrder
+        && !TERMINAL.has(new_status) && !isPostponed(new_status) && current.status !== 'postponed') {
       warnings.push({ code: 'backwards', message: `Movida hacia atrás: ${current.status} → ${new_status}.` });
     }
-    if (Number(after.booking_amount_usd || 0) === 0 && ['proposal', 'negotiation', 'won'].includes(new_status)) {
+    if (Number(after.booking_amount_usd || 0) === 0
+        && ['proposal_validated', 'negotiation', 'verbal_commit', 'closed_won'].includes(new_status)) {
       warnings.push({ code: 'amount_zero', message: 'El monto USD está en 0. Recomendado actualizarlo.' });
+    }
+    // SPEC-CRM-00 v1.1 PR3 — Alerta A4: margen bajo al avanzar etapas clave.
+    // Solo dispara si margin_pct ya fue calculado (no null).
+    if (after.margin_pct != null
+        && Number(after.margin_pct) < MARGIN_LOW_THRESHOLD
+        && ['proposal_validated', 'negotiation', 'verbal_commit', 'closed_won'].includes(new_status)) {
+      warnings.push({
+        code: 'a4_margin_low',
+        message: `⚠ Alerta A4: margen de ${after.margin_pct}% está por debajo del umbral mínimo (${MARGIN_LOW_THRESHOLD}%). Revisa la cotización antes de avanzar.`,
+      });
     }
 
     await connection.query('COMMIT');
+
+    // SPEC-CRM-00 v1.1 PR4 — A3: Champion/EB gap check. Fire-and-forget
+    // notification (fuera de la txn, non-blocking, non-fatal). Se dispara
+    // al entrar en una etapa avanzada sin Champion o EB identificados.
+    if (A3_STAGES.has(new_status) && after.account_owner_id) {
+      const a3gaps = checkA3({
+        status: new_status,
+        champion_identified: after.champion_identified,
+        economic_buyer_identified: after.economic_buyer_identified,
+      });
+      if (a3gaps) {
+        const a3def = ALERT_DEFS.A3_MEDDPICC;
+        createAlertNotification(pool, {
+          user_id: after.account_owner_id,
+          type: a3def.type,
+          title: a3def.title(after.name || 'Oportunidad'),
+          body: a3def.body(a3gaps),
+          opp_id: after.id,
+        }).catch(() => {}); // swallow — non-fatal
+      }
+    }
+
     res.json({ ...after, warnings });
   } catch (err) {
     await safeRollback(connection, 'opportunities');
@@ -675,6 +1050,109 @@ router.post('/:id/status', async (req, res) => {
     res.status(500).json({ error: 'Error interno' });
   } finally {
     connection.release();
+  }
+});
+
+/* -------- CHECK MARGIN (SPEC-CRM-00 v1.1 PR3) --------
+ * Calcula margin_pct = (booking - cost) / booking × 100 y lo persiste.
+ *
+ * Body:
+ *   estimated_cost_usd?: number  — si se omite, se auto-computa desde
+ *     las líneas de cotización (cost_hour / rate_hour × total).
+ *
+ * Si margin_pct < MARGIN_LOW_THRESHOLD (20 %) emite opportunity.margin_low
+ * (Alerta A4).
+ *
+ * Responde: { margin_pct, estimated_cost_usd, booking_amount_usd, alert_fired }
+ */
+router.post('/:id/check-margin', async (req, res) => {
+  const { estimated_cost_usd: costIn } = req.body || {};
+
+  const inputErr = validateMarginInput({ estimated_cost_usd: costIn });
+  if (inputErr) return res.status(400).json({ error: inputErr });
+
+  try {
+    const { rows: [opp] } = await pool.query(
+      `SELECT id, booking_amount_usd FROM opportunities WHERE id=$1 AND deleted_at IS NULL`,
+      [req.params.id],
+    );
+    if (!opp) return res.status(404).json({ error: 'Oportunidad no encontrada' });
+
+    const booking = Number(opp.booking_amount_usd || 0);
+    if (booking <= 0) {
+      return res.status(400).json({
+        error: 'booking_amount_usd debe ser > 0 para calcular margen. Actualiza el revenue model primero.',
+      });
+    }
+
+    let estimatedCost;
+    if (costIn != null) {
+      estimatedCost = Number(costIn);
+    } else {
+      // Auto-computa desde quotation_lines.
+      // Estrategia: si rate_hour > 0 → (cost_hour / rate_hour) × total
+      //             si no             → cost_hour × horas × meses × 4.33 × qty
+      // Las líneas sin cost_hour contribuyen 0 al costo estimado.
+      const { rows: [costRow] } = await pool.query(
+        `SELECT COALESCE(SUM(
+           CASE
+             WHEN ql.rate_hour IS NOT NULL AND ql.rate_hour > 0 AND ql.total IS NOT NULL
+               THEN (COALESCE(ql.cost_hour, 0) / ql.rate_hour) * ql.total
+             WHEN ql.cost_hour IS NOT NULL
+               THEN ql.cost_hour
+                    * COALESCE(ql.hours_per_week, 0)
+                    * COALESCE(ql.duration_months::numeric, 0) * 4.33
+                    * COALESCE(ql.quantity::numeric, 1)
+             ELSE 0
+           END
+         ), 0)::numeric AS estimated_cost_usd
+           FROM quotation_lines ql
+           JOIN quotations q ON q.id = ql.quotation_id
+          WHERE q.opportunity_id = $1`,
+        [req.params.id],
+      );
+      estimatedCost = Number(costRow.estimated_cost_usd || 0);
+    }
+
+    const marginPct = computeMargin({ booking_amount_usd: booking, estimated_cost_usd: estimatedCost });
+
+    const { rows: [updated] } = await pool.query(
+      `UPDATE opportunities
+          SET estimated_cost_usd = $1,
+              margin_pct         = $2,
+              updated_at         = NOW()
+        WHERE id=$3 AND deleted_at IS NULL
+        RETURNING id, booking_amount_usd, estimated_cost_usd, margin_pct`,
+      [estimatedCost, marginPct, req.params.id],
+    );
+
+    const alertFired = marginPct != null && marginPct < MARGIN_LOW_THRESHOLD;
+    if (alertFired) {
+      await emitEvent(pool, {
+        event_type: 'opportunity.margin_low',
+        entity_type: 'opportunity',
+        entity_id: opp.id,
+        actor_user_id: req.user.id,
+        payload: {
+          margin_pct: marginPct,
+          booking_amount_usd: booking,
+          estimated_cost_usd: estimatedCost,
+          threshold: MARGIN_LOW_THRESHOLD,
+        },
+        req,
+      });
+    }
+
+    res.json({
+      margin_pct:           updated.margin_pct,
+      estimated_cost_usd:   updated.estimated_cost_usd,
+      booking_amount_usd:   updated.booking_amount_usd,
+      alert_fired:          alertFired,
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('POST /opportunities/:id/check-margin failed:', err);
+    res.status(500).json({ error: 'Error interno' });
   }
 });
 

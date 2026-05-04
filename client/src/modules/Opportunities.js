@@ -5,6 +5,12 @@ import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
+import { STAGES, STAGE_BY_ID, TRANSITIONS as PIPELINE_TRANSITIONS } from '../utils/pipeline';
+// SPEC-CRM-00 v1.1 PR2 — modelo de revenue + loss reasons formales.
+import {
+  REVENUE_TYPES, FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  computeBooking, validateRevenueModel, validateFunding, validateLossReason,
+} from '../utils/booking';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -26,37 +32,17 @@ const s = {
   modal:  { background: '#fff', borderRadius: 12, padding: 24, width: 560, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' },
 };
 
+// SPEC-CRM-00 v1.1 — los stages, labels, colors y transiciones vienen
+// del SSOT en utils/pipeline.js (importado arriba) para evitar drift
+// entre frontend y backend. Cualquier cambio del modelo se propaga aquí
+// automáticamente.
 const STATUS_OPTIONS = [
-  { value: '',            label: 'Todos' },
-  { value: 'open',        label: 'Abierta' },
-  { value: 'qualified',   label: 'Calificada' },
-  { value: 'proposal',    label: 'Propuesta' },
-  { value: 'negotiation', label: 'Negociación' },
-  { value: 'won',         label: 'Ganada' },
-  { value: 'lost',        label: 'Perdida' },
-  { value: 'cancelled',   label: 'Cancelada' },
+  { value: '', label: 'Todos' },
+  ...STAGES.map((st) => ({ value: st.id, label: st.label })),
 ];
-const STATUS_LABEL = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o.label]));
-
-const STATUS_COLORS = {
-  open:        'var(--purple-dark)',
-  qualified:   'var(--teal-mid)',
-  proposal:    'var(--teal-mid)',
-  negotiation: 'var(--orange)',
-  won:         'var(--success)',
-  lost:        'var(--danger)',
-  cancelled:   'var(--text-light)',
-};
-
-const TRANSITIONS = {
-  open:        ['qualified', 'cancelled'],
-  qualified:   ['proposal',  'cancelled'],
-  proposal:    ['negotiation', 'won', 'lost', 'cancelled'],
-  negotiation: ['won', 'lost', 'cancelled'],
-  won:         [],
-  lost:        [],
-  cancelled:   [],
-};
+const STATUS_LABEL = Object.fromEntries(STAGES.map((st) => [st.id, st.label]));
+const STATUS_COLORS = Object.fromEntries(STAGES.map((st) => [st.id, st.color]));
+const TRANSITIONS = PIPELINE_TRANSITIONS;
 
 const OUTCOME_REASONS = [
   { value: 'price',           label: 'Precio' },
@@ -70,20 +56,50 @@ const OUTCOME_REASONS = [
 const EMPTY = {
   client_id: '', name: '', description: '',
   expected_close_date: '', tags: [],
+  // SPEC-CRM-00 v1.1 PR2 — defaults para revenue model + funding + flags.
+  revenue_type: 'one_time',
+  one_time_amount_usd: '', mrr_usd: '', contract_length_months: '',
+  champion_identified: false, economic_buyer_identified: false,
+  funding_source: 'client_direct', funding_amount_usd: '',
+  drive_url: '',
 };
+
+const fmtUsd = (n) => `USD ${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
 function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Booking calculado en vivo (mirror del trigger DB).
+  const bookingPreview = computeBooking({
+    revenue_type: form.revenue_type,
+    one_time_amount_usd: form.one_time_amount_usd,
+    mrr_usd: form.mrr_usd,
+    contract_length_months: form.contract_length_months,
+  });
 
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
     if (!form.client_id) return setErr('Cliente es requerido');
     if (!form.name.trim()) return setErr('El nombre es requerido');
+    // SPEC-CRM-00 v1.1 PR2 — para el flujo "crear rápido", si revenue_type
+    // es one_time y el monto está vacío lo tratamos como 0 (deal temprano,
+    // se refina después). Para recurring/mixed exigimos los campos.
+    const normalized = {
+      ...form,
+      one_time_amount_usd: (form.revenue_type === 'one_time' && (form.one_time_amount_usd === '' || form.one_time_amount_usd == null))
+        ? 0
+        : form.one_time_amount_usd,
+    };
+    const revenueErr = validateRevenueModel(normalized);
+    if (revenueErr) return setErr(revenueErr);
+    const fundingErr = validateFunding(normalized);
+    if (fundingErr) return setErr(fundingErr);
     try {
-      await onSave(form);
+      await onSave(normalized);
     } catch (ex) {
       setErr(ex.message || 'Error guardando');
     }
@@ -129,7 +145,145 @@ function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
           onChange={(e) => set('expected_close_date', e.target.value)}
         />
       </div>
-      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+
+      {/* SPEC-CRM-00 v1.1 PR2 — Revenue model. */}
+      <fieldset style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, margin: 0 }}>
+        <legend style={{ fontSize: 12, fontWeight: 700, color: 'var(--purple-dark)', padding: '0 6px' }}>
+          Tipo de Revenue *
+        </legend>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+          {REVENUE_TYPES.map((rt) => (
+            <label key={rt.value} style={{ fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input
+                type="radio"
+                name="revenue_type"
+                value={rt.value}
+                checked={form.revenue_type === rt.value}
+                onChange={(e) => set('revenue_type', e.target.value)}
+                aria-label={rt.label}
+              />
+              {rt.label}
+            </label>
+          ))}
+        </div>
+        {(form.revenue_type === 'one_time' || form.revenue_type === 'mixed') && (
+          <div style={{ marginBottom: 8 }}>
+            <label style={s.label}>Monto one-time (USD) *</label>
+            <input
+              type="number"
+              min="0"
+              style={s.input}
+              value={form.one_time_amount_usd}
+              onChange={(e) => set('one_time_amount_usd', e.target.value)}
+              aria-label="Monto one-time USD"
+              placeholder="20000"
+            />
+          </div>
+        )}
+        {(form.revenue_type === 'recurring' || form.revenue_type === 'mixed') && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <div style={{ flex: 1 }}>
+              <label style={s.label}>MRR (USD/mes) *</label>
+              <input
+                type="number"
+                min="0"
+                style={s.input}
+                value={form.mrr_usd}
+                onChange={(e) => set('mrr_usd', e.target.value)}
+                aria-label="MRR USD"
+                placeholder="5000"
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={s.label}>Duración (meses) *</label>
+              <input
+                type="number"
+                min="0"
+                style={s.input}
+                value={form.contract_length_months}
+                onChange={(e) => set('contract_length_months', e.target.value)}
+                aria-label="Duración del contrato en meses"
+                placeholder="24"
+              />
+            </div>
+          </div>
+        )}
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--teal-mid)' }} aria-live="polite">
+          Booking calculado: {fmtUsd(bookingPreview)}
+        </div>
+      </fieldset>
+
+      <button
+        type="button"
+        style={{ ...s.btnOutline, alignSelf: 'flex-start', fontSize: 12, padding: '4px 10px' }}
+        onClick={() => setShowAdvanced((x) => !x)}
+        aria-expanded={showAdvanced}
+        aria-label="Mostrar opciones avanzadas"
+      >
+        {showAdvanced ? '▾ Menos opciones' : '▸ Más opciones (Champion, EB, funding, drive)'}
+      </button>
+
+      {showAdvanced && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8, background: 'var(--surface-soft, #f8f7fa)', borderRadius: 8 }}>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!form.champion_identified}
+                onChange={(e) => set('champion_identified', e.target.checked)}
+                aria-label="Champion identificado"
+              />
+              Champion identificado
+            </label>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!form.economic_buyer_identified}
+                onChange={(e) => set('economic_buyer_identified', e.target.checked)}
+                aria-label="Economic Buyer identificado"
+              />
+              Economic Buyer identificado
+            </label>
+          </div>
+          <div>
+            <label style={s.label}>Funding source</label>
+            <select
+              style={s.input}
+              value={form.funding_source}
+              onChange={(e) => set('funding_source', e.target.value)}
+              aria-label="Funding source"
+            >
+              {FUNDING_SOURCES.map((fs) => <option key={fs.value} value={fs.value}>{fs.label}</option>)}
+            </select>
+          </div>
+          {form.funding_source !== 'client_direct' && (
+            <div>
+              <label style={s.label}>Monto de funding (USD) *</label>
+              <input
+                type="number"
+                min="0"
+                style={s.input}
+                value={form.funding_amount_usd}
+                onChange={(e) => set('funding_amount_usd', e.target.value)}
+                aria-label="Monto de funding USD"
+              />
+            </div>
+          )}
+          <div>
+            <label style={s.label}>Drive URL</label>
+            <input
+              type="url"
+              style={s.input}
+              value={form.drive_url}
+              onChange={(e) => set('drive_url', e.target.value)}
+              aria-label="Drive URL"
+              placeholder="https://drive.google.com/..."
+            />
+          </div>
+        </div>
+      )}
+
+      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }} role="alert">{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
         <button type="submit" style={s.btn()} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>
@@ -139,14 +293,27 @@ function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
 }
 
 function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
-  const needsWinningQuot = target === 'won';
-  const needsReason      = target === 'lost' || target === 'cancelled';
+  const needsWinningQuot = target === 'closed_won';
+  const needsReason      = target === 'closed_lost';
+  const needsPostponedDate = target === 'postponed';
   const [winningId, setWinningId] = useState('');
   const [reason, setReason]       = useState('');
   const [notes, setNotes]         = useState('');
+  // SPEC-CRM-00 v1.1 PR2 — loss_reason formal (enum extendido + detail).
+  const [lossReason, setLossReason] = useState('');
+  const [lossDetail, setLossDetail] = useState('');
+  // SPEC-CRM-00 v1.1 — Postponed exige fecha futura de reactivación.
+  // Default: 30 días desde hoy (suficiente para que el comercial vuelva
+  // a tocar la opp pero no tan lejos que se olvide).
+  const defaultPostponedDate = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [postponedDate, setPostponedDate] = useState(defaultPostponedDate);
+  const [postponedReason, setPostponedReason] = useState('');
   const [err, setErr]             = useState('');
 
-  // fetch quotations list for this opp when marking as won
+  // Para closed_won, cargar cotizaciones de la opp así el usuario elige cuál ganó.
   const [quotations, setQuotations] = useState([]);
   useEffect(() => {
     if (needsWinningQuot && opp?.id) {
@@ -154,17 +321,33 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
     }
   }, [needsWinningQuot, opp?.id]);
 
+  // Validación local: la fecha de reactivación debe ser futura.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const postponedDateInvalid = needsPostponedDate && postponedDate <= todayIso;
+
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
     if (needsWinningQuot && !winningId) return setErr('Selecciona cotización ganadora');
-    if (needsReason && !reason) return setErr('Selecciona una razón');
+    if (needsReason) {
+      const lossErr = validateLossReason({ loss_reason: lossReason, loss_reason_detail: lossDetail });
+      if (lossErr) return setErr(lossErr);
+    }
+    if (needsPostponedDate && !postponedDate) return setErr('La fecha de reactivación es requerida');
+    if (needsPostponedDate && postponedDateInvalid) return setErr('La fecha de reactivación debe ser futura');
     try {
       await onConfirm({
         new_status: target,
         winning_quotation_id: winningId || undefined,
-        outcome_reason: reason || undefined,
+        // SPEC-CRM-00 v1.1 PR2 — campos formales del lost; el legacy
+        // outcome_reason se sigue mandando para que el backend pueda
+        // aceptar ambas formas durante el período de transición.
+        loss_reason: needsReason ? lossReason : undefined,
+        loss_reason_detail: needsReason ? lossDetail : undefined,
+        outcome_reason: needsReason ? lossReason : (reason || undefined),
         outcome_notes: notes || undefined,
+        postponed_until_date: needsPostponedDate ? postponedDate : undefined,
+        postponed_reason: needsPostponedDate ? (postponedReason || undefined) : undefined,
       });
     } catch (ex) {
       setErr(ex.message || 'Error');
@@ -200,22 +383,75 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
       {needsReason && (
         <>
           <div>
-            <label style={s.label}>Razón *</label>
-            <select style={s.input} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Razón" required>
+            <label style={s.label}>Razón de pérdida *</label>
+            <select
+              style={s.input}
+              value={lossReason}
+              onChange={(e) => setLossReason(e.target.value)}
+              aria-label="Razón de pérdida"
+              required
+            >
               <option value="">— Selecciona —</option>
-              {OUTCOME_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+              {LOSS_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
             </select>
           </div>
           <div>
-            <label style={s.label}>Notas</label>
-            <textarea style={{ ...s.input, minHeight: 60, resize: 'vertical' }} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <label style={s.label}>
+              Descripción detallada * <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>
+                (mín {LOSS_REASON_DETAIL_MIN} chars — {lossDetail.trim().length}/{LOSS_REASON_DETAIL_MIN})
+              </span>
+            </label>
+            <textarea
+              style={{ ...s.input, minHeight: 80, resize: 'vertical' }}
+              value={lossDetail}
+              onChange={(e) => setLossDetail(e.target.value)}
+              aria-label="Descripción detallada de la pérdida"
+              placeholder="Ej. Cliente eligió competidor X por feature Y. Plan: incluir Y en roadmap Q3 y reabrir oportunidad."
+              required
+            />
           </div>
         </>
       )}
-      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+      {needsPostponedDate && (
+        <>
+          <div style={{ background: 'var(--surface-soft, #f8f7fa)', padding: 12, borderRadius: 8, fontSize: 12, color: 'var(--text-light)' }}>
+            ⚠ Las oportunidades postergadas <strong>NO entran</strong> en pipeline weighted hasta que se reactiven. Recibirás recordatorio el día indicado.
+          </div>
+          <div>
+            <label style={s.label}>Reactivar revisión el *</label>
+            <input
+              type="date"
+              style={s.input}
+              value={postponedDate}
+              min={todayIso}
+              onChange={(e) => setPostponedDate(e.target.value)}
+              aria-label="Fecha de reactivación"
+              required
+            />
+            {postponedDateInvalid && (
+              <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>
+                La fecha debe ser futura.
+              </div>
+            )}
+          </div>
+          <div>
+            <label style={s.label}>Razón de la postergación</label>
+            <textarea
+              style={{ ...s.input, minHeight: 60, resize: 'vertical' }}
+              value={postponedReason}
+              onChange={(e) => setPostponedReason(e.target.value)}
+              placeholder="Ej. Cliente postpuso decisión por restructura organizacional. Esperan resolver Q3."
+              aria-label="Razón de postergación"
+            />
+          </div>
+        </>
+      )}
+      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }} role="alert">{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
-        <button type="submit" style={s.btn()} disabled={saving}>{saving ? 'Guardando…' : 'Confirmar'}</button>
+        <button type="submit" style={s.btn()} disabled={saving || postponedDateInvalid}>
+          {saving ? 'Guardando…' : 'Confirmar'}
+        </button>
       </div>
     </form>
   );
@@ -268,11 +504,23 @@ export default function Opportunities() {
   const onSave = async (form) => {
     setSaving(true);
     try {
+      // Helper: transformar string vacío → null y string numérico → Number.
+      const num = (v) => (v === '' || v == null ? null : Number(v));
       const payload = {
         client_id: form.client_id,
         name: form.name,
         description: form.description,
         expected_close_date: form.expected_close_date || null,
+        // SPEC-CRM-00 v1.1 PR2 — modelo de revenue + funding + flags + drive.
+        revenue_type: form.revenue_type || 'one_time',
+        one_time_amount_usd: num(form.one_time_amount_usd),
+        mrr_usd: num(form.mrr_usd),
+        contract_length_months: num(form.contract_length_months),
+        champion_identified: !!form.champion_identified,
+        economic_buyer_identified: !!form.economic_buyer_identified,
+        funding_source: form.funding_source || 'client_direct',
+        funding_amount_usd: num(form.funding_amount_usd),
+        drive_url: form.drive_url || null,
       };
       if (editing?.id) {
         await apiPut(`/api/opportunities/${editing.id}`, payload);

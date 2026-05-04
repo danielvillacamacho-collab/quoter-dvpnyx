@@ -107,21 +107,48 @@ Soft delete. 409 si tiene opps/contracts vivos.
 
 ## Opportunities
 
+> **Actualizado en SPEC-CRM-00 v1.1** (mayo 2026): pipeline 9 estados + revenue model + margin + RBAC scoping + alertas A1-A5. Ver [`CHANGELOG.md`](../CHANGELOG.md) para detalle por PR.
+
+**Pipeline 9 estados** (probabilidades 5/15/30/50/75/90/100/0/0):
+```
+lead → qualified → solution_design → proposal_validated → negotiation → verbal_commit → {closed_won | closed_lost | postponed}
+```
+`postponed` es **limbo no terminal** (sale a `qualified` o `closed_lost`).
+
+**RBAC scoping** (inline en list endpoints):
+- `superadmin/admin/director` (SEE_ALL_ROLES) → ven todas.
+- `lead` → su squad.
+- `member` → solo donde sea `account_owner_id` o `presales_lead_id`.
+- `external` → **403**.
+
 ### `GET /api/opportunities`
-Filtros: `search`, `client_id`, `status`, `owner_id`, `squad_id`, `from_expected_close`, `to_expected_close`.
+Filtros: `search`, `client_id`, `status`, `owner_id`, `squad_id`, `from_expected_close`, `to_expected_close`. Filtros nuevos CRM-00: `revenue_type` (one_time/recurring/mixed), `has_champion`, `has_economic_buyer`, `funding_source`. Valores fuera del enum se ignoran (no SQL inject). Scoping inline por rol.
 
 ### `GET /api/opportunities/kanban`
-Devuelve agrupado por stage con summaries (count, total USD, weighted USD). Filtros igual que listado + `min_amount_usd`. Cap por columna 100.
+Devuelve agrupado por stage con summaries (count, total USD, weighted USD). Filtros igual que listado + `min_amount_usd`. Cap por columna 100. Payload incluye los flags de Champion/EB + revenue model para badges del card en el frontend. Scoping inline por rol.
 
 ### `GET /api/opportunities/:id`
 
 ### `POST /api/opportunities`
+Body legacy compatible. Nuevos campos opcionales: `revenue_type` (default `one_time`), `one_time_amount_usd`, `mrr_usd`, `contract_length_months`, `champion_identified`, `economic_buyer_identified`, `funding_source`, `funding_amount_usd`, `drive_url`. Validación de consistencia revenue + funding.
+
 ### `PUT /api/opportunities/:id`
+Editable los nuevos campos arriba. Validación de consistencia parcial (merge body con DB before). Cambios en `champion_identified`/`economic_buyer_identified` disparan check A3 inline (fire-and-forget).
 
 ### `POST /api/opportunities/:id/status`
-Body: `{ new_status, winning_quotation_id?, outcome_reason?, outcome_notes? }`.
-- `won` requiere `winning_quotation_id`.
-- `lost` / `cancelled` requieren `outcome_reason`.
+Body: `{ new_status, winning_quotation_id?, outcome_reason?, postponed_until_date?, loss_reason?, loss_reason_detail? }`.
+- `closed_won` requiere `winning_quotation_id`.
+- `closed_lost` requiere `loss_reason` (price/competitor_won/no_decision/budget_cut/champion_left/wrong_fit/timing/incumbent_win/other) + `loss_reason_detail` (≥30 chars). Legacy `outcome_reason` sigue como fallback.
+- `postponed` requiere `postponed_until_date` futura.
+- Soft warnings (`amount_zero`, `backwards`, `close_date_past`, `a4_margin_low`) se devuelven en el body — no bloquean.
+- Avanzar a `solution_design+` dispara A3 fire-and-forget. Avanzar a `proposal_validated/negotiation/verbal_commit/closed_won` con margen <20% emite warning `a4_margin_low` y evento `opportunity.margin_low`.
+- Eventos emitidos: `opportunity.status_changed`, `opportunity.won`, `opportunity.lost`, `opportunity.postponed`, `opportunity.reactivated`.
+
+### `POST /api/opportunities/:id/check-margin` *(SPEC-CRM-00 PR 3)*
+Body: `{ estimated_cost_usd? }`. Si no se pasa, auto-computa desde `cost_hour/rate_hour` de las líneas del quotation winning. Persiste `estimated_cost_usd` y `margin_pct`. Emite `opportunity.margin_low` si margen < 20%.
+
+### `POST /api/opportunities/check-alerts` *(SPEC-CRM-00 PR 4)*
+Escanea oportunidades con scoping del caller y genera notificaciones para A1 (estancada >30d), A2 (next_step vencido), A3 (Champion/EB gap), A4 (margen bajo), A5 (cierre próximo 7d). Dedup 24h por (alertCode, opportunityId, userId). Diseñado para cron diario o invocación manual.
 
 ### `DELETE /api/opportunities/:id` 🔒 admin
 Hard delete bloqueado si tiene quotations.
@@ -568,7 +595,7 @@ Cada mutation relevante emite a `events` table con `event_type`. Los más comune
 - `*.created`, `*.updated`, `*.deleted`, `*.status_changed`
 - `assignment.overbooked`, `assignment.override`
 - `contract.kicked_off`, `contract.created_from_quotation`, `contract.completed`, `contract.cancelled`
-- `opportunity.won`, `opportunity.lost`, `opportunity.cancelled`, `opportunity.stage_changed`
+- `opportunity.won`, `opportunity.lost`, `opportunity.cancelled`, `opportunity.stage_changed`, `opportunity.postponed`, `opportunity.reactivated`, `opportunity.margin_low` *(SPEC-CRM-00)*
 - `quotation.duplicated`, `quotation.exported`
 - `parameter.updated`
 - `employee.status_changed`, `employee.leave_started`, `employee.leave_ended`
