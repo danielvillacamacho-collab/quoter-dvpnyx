@@ -102,7 +102,6 @@ const formatPctForInput = (pctFraction) => pctFraction == null
 function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onCloseMonth }) {
   const isClosed = cell?.status === 'closed';
   const isProject = contract?.type === 'project';
-  const isCapacity = contract?.type === 'capacity';
   const isAutoReal = !!cell?.auto_real;
   const planExists = cell != null;
   const totalValueUsd = Number(contract?.total_value_usd || 0);

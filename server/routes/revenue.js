@@ -36,6 +36,23 @@ router.use(auth);
 
 const YYYYMM_RE = /^[0-9]{6}$/;
 
+/**
+ * Find the applicable rate for a given date from a sorted history array.
+ * Returns the rate whose effective_date is <= date (latest one).
+ * @param {Array<{effective: Date, rate: number}>} history - sorted ASC by effective
+ * @param {Date} date
+ * @returns {number|null}
+ */
+function rateForDate(history, date) {
+  if (!history || !history.length) return null;
+  let applicable = null;
+  for (const h of history) {
+    if (h.effective <= date) applicable = h.rate;
+    else break;
+  }
+  return applicable;
+}
+
 function expandMonths(from, to) {
   if (!YYYYMM_RE.test(from) || !YYYYMM_RE.test(to)) return [];
   const out = [];
@@ -146,18 +163,6 @@ router.get('/', async (req, res) => {
             rate: Number(r.client_rate),
           });
         }
-      }
-
-      // Helper: find the applicable rate for a given date from history.
-      // Returns the rate whose effective_date is <= date (latest one).
-      function rateForDate(history, date) {
-        if (!history || !history.length) return null;
-        let applicable = null;
-        for (const h of history) {
-          if (h.effective <= date) applicable = h.rate;
-          else break; // sorted ASC, so first one after date means we stop
-        }
-        return applicable;
       }
 
       // Build month-by-month proration for each capacity assignment.
@@ -828,16 +833,6 @@ router.get('/capacity-projection', async (req, res) => {
         });
       }
     }
-    function rateForDateCP(history, date) {
-      if (!history || !history.length) return null;
-      let applicable = null;
-      for (const h of history) {
-        if (h.effective <= date) applicable = h.rate;
-        else break;
-      }
-      return applicable;
-    }
-
     // 3. Determine date range: earliest start → latest end (or today+12m if null)
     const today = new Date();
     const horizonEnd = new Date(today.getFullYear(), today.getMonth() + 12, 0);
@@ -882,12 +877,12 @@ router.get('/capacity-projection', async (req, res) => {
           // Day-by-day with rate changes.
           let curDay = new Date(activeStart);
           while (curDay <= activeEnd) {
-            const dayRate = rateForDateCP(history, curDay) || fallbackRate;
+            const dayRate = rateForDate(history, curDay) || fallbackRate;
             let streak = 1;
             const nextDay = new Date(curDay);
             nextDay.setDate(nextDay.getDate() + 1);
             while (nextDay <= activeEnd) {
-              if ((rateForDateCP(history, nextDay) || fallbackRate) !== dayRate) break;
+              if ((rateForDate(history, nextDay) || fallbackRate) !== dayRate) break;
               streak++;
               nextDay.setDate(nextDay.getDate() + 1);
             }
@@ -903,7 +898,7 @@ router.get('/capacity-projection', async (req, res) => {
         assignmentRows.push({
           assignment_id:        a.id,
           employee_name:        a.employee_name,
-          client_rate:          hasHistory ? (rateForDateCP(history, monthStart) || fallbackRate) : fallbackRate,
+          client_rate:          hasHistory ? (rateForDate(history, monthStart) || fallbackRate) : fallbackRate,
           client_rate_currency: a.client_rate_currency || 'USD',
           days_active:          Math.round((activeEnd - activeStart) / 86400000) + 1,
           days_in_month:        dim,

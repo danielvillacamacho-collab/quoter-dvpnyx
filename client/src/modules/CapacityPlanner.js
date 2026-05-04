@@ -325,7 +325,7 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   const loadRateHistory = useCallback(() => {
     apiGet(`/api/assignments/${assignmentId}/rate-history`)
       .then(setRateHistory)
-      .catch(() => {});
+      .catch((e) => console.warn('rate-history load failed:', e?.message || e));
   }, [assignmentId]);
 
   useEffect(() => {
