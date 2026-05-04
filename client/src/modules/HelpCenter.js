@@ -238,40 +238,23 @@ function ArticleEditor({ initial, onSave, onCancel }) {
 }
 
 // ─── ArticleView ──────────────────────────────────────────────────────────────
+// Recibe el artículo directamente del padre (ya viene en la respuesta de lista),
+// eliminando la segunda llamada a GET /api/help/:slug que era problemática.
 
-function ArticleView({ slug, isAdmin, onEdit, onDelete }) {
-  const [article, setArticle] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr]         = useState('');
-  const navigate              = useNavigate();
-
-  const load = useCallback(async () => {
-    setLoading(true); setErr('');
-    try {
-      const data = await apiGet(`/api/help/${slug}`);
-      setArticle(data);
-    } catch (e) {
-      setErr(e?.data?.error || 'Artículo no encontrado');
-    } finally {
-      setLoading(false);
-    }
-  }, [slug]);
-
-  useEffect(() => { load(); }, [load]);
+function ArticleView({ article, isAdmin, onEdit }) {
+  const navigate = useNavigate();
 
   const handleDelete = async () => {
     if (!window.confirm(`¿Eliminar el artículo "${article?.title}"? Esta acción no se puede deshacer.`)) return;
     try {
-      await apiDelete(`/api/help/${slug}`);
+      await apiDelete(`/api/help/${article.slug}`);
       navigate('/help');
     } catch (e) {
-      alert(e?.data?.error || 'Error al eliminar');
+      alert(e?.body?.error || e?.message || 'Error al eliminar');
     }
   };
 
-  if (loading) return <div style={{ fontSize: 13, color: 'var(--ds-text-soft)' }}>Cargando…</div>;
-  if (err)     return <div style={{ color: 'var(--ds-bad,#ef4444)', fontSize: 13 }}>{err}</div>;
-  if (!article) return null;
+  if (!article) return <div style={{ color: 'var(--ds-bad,#ef4444)', fontSize: 13 }}>Artículo no encontrado.</div>;
 
   return (
     <div>
@@ -334,7 +317,7 @@ export default function HelpCenter() {
       setArticles(data.data || []);
       setByCategory(data.byCategory || {});
     } catch (e) {
-      setErr(e?.data?.error || 'Error al cargar el manual');
+      setErr(e?.body?.error || e?.message || 'Error al cargar el manual');
     } finally {
       setLoading(false);
     }
@@ -387,6 +370,9 @@ export default function HelpCenter() {
 
   // ── Render: artículo individual ───────────────────────────────────────────
   if (slug) {
+    // El artículo ya viene en la respuesta de lista (body_md incluido).
+    // No hacemos una segunda llamada a GET /api/help/:slug.
+    const currentArticle = articles.find(a => a.slug === slug) || null;
     return (
       <div style={ds.wrap}>
         {/* Sidebar */}
@@ -394,12 +380,14 @@ export default function HelpCenter() {
           <Sidebar byCategory={byCategory} activeSlug={slug} isAdmin={isAdmin} onNew={() => setEditing(true)} />
         </nav>
         <div style={ds.main}>
-          <ArticleView
-            slug={slug}
-            isAdmin={isAdmin}
-            onEdit={() => setEditing(slug)}
-            onDelete={() => { load(); navigate('/help'); }}
-          />
+          {loading
+            ? <div style={{ fontSize: 13, color: 'var(--ds-text-soft)' }}>Cargando…</div>
+            : <ArticleView
+                article={currentArticle}
+                isAdmin={isAdmin}
+                onEdit={() => setEditing(slug)}
+              />
+          }
         </div>
       </div>
     );

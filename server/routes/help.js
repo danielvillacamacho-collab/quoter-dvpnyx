@@ -46,12 +46,14 @@ router.get('/', auth, async (req, res) => {
 
     const { rows } = await pool.query(`
       SELECT
-        id, slug, category, sort_order, title,
-        is_published, created_at, updated_at,
-        updated_by
-      FROM help_articles
+        ha.id, ha.slug, ha.category, ha.sort_order, ha.title, ha.body_md,
+        ha.is_published, ha.created_at, ha.updated_at,
+        ha.updated_by,
+        u.first_name || ' ' || u.last_name AS updated_by_name
+      FROM help_articles ha
+      LEFT JOIN users u ON u.id = ha.updated_by
       ${publishedFilter}
-      ORDER BY category, sort_order, title
+      ORDER BY ha.category, ha.sort_order, ha.title
     `);
 
     // Agrupar por categoría para facilitar el render en el cliente
