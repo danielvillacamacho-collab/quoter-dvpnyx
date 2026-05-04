@@ -21,10 +21,10 @@ describe('Sidebar', () => {
 
   it('renders all section labels for an admin user', () => {
     mount();
-    // The top "/ Dashboard" and "Reportes/Wiki" groups intentionally
-    // have no section header — only the 5 labeled groups do.
-    ['Comercial', 'Delivery', 'Gente', 'Time Tracking', 'Configuración'].forEach((label) => {
-      expect(screen.getByText(label)).toBeInTheDocument();
+    const sectionLabels = document.querySelectorAll('.ds-sb-section-label');
+    const labels = Array.from(sectionLabels).map((el) => el.textContent);
+    ['Comercial', 'Delivery', 'Gente', 'Time Tracking', 'Iniciativas internas', 'Finanzas', 'Reportes', 'Configuración'].forEach((label) => {
+      expect(labels).toContain(label);
     });
   });
 
@@ -81,7 +81,7 @@ describe('Sidebar', () => {
   it('buildGroups returns 9 groups for admins and 8 for non-admins (+ Iniciativas internas group from SPEC-II-00)', () => {
     // Sanity on the pure model helper so it stays useful for consumers
     // (Command Palette quick actions list, for example).
-    expect(buildGroups(true).length).toBe(9);
-    expect(buildGroups(false).length).toBe(8);
+    expect(buildGroups(true).length).toBe(10);
+    expect(buildGroups(false).length).toBe(9);
   });
 });
