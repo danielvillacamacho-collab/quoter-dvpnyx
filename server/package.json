@@ -8,6 +8,7 @@
     "migrate:v2-data": "node database/migrate_v2_data.js",
     "validate:v2": "node database/validate_v2_migration.js",
     "seed": "node database/seed.js",
+    "seed:synthetic": "node database/seed_synthetic.js",
     "test": "jest --passWithNoTests",
     "test:coverage": "jest --coverage --passWithNoTests",
     "test:ci": "jest --ci --runInBand --passWithNoTests"
