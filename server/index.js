@@ -8,15 +8,44 @@ const path = require('path');
 const crypto = require('crypto');
 const { serverError } = require('./utils/http');
 
-// ── Startup fixup: garantiza que help_articles tenga las columnas correctas
-// independiente del estado de la migración. Idempotente. ─────────────────────
+// ── Startup fixup: garantiza que help_articles exista con el schema correcto
+// independiente del estado de la migración. Cada paso en su propio try/catch
+// para que un fallo aislado no cancele los siguientes. ──────────────────────
 (async () => {
+  let pool;
+  try { pool = require('./database/pool'); } catch (e) {
+    console.warn('[startup] pool unavailable:', e.message); return;
+  }
+
+  // 1. Crear tabla si no existe (primer boot antes de migración)
   try {
-    const pool = require('./database/pool');
-    // Agregar columnas si faltan (DBs creadas por deploys parciales)
-    await pool.query(`ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS body_md TEXT NOT NULL DEFAULT ''`);
-    await pool.query(`ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL`);
-    // Seed artículos base si la tabla está vacía
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS help_articles (
+        id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        slug         TEXT        NOT NULL UNIQUE,
+        category     TEXT        NOT NULL,
+        sort_order   INTEGER     NOT NULL DEFAULT 0,
+        title        TEXT        NOT NULL,
+        body_md      TEXT        NOT NULL DEFAULT '',
+        is_published BOOLEAN     NOT NULL DEFAULT false,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_by   UUID        REFERENCES users(id) ON DELETE SET NULL
+      )
+    `);
+  } catch (e) { console.warn('[startup] help_articles CREATE skipped:', e.message); }
+
+  // 2. Agregar columnas si faltan (DBs creadas por deploys parciales)
+  const colFixups = [
+    `ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS body_md TEXT NOT NULL DEFAULT ''`,
+    `ALTER TABLE help_articles ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL`,
+  ];
+  for (const sql of colFixups) {
+    try { await pool.query(sql); } catch (e) { console.warn('[startup] col fixup skipped:', e.message); }
+  }
+
+  // 3. Seed artículos base — ON CONFLICT DO NOTHING hace esto idempotente
+  try {
     await pool.query(`
       INSERT INTO help_articles (slug, category, sort_order, title, body_md, is_published) VALUES
         ('ayuda-bienvenida','general',1,'Bienvenida al Quoter DVPNYX','# Bienvenida al Quoter DVPNYX\n\nEste es el sistema interno de DVPNYX para gestionar cotizaciones, contratos, asignaciones y capacidad del equipo de entrega.\n\n## Módulos principales\n\n- **CRM / Oportunidades** — Pipeline comercial con 9 etapas, alertas y revenue forecasting.\n- **Cotizador** — Propuestas de staff augmentation o fixed scope con cálculo de márgenes.\n- **Contratos** — Lifecycle completo desde kick-off hasta cierre.\n- **Capacity Planner** — Disponibilidad del equipo y asignación de recursos.\n- **Time Tracking** — Registro de horas por asignación.\n- **Reportes** — Utilización, bench, compliance y plan vs real.',true),
@@ -28,10 +57,7 @@ const { serverError } = require('./utils/http');
       ON CONFLICT (slug) DO NOTHING
     `);
     console.log('[startup] help_articles schema + seed OK');
-  } catch (e) {
-    // Si la tabla no existe todavía (primer boot antes de migración), es inofensivo.
-    console.warn('[startup] help_articles fixup skipped:', e.message);
-  }
+  } catch (e) { console.warn('[startup] help_articles seed skipped:', e.message); }
 })();
 
 const app = express();
