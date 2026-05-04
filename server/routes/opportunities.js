@@ -801,7 +801,8 @@ router.post('/:id/status', async (req, res) => {
     // Admin/superadmin can bypass with { override_exit_criteria: true }.
     const canOverride = ['superadmin', 'admin'].includes(req.user.role);
     const overrideRequested = req.body.override_exit_criteria === true;
-    if (!isTerminal(new_status) && !isPostponed(new_status) && !(canOverride && overrideRequested)) {
+    const isForward = STAGE_ORDER[new_status] > STAGE_ORDER[current.status];
+    if (isForward && !isTerminal(new_status) && !isPostponed(new_status) && !(canOverride && overrideRequested)) {
       const exitGaps = [];
       if (new_status === 'qualified' || STAGE_ORDER[new_status] >= STAGE_ORDER['qualified']) {
         if (!current.description && !current.name) exitGaps.push('Descripción requerida');
