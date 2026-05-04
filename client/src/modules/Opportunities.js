@@ -71,7 +71,51 @@ const EMPTY = {
   drive_url: '',
   // SPEC-CRM-01 — deal enrichment
   deal_type: 'new_business', co_owner_id: '',
+  // Brief de la oportunidad — insumo estructurado para preventa
+  context_client: '', context_scope: '', context_pains: '',
+  context_requirements: '', context_politics: '',
 };
+
+// Cada bloque del Brief tiene: clave, etiqueta, hint corto y placeholder
+// con un ejemplo real (caso BBVA Colombia que la country manager compartió
+// por chat) para que el comercial vea la calidad de input que se espera.
+const BRIEF_SECTIONS = [
+  {
+    key: 'context_client',
+    label: '1. Contexto del cliente',
+    hint: 'Quién decide, dónde se decide, área del cliente.',
+    placeholder:
+      'Ej. BBVA Colombia, área de banca corporativa. La decisión se toma en Colombia, no escala a España (punto a favor). Decisor: BBVA Colombia.',
+  },
+  {
+    key: 'context_scope',
+    label: '2. Alcance del servicio',
+    hint: 'Qué producto/funcionalidad busca, usuarios finales, integraciones.',
+    placeholder:
+      'Ej. Producto de factoring y confirming dirigido a miles de clientes (pymes y corporativos). Front: carga/descarga de facturas multibanco (subastadas en Klym y Mente). Back: control de cupos, descuentos, contabilidad y autorizaciones.',
+  },
+  {
+    key: 'context_pains',
+    label: '3. Pain points y razón del cambio',
+    hint: 'Por qué cambian de proveedor, qué les duele hoy.',
+    placeholder:
+      'Ej. Proveedor actual (10+ años) propuso modelo no escalable. Cada desarrollo se paga muy caro (incluso cambios de color/tamaño). Dolor con integración a Klym/Mente. Onboarding de proveedores lento. La contabilidad seguirá con el proveedor actual.',
+  },
+  {
+    key: 'context_requirements',
+    label: '4. Requisitos del nuevo proveedor',
+    hint: 'Qué buscan, modelo comercial, alcance esperado.',
+    placeholder:
+      'Ej. Nuevo proveedor debe manejar 100% del servicio (o explorar split front/back). Buscan activamente varios proveedores. Abiertos a fee de facturación o business case. Quieren solución con agentes. Confirmar fecha de vencimiento del contrato actual.',
+  },
+  {
+    key: 'context_politics',
+    label: '5. Política y siguientes pasos',
+    hint: 'Influenciadores con nombre, próximos pasos, timeline de decisión.',
+    placeholder:
+      'Ej. Hay que convencer a Guillermo (le habla al oído al CEO). Jorge Antorveza trabaja para Guillermo. Próximo paso: reunión con dueños de producto y Gerente Comercial Corporativo. Preparar speech sobre costo multiplataforma y spreads. Decisión en 2026 — proyecto de largo aliento.',
+  },
+];
 
 const fmtUsd = (n) => `USD ${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
@@ -306,6 +350,35 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
           </div>
         </div>
       )}
+
+      {/* Brief de la oportunidad — insumo estructurado para preventa.
+          Cada sección es opcional al crear (un comercial rara vez tiene
+          los 5 bloques al inicio del deal); se enriquece a medida que avanza. */}
+      <fieldset style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, margin: 0 }}>
+        <legend style={{ fontSize: 12, fontWeight: 700, color: 'var(--purple-dark)', padding: '0 6px' }}>
+          📋 Brief de la oportunidad
+        </legend>
+        <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 10 }}>
+          Insumo para preventa: cuanto más rico, mejor cotización. Llena lo que tengas hoy y enriquécelo a medida que avanza el deal.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {BRIEF_SECTIONS.map((sec) => (
+            <div key={sec.key}>
+              <label style={s.label} htmlFor={`brief-${sec.key}`}>
+                {sec.label} <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>· {sec.hint}</span>
+              </label>
+              <textarea
+                id={`brief-${sec.key}`}
+                style={{ ...s.input, minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }}
+                value={form[sec.key] || ''}
+                onChange={(e) => set(sec.key, e.target.value)}
+                placeholder={sec.placeholder}
+                aria-label={sec.label}
+              />
+            </div>
+          ))}
+        </div>
+      </fieldset>
 
       {err && <div style={{ color: 'var(--danger)', fontSize: 13 }} role="alert">{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -562,6 +635,12 @@ export default function Opportunities() {
         // SPEC-CRM-01 — deal enrichment
         deal_type: form.deal_type || 'new_business',
         co_owner_id: form.co_owner_id || null,
+        // Brief de la oportunidad
+        context_client: form.context_client || null,
+        context_scope: form.context_scope || null,
+        context_pains: form.context_pains || null,
+        context_requirements: form.context_requirements || null,
+        context_politics: form.context_politics || null,
       };
       if (editing?.id) {
         await apiPut(`/api/opportunities/${editing.id}`, payload);

@@ -111,6 +111,8 @@ const EDITABLE_FIELDS = [
   'funding_source', 'funding_amount_usd', 'drive_url',
   // SPEC-CRM-01 — deal enrichment
   'deal_type', 'co_owner_id',
+  // Opportunity Brief — insumo estructurado para preventa (5 secciones de texto libre)
+  'context_client', 'context_scope', 'context_pains', 'context_requirements', 'context_politics',
 ];
 
 /* -------- LIST -------- */
@@ -439,6 +441,8 @@ router.post('/', async (req, res) => {
     // SPEC-CRM-01 — deal enrichment
     deal_type: dealTypeIn,
     co_owner_id,
+    // Opportunity Brief
+    context_client, context_scope, context_pains, context_requirements, context_politics,
   } = req.body || {};
 
   if (!client_id) return res.status(400).json({ error: 'client_id es requerido' });
@@ -535,9 +539,11 @@ router.post('/', async (req, res) => {
           revenue_type, one_time_amount_usd, mrr_usd, contract_length_months,
           champion_identified, economic_buyer_identified,
           funding_source, funding_amount_usd, drive_url, booking_amount_usd,
-          deal_type, co_owner_id)
+          deal_type, co_owner_id,
+          context_client, context_scope, context_pains, context_requirements, context_politics)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
-               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,
+               $25,$26,$27,$28,$29)
        RETURNING *`,
       [
         client_id,
@@ -564,6 +570,11 @@ router.post('/', async (req, res) => {
         computedBooking,
         deal_type,
         co_owner_id || null,
+        context_client || null,
+        context_scope || null,
+        context_pains || null,
+        context_requirements || null,
+        context_politics || null,
       ],
     );
     const opp = rows[0];
@@ -676,6 +687,11 @@ router.put('/:id', async (req, res) => {
           drive_url                 = COALESCE($18, drive_url),
           deal_type                 = COALESCE($19, deal_type),
           co_owner_id               = COALESCE($20, co_owner_id),
+          context_client            = COALESCE($21, context_client),
+          context_scope             = COALESCE($22, context_scope),
+          context_pains             = COALESCE($23, context_pains),
+          context_requirements      = COALESCE($24, context_requirements),
+          context_politics          = COALESCE($25, context_politics),
           updated_at                = NOW()
         WHERE id=$9 AND deleted_at IS NULL
         RETURNING *`,
@@ -700,6 +716,11 @@ router.put('/:id', async (req, res) => {
         body.drive_url ?? null,
         body.deal_type ?? null,
         body.co_owner_id ?? null,
+        body.context_client ?? null,
+        body.context_scope ?? null,
+        body.context_pains ?? null,
+        body.context_requirements ?? null,
+        body.context_politics ?? null,
       ],
     );
     const after = rows[0];

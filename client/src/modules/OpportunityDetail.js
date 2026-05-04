@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { apiGet, apiPost } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut } from '../utils/apiV2';
 import StatusBadge from '../shell/StatusBadge';
 import { STAGES, TRANSITIONS as PIPELINE_TRANSITIONS, isPostponed, isWon } from '../utils/pipeline';
 // SPEC-CRM-00 v1.1 PR2/PR3 — labels + margin.
@@ -54,6 +54,138 @@ const ACTIVITY_TYPE_LABEL = {
   call: 'Llamada', email: 'Email', meeting: 'Reunión', note: 'Nota',
   proposal_sent: 'Propuesta', demo: 'Demo', follow_up: 'Seguimiento', other: 'Otro',
 };
+
+// Brief de la oportunidad — mismas secciones que el formulario de creación
+// (ver Opportunities.js BRIEF_SECTIONS). Duplicamos local en lugar de
+// extraer a un módulo compartido para no inflar el footprint del PR; cuando
+// haya un tercer consumidor (p.ej. wizard de IA, export PDF) vale extraer.
+const BRIEF_SECTIONS = [
+  { key: 'context_client',       label: '1. Contexto del cliente',       hint: 'Quién decide, dónde se decide, área del cliente.' },
+  { key: 'context_scope',        label: '2. Alcance del servicio',       hint: 'Qué producto/funcionalidad busca, usuarios finales, integraciones.' },
+  { key: 'context_pains',        label: '3. Pain points y razón del cambio', hint: 'Por qué cambian de proveedor, qué les duele hoy.' },
+  { key: 'context_requirements', label: '4. Requisitos del nuevo proveedor', hint: 'Qué buscan, modelo comercial, alcance esperado.' },
+  { key: 'context_politics',     label: '5. Política y siguientes pasos', hint: 'Influenciadores con nombre, próximos pasos, timeline de decisión.' },
+];
+const BRIEF_PLACEHOLDERS = {
+  context_client:       'Ej. BBVA Colombia, área de banca corporativa. La decisión se toma en Colombia, no escala a España.',
+  context_scope:        'Ej. Producto de factoring/confirming para pymes y corporativos. Front multibanco (Klym, Mente). Back: cupos, contabilidad, autorizaciones.',
+  context_pains:        'Ej. Proveedor actual no escalable, cada desarrollo se paga muy caro. Dolor con integración. Onboarding lento.',
+  context_requirements: 'Ej. Nuevo proveedor maneja 100% del servicio (o split front/back). Abiertos a fee de facturación o business case.',
+  context_politics:     'Ej. Convencer a Guillermo (le habla al CEO). Próximo paso: reunión con dueños de producto. Decisión en 2026.',
+};
+
+function OpportunityBriefCard({ opp, onSaved }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  const startEdit = () => {
+    setDraft(BRIEF_SECTIONS.reduce((acc, sec) => {
+      acc[sec.key] = opp[sec.key] || '';
+      return acc;
+    }, {}));
+    setErr('');
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setErr('');
+    try {
+      await apiPut(`/api/opportunities/${opp.id}`, draft);
+      setEditing(false);
+      await onSaved();
+    } catch (e) {
+      setErr(e.message || 'Error guardando');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filled = BRIEF_SECTIONS.filter((sec) => (opp[sec.key] || '').trim().length > 0).length;
+  const isEmpty = filled === 0;
+
+  return (
+    <div style={s.card} data-testid="opportunity-brief-card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+        <h2 style={s.h2}>
+          📋 Brief de la oportunidad
+          <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 600, color: filled === BRIEF_SECTIONS.length ? 'var(--success)' : 'var(--text-light)' }}>
+            {filled}/{BRIEF_SECTIONS.length} secciones
+          </span>
+        </h2>
+        {!editing && (
+          <button type="button" style={s.btnOutline} onClick={startEdit} aria-label="Editar brief">
+            {isEmpty ? '+ Llenar brief' : '✎ Editar'}
+          </button>
+        )}
+      </div>
+
+      {!editing && isEmpty && (
+        <div style={{ fontSize: 13, color: 'var(--text-light)', padding: '12px 0' }}>
+          Sin brief todavía. Llénalo con contexto del cliente, alcance, pain points, requisitos y política para que preventa cotice con buen insumo.
+        </div>
+      )}
+
+      {!editing && !isEmpty && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {BRIEF_SECTIONS.map((sec) => {
+            const val = (opp[sec.key] || '').trim();
+            return (
+              <div key={sec.key}>
+                <div style={{ ...s.label, marginBottom: 4 }}>{sec.label}</div>
+                {val ? (
+                  <div style={{ fontSize: 13, color: 'var(--purple-dark)', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                    {val}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, fontStyle: 'italic', color: 'var(--text-light)' }}>
+                    — pendiente: {sec.hint}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-light)' }}>
+            Cuanto más rico el brief, mejor cotización. Los placeholders muestran ejemplos del nivel de detalle esperado.
+          </div>
+          {BRIEF_SECTIONS.map((sec) => (
+            <div key={sec.key}>
+              <label style={{ ...s.label, marginBottom: 4, display: 'block' }} htmlFor={`brief-edit-${sec.key}`}>
+                {sec.label} <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>· {sec.hint}</span>
+              </label>
+              <textarea
+                id={`brief-edit-${sec.key}`}
+                style={{
+                  width: '100%', padding: '8px 12px', border: '1px solid var(--border)',
+                  borderRadius: 8, fontSize: 13, outline: 'none', minHeight: 80, resize: 'vertical',
+                  fontFamily: 'inherit',
+                }}
+                value={draft[sec.key] || ''}
+                onChange={(e) => setDraft((d) => ({ ...d, [sec.key]: e.target.value }))}
+                placeholder={BRIEF_PLACEHOLDERS[sec.key]}
+                aria-label={sec.label}
+              />
+            </div>
+          ))}
+          {err && <div style={{ color: 'var(--danger)', fontSize: 13 }} role="alert">{err}</div>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button type="button" style={s.btnOutline} onClick={() => setEditing(false)} disabled={saving}>Cancelar</button>
+            <button type="button" style={s.btn()} onClick={save} disabled={saving}>
+              {saving ? 'Guardando…' : 'Guardar brief'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function OpportunityDetail() {
   const { id } = useParams();
@@ -310,6 +442,8 @@ export default function OpportunityDetail() {
           <Field label="Outcome">{opp.outcome_reason}</Field>
         </div>
       </div>
+
+      <OpportunityBriefCard opp={opp} onSaved={load} />
 
       {/* SPEC-CRM-00 v1.1 PR2 — Revenue breakdown. */}
       <div style={s.card} data-testid="opportunity-revenue-card">
