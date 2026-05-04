@@ -5,7 +5,7 @@
  * entities so every UI view, dashboard, and report has content.
  *
  * Safety:  Refuses to run when NODE_ENV=production or DB_NAME contains 'prod'.
- * Idempotent: Uses deterministic UUIDs + ON CONFLICT (id) DO NOTHING.
+ * Idempotent: Uses deterministic UUIDs + ON CONFLICT DO NOTHING (catch-all).
  * Standalone: `node server/database/seed_synthetic.js`
  */
 const { Pool } = require('pg');
@@ -258,14 +258,14 @@ async function seed() {
       await client.query(`
         INSERT INTO users (id, email, password_hash, name, role, function, must_change_password, active)
         VALUES ($1,$2,$3,$4,$5,$6,false,true)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [u.id, u.email, hash, u.name, u.role, u.fn]);
     }
 
     // 2. Squads
     for (const s of SQUADS) {
       await client.query(`
-        INSERT INTO squads (id, name) VALUES ($1,$2) ON CONFLICT (id) DO NOTHING
+        INSERT INTO squads (id, name) VALUES ($1,$2) ON CONFLICT DO NOTHING
       `, [s.id, s.name]);
     }
 
@@ -274,7 +274,7 @@ async function seed() {
       await client.query(`
         INSERT INTO clients (id, name, country, industry, tier, preferred_currency, active, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,true,$7)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [c.id, c.name, c.country, c.industry, c.tier, c.currency, ADMIN_ID]);
     }
 
@@ -288,7 +288,7 @@ async function seed() {
         INSERT INTO employees (id, first_name, last_name, country, city, area_id, level, status,
           weekly_capacity_hours, employment_type, start_date, squad_id, created_by, languages)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'fulltime',$10,$11,$12,'["español"]'::jsonb)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [e.id, e.fn, e.ln, e.country, e.city, areaMap[e.area], e.level, e.status,
           e.cap, d(-365 - Math.floor(Math.random() * 400)),
           e.squad !== null ? SQUADS[e.squad]?.id || null : null, ADMIN_ID]);
@@ -307,7 +307,7 @@ async function seed() {
         await client.query(`
           INSERT INTO employee_skills (id, employee_id, skill_id, proficiency, years_experience)
           VALUES ($1,$2,$3,$4,$5)
-          ON CONFLICT (id) DO NOTHING
+          ON CONFLICT DO NOTHING
         `, [uid(`es-${i}-${j}`), e.id, sk.id, proficiencies[(i + j) % 4], 1 + (i % 8)]);
       }
     }
@@ -326,7 +326,7 @@ async function seed() {
           expected_close_date, country, postponed_until_date, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($9::numeric,0),$12,'client_direct',$13,$14,
           (SELECT country FROM clients WHERE id=$2),$15,$4)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [o.id, cliId, o.name, ownerId, presalesId, squadId, o.status,
           o.rev, o.ota || null, o.mrr || null, o.months || null,
           o.deal, o.onum, d(30 + i * 15), o.postponed || null]);
@@ -337,7 +337,7 @@ async function seed() {
       await client.query(`
         INSERT INTO contacts (id, client_id, first_name, last_name, job_title, email_primary, seniority, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [c.id, CLIENTS[c.cli].id, c.fn, c.ln, c.title, c.email, c.seniority, ADMIN_ID]);
     }
 
@@ -347,7 +347,7 @@ async function seed() {
       await client.query(`
         INSERT INTO opportunity_contacts (id, opportunity_id, contact_id, deal_role)
         VALUES ($1,$2,$3,$4)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [uid(`oc-${i}`), OPPORTUNITIES[i].id, CONTACTS[i % CONTACTS.length].id, roles[i % roles.length]]);
     }
 
@@ -358,7 +358,7 @@ async function seed() {
         INSERT INTO activities (id, opportunity_id, client_id, contact_id, user_id, activity_type,
           subject, activity_date)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [a.id,
           a.opp !== null ? OPPORTUNITIES[a.opp].id : null,
           CLIENTS[a.cli].id,
@@ -377,7 +377,7 @@ async function seed() {
           start_date, end_date, total_value_usd, account_owner_id, delivery_manager_id,
           squad_id, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [c.id, c.name, CLIENTS[c.cli].id, oppId, c.type, c.subtype, c.status,
           c.start, c.end, c.val, USERS[1].id, USERS[3].id,
           SQUADS[c.squad].id, ADMIN_ID]);
@@ -389,7 +389,7 @@ async function seed() {
         INSERT INTO resource_requests (id, contract_id, role_title, area_id, level,
           weekly_hours, start_date, end_date, priority, status, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [r.id, CONTRACTS[r.ctr].id, r.role, areaMap[r.area], r.level,
           r.hrs, CONTRACTS[r.ctr].start, CONTRACTS[r.ctr].end,
           r.prio, r.status, ADMIN_ID]);
@@ -401,7 +401,7 @@ async function seed() {
         INSERT INTO assignments (id, resource_request_id, employee_id, contract_id,
           weekly_hours, start_date, end_date, status, role_title, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [a.id, RESOURCE_REQUESTS[a.rr].id, EMPLOYEES[a.emp].id, CONTRACTS[a.ctr].id,
           a.hrs, CONTRACTS[a.ctr].start, CONTRACTS[a.ctr].end,
           a.status, a.role, ADMIN_ID]);
@@ -417,7 +417,7 @@ async function seed() {
           INSERT INTO weekly_time_allocations (id, employee_id, week_start_date, assignment_id,
             pct, created_by, updated_by)
           VALUES ($1,$2,$3,$4,$5,$6,$6)
-          ON CONFLICT (employee_id, week_start_date, assignment_id) DO NOTHING
+          ON CONFLICT DO NOTHING
         `, [uid(`wta-${a.id}-${w}`), EMPLOYEES[a.emp].id, weekStart, a.id,
             Math.max(0, Math.min(100, pct)), ADMIN_ID]);
       }
@@ -431,7 +431,7 @@ async function seed() {
         await client.query(`
           INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, status, created_by)
           VALUES ($1,$2,$3,$4,$5)
-          ON CONFLICT (contract_id, yyyymm) DO NOTHING
+          ON CONFLICT DO NOTHING
         `, [c.id, period, monthly, m < 0 ? 'closed' : 'open', ADMIN_ID]);
       }
     }
@@ -445,7 +445,7 @@ async function seed() {
         await client.query(`
           INSERT INTO exchange_rates (yyyymm, currency, usd_rate, updated_by)
           VALUES ($1,$2,$3,$4)
-          ON CONFLICT (yyyymm, currency) DO NOTHING
+          ON CONFLICT DO NOTHING
         `, [period, cur, Math.round(jitter * 100) / 100, ADMIN_ID]);
       }
     }
@@ -463,7 +463,7 @@ async function seed() {
           INSERT INTO employee_costs (id, employee_id, period, currency, gross_cost, cost_usd,
             exchange_rate_used, source, created_by)
           VALUES ($1,$2,$3,$4,$5,$6,$7,'manual',$8)
-          ON CONFLICT (employee_id, period) DO NOTHING
+          ON CONFLICT DO NOTHING
         `, [uid(`ec-${e.id}-${m}`), e.id, period, cur, Math.round(gross), cost,
             cur === 'COP' ? 4150 : 1, ADMIN_ID]);
       }
@@ -475,7 +475,7 @@ async function seed() {
         INSERT INTO internal_initiatives (id, initiative_code, name, business_area_id, budget_usd,
           hours_estimated, status, start_date, operations_owner_id, created_by, updated_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [ii.id, ii.code, ii.name, ii.area, ii.budget, ii.hrs, ii.status,
           d(-60), USERS[5].id, ADMIN_ID]);
     }
@@ -494,7 +494,7 @@ async function seed() {
         INSERT INTO internal_initiative_assignments (id, internal_initiative_id, employee_id,
           start_date, weekly_hours, status, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [uid(`iia-${i}`), INTERNAL_INITIATIVES[a.ii].id, EMPLOYEES[a.emp].id,
           d(-30), a.hrs, a.status, ADMIN_ID]);
     }
@@ -513,7 +513,7 @@ async function seed() {
         INSERT INTO employee_novelties (id, employee_id, novelty_type_id, start_date, end_date,
           status, approved_by, created_by)
         VALUES ($1,$2,$3,$4,$5,'approved',$6,$6)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [uid(`nov-${i}`), EMPLOYEES[n.emp].id, n.type, n.start, n.end, ADMIN_ID]);
     }
 
@@ -523,7 +523,7 @@ async function seed() {
         INSERT INTO quotations (id, type, status, project_name, client_name, client_id,
           opportunity_id, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [q.id, q.type, q.status, q.project, q.client,
           CLIENTS[q.cli].id, OPPORTUNITIES[q.opp].id, USERS[2].id]);
     }
@@ -544,7 +544,7 @@ async function seed() {
           INSERT INTO quotation_lines (id, quotation_id, sort_order, specialty, role_title,
             level, quantity, duration_months, hours_per_week, cost_hour, rate_hour, rate_month, total)
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-          ON CONFLICT (id) DO NOTHING
+          ON CONFLICT DO NOTHING
         `, [uid(`ql-${qi}-${li}`), QUOTATIONS[qi].id, li, t.spec, t.role,
             t.lvl, t.qty, t.dur, t.hrs, t.costH, t.rateH, t.rateM,
             t.rateM * t.dur * t.qty]);
@@ -556,7 +556,7 @@ async function seed() {
       await client.query(`
         INSERT INTO budgets (id, period_year, period_quarter, country, target_usd, status, created_by)
         VALUES ($1,$2,$3,$4,$5,$6,$7)
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT DO NOTHING
       `, [b.id, b.year, b.quarter, b.country, b.target, b.status, ADMIN_ID]);
     }
 
