@@ -2174,6 +2174,33 @@ const ASSIGNMENT_RATES_SQL = `
 -- Solo aplica cuando el contrato es type='capacity'. NULL = no configurada.
 ALTER TABLE assignments ADD COLUMN IF NOT EXISTS client_rate          NUMERIC(18,4) NULL;
 ALTER TABLE assignments ADD COLUMN IF NOT EXISTS client_rate_currency VARCHAR(3)    NULL DEFAULT 'USD';
+
+-- Historial de tarifas por asignación: permite registrar cambios de tarifa
+-- a lo largo del tiempo (ascensos, incrementos anuales, renegociaciones).
+-- effective_date indica desde cuándo aplica cada tarifa. La proyección de
+-- revenue usa la tarifa vigente para cada mes según effective_date.
+CREATE TABLE IF NOT EXISTS assignment_rate_history (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+  effective_date DATE NOT NULL,
+  client_rate NUMERIC(18,4) NOT NULL,
+  client_rate_currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  reason VARCHAR(255) NULL,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS arh_assignment_idx
+  ON assignment_rate_history(assignment_id, effective_date);
+
+-- Back-fill: create initial rate history entry for existing assignments
+-- that have a client_rate but no history yet.
+INSERT INTO assignment_rate_history (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
+  SELECT a.id, a.start_date, a.client_rate, COALESCE(a.client_rate_currency, 'USD'), 'Tarifa inicial (migración)', a.created_by
+    FROM assignments a
+   WHERE a.client_rate IS NOT NULL
+     AND a.deleted_at IS NULL
+     AND NOT EXISTS (SELECT 1 FROM assignment_rate_history h WHERE h.assignment_id = a.id)
+ON CONFLICT DO NOTHING;
 `;
 
 // ---------------------------------------------------------------------------
@@ -2292,6 +2319,18 @@ $do_deal_type_nn$;
 
 -- Update last_activity_at on clients (auto-calculated from activities)
 ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NULL;
+
+-- 6. Opportunity context brief (insumo estructurado para preventa)
+-- Nace del input que la country manager dio en chat para BBVA Colombia:
+-- contexto del cliente, alcance, pains, requisitos del nuevo proveedor y
+-- política/siguientes pasos. Cada sección es texto libre opcional; la UI
+-- guía con placeholders. El campo legacy "description" se mantiene para
+-- compat — es un resumen de una línea, mientras que estos 5 son el brief.
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_client       TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_scope        TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_pains        TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_requirements TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_politics     TEXT NULL;
 `;
 
 /**

@@ -95,7 +95,7 @@ describe('GET /api/revenue', () => {
 
   it('returns matrix with months, rows, col_totals, global_total (USD only)', async () => {
     queryQueue.push({ rows: [
-      { id: 'k1', name: 'Contract A', type: 'capacity', status: 'active', start_date: '2026-01-01',
+      { id: 'k1', name: 'Contract A', type: 'project', status: 'active', start_date: '2026-01-01',
         total_value_usd: 30000, original_currency: 'USD', client_id: 'c1', client_name: 'Acme', client_country: 'CO',
         owner_id: 'u1', owner_name: 'Laura' },
     ] });
@@ -125,6 +125,8 @@ describe('GET /api/revenue', () => {
         owner_id: 'u1', owner_name: 'Y' },
     ] });
     queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [] }); // capacity assignments
+    queryQueue.push({ rows: [] }); // assignment_rate_history
     queryQueue.push({ rows: [] }); // exchange_rates
     const res = await client.call('GET', '/api/revenue?from=202601&to=202602');
     expect(res.status).toBe(200);
@@ -163,6 +165,8 @@ describe('GET /api/revenue', () => {
     queryQueue.push({ rows: [
       { contract_id: 'k1', yyyymm: '202602', projected_usd: 1000, real_usd: 500, status: 'open' },
     ] });
+    queryQueue.push({ rows: [] }); // capacity assignments
+    queryQueue.push({ rows: [] }); // assignment_rate_history
     queryQueue.push({ rows: [] }); // No EUR rates configured
     const res = await client.call('GET', '/api/revenue?from=202602&to=202602&display_currency=USD');
     expect(res.status).toBe(200);
@@ -179,7 +183,7 @@ describe('PUT /api/revenue/:contract_id/:yyyymm (REAL only after RR-MVP-00.2)', 
   });
 
   it('returns 409 when no plan period exists yet (PROY must be declared first)', async () => {
-    queryQueue.push({ rows: [{ id: 'k1', type: 'capacity', total_value_usd: 0 }] });   // contract exists
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });   // contract exists (project, not capacity — capacity auto-creates)
     queryQueue.push({ rows: [] });               // no existing period
     const res = await client.call('PUT', '/api/revenue/k1/202602', { real_usd: 1000 });
     expect(res.status).toBe(409);
@@ -308,7 +312,7 @@ describe('POST /api/revenue/:contract_id/:yyyymm/close', () => {
   });
 
   it('rejects close on non-existing period', async () => {
-    queryQueue.push({ rows: [{ id: 'k1', type: 'capacity', total_value_usd: 0 }] });
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });  // project, not capacity (capacity auto-creates)
     queryQueue.push({ rows: [] }); // period missing
     const res = await client.call('POST', '/api/revenue/k1/202602/close', { real_usd: 1000 });
     expect(res.status).toBe(404);
