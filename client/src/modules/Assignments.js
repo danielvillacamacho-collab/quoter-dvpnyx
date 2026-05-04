@@ -49,7 +49,10 @@ const EMPTY = {
   resource_request_id: '', employee_id: '', contract_id: '',
   weekly_hours: 20, start_date: '', end_date: '',
   role_title: '', notes: '', status: 'planned',
+  client_rate: '', client_rate_currency: 'USD',
 };
+
+const RATE_CURRENCIES = ['USD', 'COP', 'EUR', 'MXN', 'GBP'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EmployeeMultiSelect — SPEC-007 Spec 1
@@ -193,6 +196,16 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
 
   const selectedRequest = requests.find((r) => r.id === form.resource_request_id);
 
+  // Pre-llenar la moneda de tarifa con la del contrato al seleccionar solicitud capacity
+  useEffect(() => {
+    if (selectedRequest?.contract_type === 'capacity' && selectedRequest.contract_currency) {
+      setForm((f) => f.client_rate_currency === 'USD' && !f.client_rate
+        ? { ...f, client_rate_currency: selectedRequest.contract_currency }
+        : f
+      );
+    }
+  }, [selectedRequest?.contract_type, selectedRequest?.contract_currency]);
+
   /* --- US-VAL-4: live pre-validation --------------------------------
    * Debounce-call GET /api/assignments/validate whenever the four
    * inputs (employee, request, hours, start_date) are populated. The
@@ -246,10 +259,17 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
     if (!form.weekly_hours || form.weekly_hours <= 0) return setErr('Horas semanales inválidas');
     if (!form.start_date) return setErr('Fecha de inicio es requerida');
     try {
-      await onSave({
+      const payload = {
         ...form,
         contract_id: selectedRequest?.contract_id || form.contract_id,
-      });
+      };
+      // Convertir client_rate a número (o null si vacío/no-capacity)
+      if (selectedRequest?.contract_type === 'capacity' && payload.client_rate !== '' && payload.client_rate != null) {
+        payload.client_rate = Number(payload.client_rate);
+      } else {
+        payload.client_rate = null;
+      }
+      await onSave(payload);
     } catch (ex) {
       setErr(ex.message || 'Error guardando');
     }
@@ -323,6 +343,29 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
           <input type="date" style={s.input} value={form.end_date ? String(form.end_date).slice(0, 10) : ''} onChange={(e) => set('end_date', e.target.value || null)} aria-label="Fecha fin" />
         </div>
       </div>
+      {/* Tarifa de cliente — solo para contratos de capacidad (staff aug) */}
+      {selectedRequest?.contract_type === 'capacity' && (
+        <div style={{ background: 'var(--ds-accent-soft, #faf7ff)', border: '1px solid var(--ds-accent-border, #e0d4f5)', borderRadius: 8, padding: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ds-accent-text, var(--purple-dark))', marginBottom: 8 }}>
+            Tarifa mensual del cliente
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: 10 }}>
+            <div>
+              <label style={s.label}>Moneda</label>
+              <select style={s.input} value={form.client_rate_currency || selectedRequest?.contract_currency || 'USD'} onChange={(e) => set('client_rate_currency', e.target.value)} aria-label="Moneda tarifa">
+                {RATE_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={s.label}>Tarifa mensual *</label>
+              <input type="number" min={0} step={0.01} style={s.input} value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Monto acordado con el cliente" aria-label="Tarifa mensual" />
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 6 }}>
+            Tarifa mensual acordada con el cliente para este recurso. Determina el ingreso proyectado del contrato.
+          </div>
+        </div>
+      )}
       <div>
         <label style={s.label}>Role title</label>
         <input style={s.input} value={form.role_title || ''} onChange={(e) => set('role_title', e.target.value)} aria-label="Role title" />

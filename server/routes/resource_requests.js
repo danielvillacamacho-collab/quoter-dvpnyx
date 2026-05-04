@@ -92,7 +92,8 @@ router.get('/lookup', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT rr.id, rr.role_title, rr.level, rr.weekly_hours,
               rr.start_date, rr.end_date, rr.status, rr.priority,
-              rr.contract_id, c.name AS contract_name,
+              rr.contract_id, c.name AS contract_name, c.type AS contract_type,
+              c.original_currency AS contract_currency,
               rr.area_id, a.name AS area_name
          FROM resource_requests rr
          LEFT JOIN contracts c ON c.id = rr.contract_id
