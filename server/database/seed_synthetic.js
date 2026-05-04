@@ -324,7 +324,7 @@ async function seed() {
           squad_id, status, revenue_type, one_time_amount_usd, mrr_usd, contract_length_months,
           booking_amount_usd, deal_type, funding_source, opportunity_number,
           expected_close_date, country, postponed_until_date, created_by)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($9,0),$12,'client_direct',$13,$14,
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE($9::numeric,0),$12,'client_direct',$13,$14,
           (SELECT country FROM clients WHERE id=$2),$15,$4)
         ON CONFLICT (id) DO NOTHING
       `, [o.id, cliId, o.name, ownerId, presalesId, squadId, o.status,
