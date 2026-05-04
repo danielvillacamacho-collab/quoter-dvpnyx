@@ -907,6 +907,11 @@ export default function CapacityPlanner() {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
   const [areas, setAreas] = useState([]);
+  // Ordenamiento de la vista Personas por utilización de una semana.
+  // sortWeek: índice de columna (0-based) | null = orden alfabético.
+  // sortDir: 'asc' (menor carga primero) | 'desc' (mayor carga primero).
+  const [sortWeek, setSortWeek] = useState(null);
+  const [sortDir, setSortDir]   = useState('asc');
   // US-RR-3: when an unassigned row is clicked we open the candidates
   // modal here instead of navigating away — the user stays in-context.
   const [openCandidatesFor, setOpenCandidatesFor] = useState(null);
@@ -920,6 +925,21 @@ export default function CapacityPlanner() {
   const toggleProject = useCallback((contractId) => {
     setExpandedProjects((prev) => ({ ...prev, [contractId]: !prev[contractId] }));
   }, []);
+
+  // Ciclo: sin orden → asc (↑ menor carga) → desc (↓ mayor carga) → sin orden.
+  const handleSortWeek = useCallback((weekIdx) => {
+    setSortWeek((prev) => {
+      if (prev !== weekIdx) { setSortDir('asc');  return weekIdx; }
+      if (sortDir === 'asc') { setSortDir('desc'); return weekIdx; }
+      setSortDir('asc'); return null;
+    });
+  }, [sortDir]);
+
+  // Resetear sort si cambia el número de semanas (el índice puede quedar fuera de rango).
+  useEffect(() => {
+    setSortWeek(null);
+    setSortDir('asc');
+  }, [weeks]);
 
   // When a single contract is filtered, show it expanded by default.
   const effectiveExpandedProjects = useMemo(() => {
@@ -975,6 +995,17 @@ export default function CapacityPlanner() {
   const contracts = data?.contracts || [];
   const wks = data?.weeks || [];
   const projects = useMemo(() => buildProjectsView(data), [data]);
+
+  // Empleados ordenados: alfabético por defecto; por utilización cuando hay sortWeek activo.
+  const sortedEmployees = useMemo(() => {
+    const emps = data?.employees || [];
+    if (sortWeek === null || sortWeek === undefined) return emps;
+    return [...emps].sort((a, b) => {
+      const pctA = a.weekly?.[sortWeek]?.utilization_pct ?? 0;
+      const pctB = b.weekly?.[sortWeek]?.utilization_pct ?? 0;
+      return sortDir === 'asc' ? pctA - pctB : pctB - pctA;
+    });
+  }, [data, sortWeek, sortDir]);
 
   return (
     <div style={s.page}>
@@ -1095,21 +1126,53 @@ export default function CapacityPlanner() {
                 <div style={{ ...s.headCell, textAlign: 'left', borderLeft: 'none', fontSize: 11, fontWeight: 500 }}>
                   {view === 'projects' ? 'Proyecto / solicitud' : 'Empleado'}
                 </div>
-                {wks.map((w) => (
-                  <div key={w.index} style={s.headCell} data-testid={`week-${w.iso_week}`}>
-                    <div style={s.headCellWeek}>{w.label}</div>
-                    <div style={s.headCellDate}>{w.short_label}</div>
-                  </div>
-                ))}
+                {wks.map((w, i) => {
+                  const isActive = view === 'employees' && sortWeek === i;
+                  return (
+                    <div
+                      key={w.index}
+                      style={{
+                        ...s.headCell,
+                        ...(view === 'employees' ? {
+                          cursor: 'pointer',
+                          userSelect: 'none',
+                          background: isActive ? 'var(--ds-accent-soft, #f0ebff)' : undefined,
+                          color: isActive ? 'var(--ds-accent-text, var(--purple-dark))' : undefined,
+                        } : {}),
+                      }}
+                      data-testid={`week-${w.iso_week}`}
+                      onClick={view === 'employees' ? () => handleSortWeek(i) : undefined}
+                      title={view === 'employees' ? (isActive ? (sortDir === 'asc' ? 'Menor carga primero — click para invertir' : 'Mayor carga primero — click para quitar orden') : 'Click para ordenar por carga esta semana') : undefined}
+                      role={view === 'employees' ? 'button' : undefined}
+                      tabIndex={view === 'employees' ? 0 : undefined}
+                      onKeyDown={view === 'employees' ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSortWeek(i); } } : undefined}
+                    >
+                      <div style={s.headCellWeek}>
+                        {w.label}
+                        {isActive && (
+                          <span style={{ marginLeft: 4, fontSize: 10 }} aria-label={sortDir === 'asc' ? 'menor primero' : 'mayor primero'}>
+                            {sortDir === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                      <div style={s.headCellDate}>
+                        {w.short_label}
+                        {!isActive && view === 'employees' && (
+                          <span style={{ marginLeft: 3, opacity: 0.35, fontSize: 9 }}>↕</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               {view === 'employees' ? (
                 <>
                   {/* Employees */}
-                  {data.employees.length === 0 && (
+                  {sortedEmployees.length === 0 && (
                     <div style={s.empty}>No hay empleados que cumplan los filtros.</div>
                   )}
-                  {data.employees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />)}
+                  {sortedEmployees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />)}
 
                   {/* Unassigned requests (US-PLN-5 + US-RR-3: click → candidates modal) */}
                   {data.open_requests.map((r) => (
