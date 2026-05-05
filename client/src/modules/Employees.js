@@ -61,11 +61,16 @@ const EMPTY = {
 function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
+  // blockingAsg: lista de asignaciones que impiden poner end_date — viene
+  // del backend (code: END_DATE_BLOCKED_BY_ASSIGNMENTS) y se renderiza
+  // expandida bajo el error para que el operador sepa qué cerrar primero.
+  const [blockingAsg, setBlockingAsg] = useState(null);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
+    setBlockingAsg(null);
     if (!form.first_name.trim()) return setErr('Nombre es requerido');
     if (!form.last_name.trim()) return setErr('Apellido es requerido');
     if (!form.country.trim()) return setErr('País es requerido');
@@ -73,7 +78,12 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
     if (!form.level) return setErr('Level es requerido');
     if (!form.start_date) return setErr('Fecha de inicio es requerida');
     try { await onSave(form); }
-    catch (ex) { setErr(ex.message || 'Error guardando'); }
+    catch (ex) {
+      setErr(ex.message || 'Error guardando');
+      if (ex.body && ex.body.code === 'END_DATE_BLOCKED_BY_ASSIGNMENTS' && Array.isArray(ex.body.blocking_assignments)) {
+        setBlockingAsg(ex.body.blocking_assignments);
+      }
+    }
   };
 
   return (
@@ -205,6 +215,28 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
         <textarea style={{ ...s.input, minHeight: 60, resize: 'vertical' }} value={form.notes || ''} onChange={(e) => set('notes', e.target.value)} />
       </div>
       {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+      {blockingAsg && blockingAsg.length > 0 && (
+        <div style={{
+          background: '#fff5f5', border: '1px solid var(--danger)', borderRadius: 8,
+          padding: 12, fontSize: 12, color: 'var(--text)',
+        }} role="alert">
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            Asignaciones que bloquean la fecha de fin:
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+            {blockingAsg.map((a) => (
+              <li key={a.id}>
+                <strong>{a.client_name || '—'} · {a.contract_name}</strong>
+                {a.role_title ? ` · ${a.role_title}` : ''}
+                {' '}({a.start_date} → {a.end_date || 'abierta'}, {a.weekly_hours}h/sem)
+              </li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-light)' }}>
+            Cierra o ajusta esas asignaciones primero, luego vuelve a intentar.
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
         <button type="submit" style={s.btn()} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>
