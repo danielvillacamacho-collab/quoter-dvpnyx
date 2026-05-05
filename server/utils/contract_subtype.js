@@ -7,7 +7,7 @@
  * Reglas:
  *   - type='capacity' → 4 subtipos válidos.
  *   - type='project'  → 2 subtipos válidos.
- *   - type='resell'   → siempre NULL.
+ *   - type='resell'   → 4 subtipos válidos (aws, azure, gcp, other).
  *   - Cuando type es capacity|project, subtype es OBLIGATORIO al crear/editar.
  *   - Excepción: contratos legacy con subtype=NULL pueden editarse (otros campos)
  *     sin forzar a poblar el subtype, salvo que el usuario cambie el type.
@@ -28,7 +28,12 @@ const SUBTYPES_BY_TYPE = {
     { value: 'fixed_scope', label: 'Alcance fijo / POC' },
     { value: 'hour_pool',   label: 'Bolsa de horas' },
   ],
-  resell: [],
+  resell: [
+    { value: 'aws',   label: 'AWS' },
+    { value: 'azure', label: 'Azure' },
+    { value: 'gcp',   label: 'GCP' },
+    { value: 'other', label: 'Otros' },
+  ],
 };
 
 /** Set de valores válidos cross-type (para CHECK lookups y validación). */
@@ -60,17 +65,7 @@ function validateContractSubtype(type, subtype, { required = true } = {}) {
   // Normalize empty string to null para que el caller no tenga que hacerlo.
   const norm = subtype == null || subtype === '' ? null : String(subtype).trim();
 
-  if (type === 'resell') {
-    if (norm != null) {
-      return {
-        ok: false, code: 'subtype_not_allowed_for_resell',
-        error: 'Reventa no admite subtipo. Envía contract_subtype=null o no envíes el campo.',
-      };
-    }
-    return { ok: true, value: null };
-  }
-
-  if (type === 'capacity' || type === 'project') {
+  if (type === 'capacity' || type === 'project' || type === 'resell') {
     if (norm == null) {
       if (required) {
         return {

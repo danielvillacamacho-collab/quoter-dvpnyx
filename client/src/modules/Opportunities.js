@@ -8,8 +8,8 @@ import { useSort } from '../utils/useSort';
 import { STAGES, STAGE_BY_ID, TRANSITIONS as PIPELINE_TRANSITIONS } from '../utils/pipeline';
 // SPEC-CRM-00 v1.1 PR2 — modelo de revenue + loss reasons formales.
 import {
-  REVENUE_TYPES, FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
-  computeBooking, validateRevenueModel, validateFunding, validateLossReason,
+  FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  computeBooking, validateFunding, validateLossReason,
 } from '../utils/booking';
 
 /* ========== styles (mirror Clients.js) ========== */
@@ -57,7 +57,12 @@ const DEAL_TYPES = [
   { value: 'new_business',      label: 'Venta nueva' },
   { value: 'upsell_cross_sell', label: 'Upsell / Cross-sell' },
   { value: 'renewal',           label: 'Renovación' },
-  { value: 'resell',            label: 'Resell' },
+];
+
+const CONTRACT_TYPES = [
+  { value: 'project',  label: 'Proyecto' },
+  { value: 'capacity', label: 'Capacidad' },
+  { value: 'resell',   label: 'Reventa' },
 ];
 
 const EMPTY = {
@@ -71,6 +76,8 @@ const EMPTY = {
   drive_url: '',
   // SPEC-CRM-01 — deal enrichment
   deal_type: 'new_business', co_owner_id: '',
+  // Tipo de contrato (Proyecto, Capacidad, Reventa)
+  contract_type: '',
   // Brief de la oportunidad — insumo estructurado para preventa
   context_client: '', context_scope: '', context_pains: '',
   context_requirements: '', context_politics: '',
@@ -125,12 +132,10 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
   const [showAdvanced, setShowAdvanced] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
-  // Booking calculado en vivo (mirror del trigger DB).
+  // Booking = monto estimado (one_time behind the scenes for backward compat).
   const bookingPreview = computeBooking({
-    revenue_type: form.revenue_type,
+    revenue_type: 'one_time',
     one_time_amount_usd: form.one_time_amount_usd,
-    mrr_usd: form.mrr_usd,
-    contract_length_months: form.contract_length_months,
   });
 
   const submit = async (e) => {
@@ -138,17 +143,16 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
     setErr('');
     if (!form.client_id) return setErr('Cliente es requerido');
     if (!form.name.trim()) return setErr('El nombre es requerido');
-    // SPEC-CRM-00 v1.1 PR2 — para el flujo "crear rápido", si revenue_type
-    // es one_time y el monto está vacío lo tratamos como 0 (deal temprano,
-    // se refina después). Para recurring/mixed exigimos los campos.
+    // Normalize: revenue_type is always 'one_time' now (hidden from UI).
+    // The booking_amount_usd is derived from one_time_amount_usd.
     const normalized = {
       ...form,
-      one_time_amount_usd: (form.revenue_type === 'one_time' && (form.one_time_amount_usd === '' || form.one_time_amount_usd == null))
+      revenue_type: 'one_time',
+      one_time_amount_usd: (form.one_time_amount_usd === '' || form.one_time_amount_usd == null)
         ? 0
         : form.one_time_amount_usd,
+      contract_type: form.contract_type || null,
     };
-    const revenueErr = validateRevenueModel(normalized);
-    if (revenueErr) return setErr(revenueErr);
     const fundingErr = validateFunding(normalized);
     if (fundingErr) return setErr(fundingErr);
     try {
@@ -190,13 +194,20 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
         />
       </div>
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1, minWidth: 180 }}>
+        <div style={{ flex: 1, minWidth: 160 }}>
           <label style={s.label}>Tipo de deal *</label>
           <select style={s.input} value={form.deal_type} onChange={(e) => set('deal_type', e.target.value)} aria-label="Tipo de deal">
             {DEAL_TYPES.map((dt) => <option key={dt.value} value={dt.value}>{dt.label}</option>)}
           </select>
         </div>
-        <div style={{ flex: 1, minWidth: 180 }}>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <label style={s.label}>Tipo de contrato</label>
+          <select style={s.input} value={form.contract_type || ''} onChange={(e) => set('contract_type', e.target.value)} aria-label="Tipo de contrato">
+            <option value="">— Sin definir —</option>
+            {CONTRACT_TYPES.map((ct) => <option key={ct.value} value={ct.value}>{ct.label}</option>)}
+          </select>
+        </div>
+        <div style={{ flex: 1, minWidth: 160 }}>
           <label style={s.label}>Fecha esperada de cierre</label>
           <input
             type="date"
@@ -207,72 +218,24 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
         </div>
       </div>
 
-      {/* SPEC-CRM-00 v1.1 PR2 — Revenue model. */}
-      <fieldset style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, margin: 0 }}>
-        <legend style={{ fontSize: 12, fontWeight: 700, color: 'var(--purple-dark)', padding: '0 6px' }}>
-          Tipo de Revenue *
-        </legend>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
-          {REVENUE_TYPES.map((rt) => (
-            <label key={rt.value} style={{ fontSize: 13, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
-              <input
-                type="radio"
-                name="revenue_type"
-                value={rt.value}
-                checked={form.revenue_type === rt.value}
-                onChange={(e) => set('revenue_type', e.target.value)}
-                aria-label={rt.label}
-              />
-              {rt.label}
-            </label>
-          ))}
+      {/* Monto estimado — valoración del pipeline. Se refina con la cotización final. */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <label style={s.label}>Monto estimado (USD)</label>
+          <input
+            type="number"
+            min="0"
+            style={s.input}
+            value={form.one_time_amount_usd}
+            onChange={(e) => set('one_time_amount_usd', e.target.value)}
+            aria-label="Monto estimado USD"
+            placeholder="50000"
+          />
         </div>
-        {(form.revenue_type === 'one_time' || form.revenue_type === 'mixed') && (
-          <div style={{ marginBottom: 8 }}>
-            <label style={s.label}>Monto one-time (USD) *</label>
-            <input
-              type="number"
-              min="0"
-              style={s.input}
-              value={form.one_time_amount_usd}
-              onChange={(e) => set('one_time_amount_usd', e.target.value)}
-              aria-label="Monto one-time USD"
-              placeholder="20000"
-            />
-          </div>
-        )}
-        {(form.revenue_type === 'recurring' || form.revenue_type === 'mixed') && (
-          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <div style={{ flex: 1 }}>
-              <label style={s.label}>MRR (USD/mes) *</label>
-              <input
-                type="number"
-                min="0"
-                style={s.input}
-                value={form.mrr_usd}
-                onChange={(e) => set('mrr_usd', e.target.value)}
-                aria-label="MRR USD"
-                placeholder="5000"
-              />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label style={s.label}>Duración (meses) *</label>
-              <input
-                type="number"
-                min="0"
-                style={s.input}
-                value={form.contract_length_months}
-                onChange={(e) => set('contract_length_months', e.target.value)}
-                aria-label="Duración del contrato en meses"
-                placeholder="24"
-              />
-            </div>
-          </div>
-        )}
-        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--teal-mid)' }} aria-live="polite">
-          Booking calculado: {fmtUsd(bookingPreview)}
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--teal-mid)', paddingBottom: 10 }} aria-live="polite">
+          Booking: {fmtUsd(bookingPreview)}
         </div>
-      </fieldset>
+      </div>
 
       <button
         type="button"
@@ -635,6 +598,8 @@ export default function Opportunities() {
         // SPEC-CRM-01 — deal enrichment
         deal_type: form.deal_type || 'new_business',
         co_owner_id: form.co_owner_id || null,
+        // Tipo de contrato (project, capacity, resell)
+        contract_type: form.contract_type || null,
         // Brief de la oportunidad
         context_client: form.context_client || null,
         context_scope: form.context_scope || null,

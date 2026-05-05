@@ -268,8 +268,8 @@ describe('Opportunities module', () => {
     });
   });
 
-  // SPEC-CRM-00 v1.1 PR2 — Form de creación con revenue model + flags.
-  describe('SPEC-CRM-00 v1.1 PR2: revenue selector', () => {
+  // Form de creación: contract_type + monto estimado + opciones avanzadas.
+  describe('contract_type + monto estimado', () => {
     const openCreateModal = async () => {
       mount();
       await screen.findByText('Proyecto Atlas');
@@ -281,50 +281,36 @@ describe('Opportunities module', () => {
       return await screen.findByRole('dialog');
     };
 
-    // Los radios usan aria-label exacto (texto del enum) para evitar
-    // que /Recurring/i matchee también "Mixed (...recurring)".
-    const ARIA = {
-      one_time: 'One-time (proyecto puntual)',
-      recurring: 'Recurring (mensual con duración)',
-      mixed: 'Mixed (one-time + recurring)',
-    };
-
-    it('por default es one_time y muestra el campo Monto one-time', async () => {
+    it('muestra dropdown de Tipo de contrato y campo Monto estimado', async () => {
       const dialog = await openCreateModal();
-      expect(within(dialog).getByLabelText(ARIA.one_time)).toBeChecked();
-      expect(within(dialog).getByLabelText('Monto one-time USD')).toBeInTheDocument();
-      // No exhibe los campos de recurring cuando estamos en one_time.
-      expect(within(dialog).queryByLabelText('MRR USD')).toBeNull();
+      expect(within(dialog).getByLabelText('Tipo de contrato')).toBeInTheDocument();
+      expect(within(dialog).getByLabelText('Monto estimado USD')).toBeInTheDocument();
     });
 
-    it('al elegir Recurring muestra MRR + Duración y calcula booking en vivo', async () => {
+    it('calcula booking en vivo a partir del monto estimado', async () => {
       const dialog = await openCreateModal();
-      fireEvent.click(within(dialog).getByLabelText(ARIA.recurring));
-      fireEvent.change(within(dialog).getByLabelText('MRR USD'), { target: { value: '5000' } });
-      fireEvent.change(within(dialog).getByLabelText('Duración del contrato en meses'), { target: { value: '24' } });
-      // Booking calculado: 5000 × 24 = 120,000.
-      expect(within(dialog).getByText(/Booking calculado: USD 120,000/)).toBeInTheDocument();
+      fireEvent.change(within(dialog).getByLabelText('Monto estimado USD'), { target: { value: '50000' } });
+      expect(within(dialog).getByText(/Booking: USD 50,000/)).toBeInTheDocument();
     });
 
-    it('Mixed muestra los tres campos y suma one-time + mrr×months', async () => {
-      const dialog = await openCreateModal();
-      fireEvent.click(within(dialog).getByLabelText(ARIA.mixed));
-      fireEvent.change(within(dialog).getByLabelText('Monto one-time USD'), { target: { value: '20000' } });
-      fireEvent.change(within(dialog).getByLabelText('MRR USD'), { target: { value: '3000' } });
-      fireEvent.change(within(dialog).getByLabelText('Duración del contrato en meses'), { target: { value: '12' } });
-      expect(within(dialog).getByText(/Booking calculado: USD 56,000/)).toBeInTheDocument();
-    });
-
-    it('rechaza submit en recurring sin mrr', async () => {
+    it('tipo de contrato se envía como contract_type al guardar', async () => {
+      apiV2.apiPost.mockResolvedValue({ id: 'o-new' });
       const dialog = await openCreateModal();
       fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
-      const nameInput = within(dialog).getAllByRole('textbox')[0];
-      fireEvent.change(nameInput, { target: { value: 'Recurring Deal' } });
-      fireEvent.click(within(dialog).getByLabelText(ARIA.recurring));
-      // dejamos mrr y meses vacíos → validación bloquea
+      fireEvent.change(within(dialog).getAllByRole('textbox')[0], { target: { value: 'Resell Deal' } });
+      fireEvent.change(within(dialog).getByLabelText('Tipo de contrato'), { target: { value: 'resell' } });
+      fireEvent.change(within(dialog).getByLabelText('Monto estimado USD'), { target: { value: '30000' } });
       fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
-      await waitFor(() => expect(within(dialog).getByText(/MRR es requerido/i)).toBeInTheDocument());
-      expect(apiV2.apiPost).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(apiV2.apiPost).toHaveBeenCalledWith(
+          '/api/opportunities',
+          expect.objectContaining({
+            revenue_type: 'one_time',
+            one_time_amount_usd: 30000,
+            contract_type: 'resell',
+          }),
+        );
+      });
     });
 
     it('opciones avanzadas: Champion / EB / funding aws_mdf con monto / drive_url', async () => {
@@ -332,7 +318,7 @@ describe('Opportunities module', () => {
       const dialog = await openCreateModal();
       fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
       fireEvent.change(within(dialog).getAllByRole('textbox')[0], { target: { value: 'Avanzado' } });
-      fireEvent.change(within(dialog).getByLabelText('Monto one-time USD'), { target: { value: '15000' } });
+      fireEvent.change(within(dialog).getByLabelText('Monto estimado USD'), { target: { value: '15000' } });
       // toggle "Más opciones"
       fireEvent.click(within(dialog).getByLabelText('Mostrar opciones avanzadas'));
       fireEvent.click(within(dialog).getByLabelText('Champion identificado'));

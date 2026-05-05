@@ -110,7 +110,7 @@ const EDITABLE_FIELDS = [
   'champion_identified', 'economic_buyer_identified',
   'funding_source', 'funding_amount_usd', 'drive_url',
   // SPEC-CRM-01 — deal enrichment
-  'deal_type', 'co_owner_id',
+  'deal_type', 'co_owner_id', 'contract_type',
   // Opportunity Brief — insumo estructurado para preventa (5 secciones de texto libre)
   'context_client', 'context_scope', 'context_pains', 'context_requirements', 'context_politics',
 ];
@@ -146,9 +146,14 @@ router.get('/', async (req, res) => {
     if (req.query.has_economic_buyer === 'true')  wheres.push(`o.economic_buyer_identified = true`);
     if (req.query.has_economic_buyer === 'false') wheres.push(`o.economic_buyer_identified = false`);
     // SPEC-CRM-01 — deal_type filter
-    const VALID_DEAL_TYPES = ['new_business', 'upsell_cross_sell', 'renewal', 'resell'];
+    const VALID_DEAL_TYPES = ['new_business', 'upsell_cross_sell', 'renewal'];
     if (req.query.deal_type && VALID_DEAL_TYPES.includes(req.query.deal_type)) {
       wheres.push(`o.deal_type = ${add(req.query.deal_type)}`);
+    }
+    // Contract type filter (project, capacity, resell)
+    const VALID_CONTRACT_TYPES = ['project', 'capacity', 'resell'];
+    if (req.query.contract_type && VALID_CONTRACT_TYPES.includes(req.query.contract_type)) {
+      wheres.push(`o.contract_type = ${add(req.query.contract_type)}`);
     }
 
     // SPEC-CRM-00 v1.1 PR4 — RBAC scoping.
@@ -441,6 +446,8 @@ router.post('/', async (req, res) => {
     // SPEC-CRM-01 — deal enrichment
     deal_type: dealTypeIn,
     co_owner_id,
+    // Contract type (project, capacity, resell)
+    contract_type: contractTypeIn,
     // Opportunity Brief
     context_client, context_scope, context_pains, context_requirements, context_politics,
   } = req.body || {};
@@ -467,11 +474,17 @@ router.post('/', async (req, res) => {
   if (revenueErr) return res.status(400).json({ error: revenueErr });
   const fundingErr = validateFunding({ funding_source, funding_amount_usd });
   if (fundingErr) return res.status(400).json({ error: fundingErr });
-  // SPEC-CRM-01 — deal_type validation
-  const VALID_DEAL_TYPES_CREATE = ['new_business', 'upsell_cross_sell', 'renewal', 'resell'];
+  // SPEC-CRM-01 — deal_type validation (resell removed — now a contract_type)
+  const VALID_DEAL_TYPES_CREATE = ['new_business', 'upsell_cross_sell', 'renewal'];
   const deal_type = dealTypeIn || 'new_business';
   if (!VALID_DEAL_TYPES_CREATE.includes(deal_type)) {
     return res.status(400).json({ error: `deal_type inválido: ${deal_type}` });
+  }
+  // contract_type validation (optional — set when the user knows the delivery model)
+  const VALID_CONTRACT_TYPES_CREATE = ['project', 'capacity', 'resell'];
+  const contract_type = contractTypeIn || null;
+  if (contract_type && !VALID_CONTRACT_TYPES_CREATE.includes(contract_type)) {
+    return res.status(400).json({ error: `contract_type inválido: ${contract_type}` });
   }
 
   try {
@@ -539,11 +552,11 @@ router.post('/', async (req, res) => {
           revenue_type, one_time_amount_usd, mrr_usd, contract_length_months,
           champion_identified, economic_buyer_identified,
           funding_source, funding_amount_usd, drive_url, booking_amount_usd,
-          deal_type, co_owner_id,
+          deal_type, co_owner_id, contract_type,
           context_client, context_scope, context_pains, context_requirements, context_politics)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
-               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,
-               $25,$26,$27,$28,$29)
+               $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,
+               $26,$27,$28,$29,$30)
        RETURNING *`,
       [
         client_id,
@@ -570,6 +583,7 @@ router.post('/', async (req, res) => {
         computedBooking,
         deal_type,
         co_owner_id || null,
+        contract_type,
         context_client || null,
         context_scope || null,
         context_pains || null,
@@ -687,6 +701,7 @@ router.put('/:id', async (req, res) => {
           drive_url                 = COALESCE($18, drive_url),
           deal_type                 = COALESCE($19, deal_type),
           co_owner_id               = COALESCE($20, co_owner_id),
+          contract_type             = COALESCE($26, contract_type),
           context_client            = COALESCE($21, context_client),
           context_scope             = COALESCE($22, context_scope),
           context_pains             = COALESCE($23, context_pains),
@@ -721,6 +736,7 @@ router.put('/:id', async (req, res) => {
         body.context_pains ?? null,
         body.context_requirements ?? null,
         body.context_politics ?? null,
+        body.contract_type ?? null,
       ],
     );
     const after = rows[0];
@@ -911,8 +927,9 @@ router.post('/:id/status', async (req, res) => {
           [winning.id],
         );
         const totalValueUsd = Number(totalRow[0].total || 0);
-        // Mapeo type quotation → type contract.
-        const contractType = winning.type === 'fixed_scope' ? 'project' : 'capacity';
+        // Mapeo: si la oportunidad tiene contract_type, úsalo. Sino, inferir
+        // del type de la cotización ganadora (legacy behavior).
+        const contractType = current.contract_type || (winning.type === 'fixed_scope' ? 'project' : 'capacity');
         const startDate = current.expected_close_date || new Date().toISOString().slice(0, 10);
         const { rows: createdContract } = await connection.query(
           `INSERT INTO contracts (

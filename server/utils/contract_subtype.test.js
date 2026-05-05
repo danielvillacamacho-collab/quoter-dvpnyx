@@ -3,13 +3,13 @@ const {
 } = require('./contract_subtype');
 
 describe('catálogo', () => {
-  it('capacity tiene 4 subtipos, project 2, resell 0', () => {
+  it('capacity tiene 4 subtipos, project 2, resell 4', () => {
     expect(SUBTYPES_BY_TYPE.capacity).toHaveLength(4);
     expect(SUBTYPES_BY_TYPE.project).toHaveLength(2);
-    expect(SUBTYPES_BY_TYPE.resell).toHaveLength(0);
+    expect(SUBTYPES_BY_TYPE.resell).toHaveLength(4);
   });
-  it('ALL_SUBTYPES tiene 6 valores', () => {
-    expect(ALL_SUBTYPES.size).toBe(6);
+  it('ALL_SUBTYPES tiene 10 valores', () => {
+    expect(ALL_SUBTYPES.size).toBe(10);
   });
   it('valores canónicos exactos (sensible a typos)', () => {
     expect(ALL_SUBTYPES.has('staff_augmentation')).toBe(true);
@@ -18,25 +18,41 @@ describe('catálogo', () => {
     expect(ALL_SUBTYPES.has('time_and_materials')).toBe(true);
     expect(ALL_SUBTYPES.has('fixed_scope')).toBe(true);
     expect(ALL_SUBTYPES.has('hour_pool')).toBe(true);
+    expect(ALL_SUBTYPES.has('aws')).toBe(true);
+    expect(ALL_SUBTYPES.has('azure')).toBe(true);
+    expect(ALL_SUBTYPES.has('gcp')).toBe(true);
+    expect(ALL_SUBTYPES.has('other')).toBe(true);
   });
   it('VALID_BY_TYPE refleja el catálogo', () => {
     expect(VALID_BY_TYPE.capacity.has('staff_augmentation')).toBe(true);
     expect(VALID_BY_TYPE.capacity.has('hour_pool')).toBe(false);
     expect(VALID_BY_TYPE.project.has('hour_pool')).toBe(true);
+    expect(VALID_BY_TYPE.resell.has('aws')).toBe(true);
+    expect(VALID_BY_TYPE.resell.has('staff_augmentation')).toBe(false);
   });
 });
 
 describe('validateContractSubtype', () => {
   describe('type=resell', () => {
-    it('null/empty/undefined → ok con value=null', () => {
-      expect(validateContractSubtype('resell', null)).toEqual({ ok: true, value: null });
-      expect(validateContractSubtype('resell', '')).toEqual({ ok: true, value: null });
-      expect(validateContractSubtype('resell', undefined)).toEqual({ ok: true, value: null });
+    it('null + required=true → error subtype_required', () => {
+      const r = validateContractSubtype('resell', null);
+      expect(r.ok).toBe(false);
+      expect(r.code).toBe('subtype_required');
     });
-    it('cualquier subtype → error', () => {
+    it('null + required=false → ok con value=null', () => {
+      const r = validateContractSubtype('resell', null, { required: false });
+      expect(r).toEqual({ ok: true, value: null });
+    });
+    it('subtipo válido → ok (aws, azure, gcp, other)', () => {
+      expect(validateContractSubtype('resell', 'aws')).toEqual({ ok: true, value: 'aws' });
+      expect(validateContractSubtype('resell', 'azure')).toEqual({ ok: true, value: 'azure' });
+      expect(validateContractSubtype('resell', 'gcp')).toEqual({ ok: true, value: 'gcp' });
+      expect(validateContractSubtype('resell', 'other')).toEqual({ ok: true, value: 'other' });
+    });
+    it('subtipo de otro type → error subtype_invalid_for_type', () => {
       const r = validateContractSubtype('resell', 'fixed_scope');
       expect(r.ok).toBe(false);
-      expect(r.code).toBe('subtype_not_allowed_for_resell');
+      expect(r.code).toBe('subtype_invalid_for_type');
     });
   });
 

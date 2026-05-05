@@ -2358,6 +2358,56 @@ INSERT INTO employee_end_date_audit_2026_05 (employee_id, previous_end_date)
   ON CONFLICT (employee_id) DO NOTHING;
 
 UPDATE employees SET end_date = NULL, updated_at = NOW() WHERE end_date IS NOT NULL;
+
+-- 8. Opportunity contract_type + deal_type cleanup + resell subtypes
+-- contract_type indica qué tipo de contrato se creará cuando la oportunidad
+-- se gane: proyecto, capacidad o reventa. Reemplaza conceptualmente al
+-- revenue_type en el flujo de oportunidades (revenue_type se mantiene en
+-- DB por compat pero la UI ya no lo expone).
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS contract_type VARCHAR(20) NULL;
+DO $do_opp_contract_type$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_contract_type_enum') THEN
+    ALTER TABLE opportunities ADD CONSTRAINT opp_contract_type_enum
+      CHECK (contract_type IS NULL OR contract_type IN ('project','capacity','resell'));
+  END IF;
+END
+$do_opp_contract_type$;
+
+-- Remove 'resell' from deal_type CHECK (resell is now a contract_type, not a deal_type).
+-- Strategy: drop old constraint, add new one. Safe because deal_type='resell' rows
+-- need to be migrated first (backfill to 'new_business').
+UPDATE opportunities SET deal_type = 'new_business' WHERE deal_type = 'resell';
+DO $do_deal_type_v2$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_deal_type_enum') THEN
+    ALTER TABLE opportunities DROP CONSTRAINT opp_deal_type_enum;
+  END IF;
+  ALTER TABLE opportunities ADD CONSTRAINT opp_deal_type_enum
+    CHECK (deal_type IN ('new_business','upsell_cross_sell','renewal'));
+END
+$do_deal_type_v2$;
+
+-- Extend contract_subtype CHECK to include resell subtypes (aws, azure, gcp, other).
+-- Drop + re-add so new subtypes are recognized.
+DO $do_subtype_v2$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contracts_subtype_valid') THEN
+    ALTER TABLE contracts DROP CONSTRAINT contracts_subtype_valid;
+  END IF;
+  ALTER TABLE contracts ADD CONSTRAINT contracts_subtype_valid
+    CHECK (
+      contract_subtype IS NULL OR contract_subtype IN (
+        'staff_augmentation','mission_driven_squad','managed_service','time_and_materials',
+        'fixed_scope','hour_pool',
+        'aws','azure','gcp','other'
+      )
+    );
+END
+$do_subtype_v2$;
+
+COMMENT ON COLUMN contracts.contract_subtype IS
+  'Clasificación dentro del type. capacity → staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project → fixed_scope|hour_pool. resell → aws|azure|gcp|other. Coherencia type↔subtype validada en server/routes/contracts.js.';
 `;
 
 /**
