@@ -1163,13 +1163,13 @@ export default function CapacityPlanner() {
   const wks = data?.weeks || [];
   const projects = useMemo(() => buildProjectsView(data), [data]);
 
-  // Empleados separados en activos (cualquier status salvo terminated) e inactivos.
-  // Los inactivos siempre van al fondo en su propia sección, nunca se mezclan con el sort.
+  // Empleados separados en activos e inactivos (terminated O con end_date pasado).
+  // Los inactivos siempre van al fondo en su propia sección sombreada, nunca se mezclan con el sort.
   const { sortedEmployees, inactiveEmployees } = useMemo(() => {
     const all = data?.employees || [];
-    const active   = all.filter((e) => e.status !== 'terminated');
-    const inactive = all.filter((e) => e.status === 'terminated')
-                        .sort((a, b) => a.full_name.localeCompare(b.full_name));
+    const active   = all.filter((e) => !e.inactive);
+    const inactive = all.filter((e) => e.inactive)
+                        .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
 
     const sorted = (sortWeek === null || sortWeek === undefined)
       ? active
