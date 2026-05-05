@@ -1,4 +1,5 @@
-const router = require('express').Router();
+const express = require('express');
+const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { OAuth2Client } = require('google-auth-library');
@@ -78,6 +79,47 @@ router.post('/google', async (req, res) => {
       user: { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null, must_change_password: false },
     });
   } catch (err) { serverError(res, 'POST /auth/google', err); }
+});
+
+// Google redirect-mode callback. GIS posts credential as urlencoded form.
+router.post('/google-callback', express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    const { credential } = req.body;
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!credential || !clientId) return res.redirect('/login?error=google_not_configured');
+
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId });
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, hd } = payload;
+
+    const allowedDomain = process.env.GOOGLE_ALLOWED_DOMAIN;
+    if (allowedDomain && hd !== allowedDomain) {
+      return res.redirect('/login?error=domain_not_allowed');
+    }
+
+    let { rows } = await pool.query('SELECT * FROM users WHERE google_id=$1 AND active=true', [googleId]);
+    if (!rows.length) {
+      ({ rows } = await pool.query('SELECT * FROM users WHERE email=$1 AND active=true', [email.toLowerCase()]));
+      if (rows.length) {
+        await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, rows[0].id]);
+      }
+    }
+    if (!rows.length) return res.redirect('/login?error=no_account');
+
+    const user = rows[0];
+    const token = jwt.sign(
+      { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null },
+      process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+    );
+    await pool.query(
+      `INSERT INTO audit_log (user_id, action, details, ip_address) VALUES ($1, 'google_login', '{}', $2)`,
+      [user.id, req.ip]
+    );
+    res.redirect(`/login?google_token=${token}`);
+  } catch (err) {
+    console.error('POST /auth/google-callback error:', err.message);
+    res.redirect('/login?error=google_auth_failed');
+  }
 });
 
 router.post('/change-password', auth, async (req, res) => {
