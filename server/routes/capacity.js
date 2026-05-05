@@ -87,48 +87,63 @@ router.get('/planner', async (req, res) => {
     const viewportEnd   = weekWindows[weekWindows.length - 1].end_date;
 
     /* ── 1. Employees (filtered) ─────────────────────────────── */
-    // Terminated employees are included ONLY if they have at least one
-    // assignment visible in the current viewport. This lets the planner
-    // see historical work of people who left the company without
-    // polluting the list with ex-employees who have no open assignments.
-    const empParams = [viewportStart, viewportEnd]; // $1, $2 reserved for terminated subquery
-    const empWhere = [
+    // An employee is "inactive" if terminated OR their end_date has passed.
+    // Inactive employees bypass all filters (area, level, search) — they
+    // only appear when they have at least one assignment visible in the
+    // current viewport. Active employees are filtered normally.
+    //
+    // The query uses a UNION to keep filter logic simple:
+    //   Part A: active employees matching filters
+    //   Part B: inactive employees with viewport assignments (no filters)
+    const empParams = [viewportStart, viewportEnd]; // $1, $2
+
+    // -- Active employee filters --
+    const activeWhere = [
       `e.deleted_at IS NULL`,
-      `(e.status <> 'terminated' OR EXISTS (
-          SELECT 1 FROM assignments _asg
-           WHERE _asg.employee_id = e.id
-             AND _asg.deleted_at IS NULL
-             AND _asg.status <> 'cancelled'
-             AND _asg.start_date <= $2::date
-             AND (_asg.end_date IS NULL OR _asg.end_date >= $1::date)
-        )
-      )`,
+      `e.status <> 'terminated'`,
+      `(e.end_date IS NULL OR e.end_date >= CURRENT_DATE)`,
     ];
-    if (p.areaId) { empParams.push(p.areaId); empWhere.push(`e.area_id = $${empParams.length}`); }
+    if (p.areaId) { empParams.push(p.areaId); activeWhere.push(`e.area_id = $${empParams.length}`); }
     if (p.levelMin) {
-      // Postgres orders L1..L11 lexicographically wrong ('L10' < 'L2'), so
-      // we compare against the literal set.
       const mins = LEVEL_VALUES.slice(p.levelMin - 1);
       empParams.push(mins);
-      empWhere.push(`e.level = ANY($${empParams.length}::text[])`);
+      activeWhere.push(`e.level = ANY($${empParams.length}::text[])`);
     }
     if (p.levelMax) {
       const maxs = LEVEL_VALUES.slice(0, p.levelMax);
       empParams.push(maxs);
-      empWhere.push(`e.level = ANY($${empParams.length}::text[])`);
+      activeWhere.push(`e.level = ANY($${empParams.length}::text[])`);
     }
     if (p.search) {
       empParams.push(`%${p.search.toLowerCase()}%`);
-      empWhere.push(`(LOWER(e.first_name) LIKE $${empParams.length} OR LOWER(e.last_name) LIKE $${empParams.length} OR LOWER(e.first_name || ' ' || e.last_name) LIKE $${empParams.length})`);
+      activeWhere.push(`(LOWER(e.first_name) LIKE $${empParams.length} OR LOWER(e.last_name) LIKE $${empParams.length} OR LOWER(e.first_name || ' ' || e.last_name) LIKE $${empParams.length})`);
     }
+
     const { rows: employeeRows } = await pool.query(
       `SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
-              e.weekly_capacity_hours, a.name AS area_name
+              e.end_date, e.weekly_capacity_hours, a.name AS area_name,
+              (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE)) AS inactive
          FROM employees e
          LEFT JOIN areas a ON a.id = e.area_id
-         WHERE ${empWhere.join(' AND ')}
-         ORDER BY e.first_name, e.last_name
-         LIMIT 200`,
+         WHERE ${activeWhere.join(' AND ')}
+       UNION
+       SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
+              e.end_date, e.weekly_capacity_hours, a.name AS area_name,
+              true AS inactive
+         FROM employees e
+         LEFT JOIN areas a ON a.id = e.area_id
+         WHERE e.deleted_at IS NULL
+           AND (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE))
+           AND EXISTS (
+             SELECT 1 FROM assignments _asg
+              WHERE _asg.employee_id = e.id
+                AND _asg.deleted_at IS NULL
+                AND _asg.status <> 'cancelled'
+                AND _asg.start_date <= $2::date
+                AND (_asg.end_date IS NULL OR _asg.end_date >= $1::date)
+           )
+       ORDER BY first_name, last_name
+       LIMIT 200`,
       empParams,
     );
     const employeeIds = employeeRows.map((e) => e.id);
@@ -247,6 +262,8 @@ router.get('/planner', async (req, res) => {
         area_id: e.area_id,
         area_name: e.area_name,
         status: e.status,
+        end_date: e.end_date instanceof Date ? formatDateUTC(e.end_date) : (e.end_date || null),
+        inactive: !!e.inactive,
         weekly_capacity_hours: Number(e.weekly_capacity_hours),
         assignments: as,
         weekly,
@@ -281,9 +298,9 @@ router.get('/planner', async (req, res) => {
       };
     });
 
-    // Terminated employees appear in the planner for historical context but
-    // must not inflate/deflate the header metrics or trigger new alerts.
-    const activeEmployees = employees.filter((e) => e.status !== 'terminated');
+    // Inactive employees (terminated or past end_date) appear for historical
+    // context but must not inflate the header metrics or trigger new alerts.
+    const activeEmployees = employees.filter((e) => !e.inactive);
     const meta = aggregateMeta(activeEmployees, openRequests);
     const alerts = computeAlerts(activeEmployees, openRequests, weekWindows);
 
