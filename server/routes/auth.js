@@ -9,6 +9,32 @@ const { serverError } = require('../utils/http');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+async function provisionStaffUser(email, googleId, name) {
+  const { rows: empRows } = await pool.query(
+    `SELECT id, first_name, last_name FROM employees
+      WHERE deleted_at IS NULL
+        AND (LOWER(corporate_email)=$1 OR LOWER(personal_email)=$1)
+      LIMIT 1`,
+    [email.toLowerCase()],
+  );
+  if (!empRows.length) return null;
+  const emp = empRows[0];
+  const displayName = name || `${emp.first_name} ${emp.last_name}`;
+  const { rows } = await pool.query(
+    `INSERT INTO users (email, name, role, active)
+      VALUES ($1, $2, 'staff', true)
+      RETURNING *`,
+    [email.toLowerCase(), displayName],
+  );
+  const user = rows[0];
+  if (googleId) {
+    await pool.query('UPDATE users SET google_id=$1 WHERE id=$2', [googleId, user.id]);
+    user.google_id = googleId;
+  }
+  await pool.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [user.id, emp.id]);
+  return user;
+}
+
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -62,7 +88,11 @@ router.post('/google', async (req, res) => {
     }
 
     if (!rows.length) {
-      return res.status(403).json({ error: 'No existe una cuenta asociada a este correo. Contacta al administrador.' });
+      const staffUser = await provisionStaffUser(email, googleId, name);
+      if (!staffUser) {
+        return res.status(403).json({ error: 'No existe una cuenta asociada a este correo. Contacta al administrador.' });
+      }
+      rows = [staffUser];
     }
 
     const user = rows[0];
@@ -104,7 +134,12 @@ router.post('/google-callback', express.urlencoded({ extended: false }), async (
         await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, rows[0].id]);
       }
     }
-    if (!rows.length) return res.redirect('/login?error=no_account');
+    if (!rows.length) {
+      const name = payload.name || email.split('@')[0];
+      const staffUser = await provisionStaffUser(email, googleId, name);
+      if (!staffUser) return res.redirect('/login?error=no_account');
+      rows = [staffUser];
+    }
 
     const user = rows[0];
     const token = jwt.sign(

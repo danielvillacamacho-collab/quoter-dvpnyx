@@ -76,11 +76,12 @@ describe('Sidebar', () => {
     expect(container.querySelector('.sidebar')).not.toHaveClass('open');
   });
 
-  it('buildGroups returns correct group counts based on role and employee link', () => {
+  it('buildGroups returns correct group counts based on role, employee link, and staff', () => {
     expect(buildGroups(true, true).length).toBe(11);
     expect(buildGroups(false, true).length).toBe(10);
     expect(buildGroups(true, false).length).toBe(10);
     expect(buildGroups(false, false).length).toBe(9);
+    expect(buildGroups(false, false, true).length).toBe(2);
   });
 
   // ── Accordion behavior ──

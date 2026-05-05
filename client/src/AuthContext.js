@@ -99,6 +99,7 @@ export function AuthProvider({ children }) {
   const isAdmin       = user && ['admin', 'superadmin'].includes(user.role);
   const isLead        = user && user.role === 'lead';
   const isLeadOrAdmin = isAdmin || isLead;
+  const isStaff       = !!(user && user.role === 'staff');
   const hasEmployee   = !!(user && user.has_employee);
 
   if (loading) {
@@ -110,7 +111,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthCtx.Provider value={{ user, params, doLogin, doGoogleLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin, hasEmployee }}>
+    <AuthCtx.Provider value={{ user, params, doLogin, doGoogleLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin, isStaff, hasEmployee }}>
       {children}
     </AuthCtx.Provider>
   );

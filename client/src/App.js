@@ -103,7 +103,7 @@ const css = {
 
 /* ========== LAYOUT ========== */
 function Layout() {
-  const { user, doLogout, isAdmin, hasEmployee } = useAuth();
+  const { user, doLogout, isAdmin, isStaff, hasEmployee } = useAuth();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -167,6 +167,7 @@ function Layout() {
       <Sidebar
         user={user}
         isAdmin={isAdmin}
+        isStaff={isStaff}
         hasEmployee={hasEmployee}
         open={sidebarOpen}
         onNavigate={closeSidebar}
@@ -187,15 +188,21 @@ function Layout() {
         />
         <ErrorBoundary>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={isStaff ? <Navigate to="/me/profile" /> : <Dashboard />} />
+          {/* Staff-accessible routes */}
+          <Route path="/me/profile" element={<MiPerfil />} />
+          <Route path="/me/assignments" element={<MisAsignaciones />} />
+          <Route path="/dashboard/me" element={<DashboardMe />} />
+          <Route path="/time/me" element={<TimeMe />} />
+          <Route path="/time" element={<TimeMe />} />
+          <Route path="/wiki" element={<Wiki />} />
+          {!isStaff && <>
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
           <Route path="/quotation/:id" element={<QuotationRouter />} />
-          <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
           {isAdmin && <Route path="/admin/exchange-rates" element={<ExchangeRates />} />}
           {isAdmin && <Route path="/admin/users" element={<Users />} />}
           {isAdmin && <Route path="/admin/bulk-import" element={<BulkImport />} />}
-          {/* V2 modules — placeholders until they ship in later sprints */}
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/opportunities" element={<Opportunities />} />
@@ -212,8 +219,6 @@ function Layout() {
           <Route path="/resource-requests" element={<ResourceRequests />} />
           <Route path="/assignments" element={<Assignments />} />
           <Route path="/capacity/planner" element={<CapacityPlanner />} />
-          <Route path="/time" element={<TimeMe />} />
-          <Route path="/time/me" element={<TimeMe />} />
           <Route path="/time/team" element={<TimeTeam />} />
           <Route path="/reports" element={<ReportsHub />} />
           <Route path="/reports/ejecutivo" element={<ExecutiveReports />} />
@@ -222,20 +227,17 @@ function Layout() {
           <Route path="/reports/gente" element={<PeopleReports />} />
           <Route path="/reports/finanzas" element={<FinanceReports />} />
           <Route path="/reports/:type" element={<Reports />} />
-          <Route path="/dashboard/me" element={<DashboardMe />} />
-          <Route path="/me/profile" element={<MiPerfil />} />
-          <Route path="/me/assignments" element={<MisAsignaciones />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           {isAdmin && <Route path="/admin/employee-costs" element={<EmployeeCosts />} />}
           {isAdmin && <Route path="/admin/employee-costs/import" element={<EmployeeCostsImport />} />}
-          {/* SPEC-II-00 */}
           <Route path="/internal-initiatives"        element={<InternalInitiatives />} />
           <Route path="/internal-initiatives/:id"    element={<InternalInitiativeDetail />} />
           <Route path="/novelties"                    element={<Novelties />} />
           <Route path="/idle-time"                    element={<IdleTime />} />
           {isAdmin && <Route path="/admin/budgets" element={<Budgets />} />}
           <Route path="/admin/holidays"               element={<CountryHolidays />} />
+          </>}
         </Routes>
         </ErrorBoundary>
         <Footer />
