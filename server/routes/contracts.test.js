@@ -453,28 +453,27 @@ describe('contract_subtype (SPEC subtipo-contrato Abril 2026)', () => {
       }
     });
 
-    it('resell SIN subtype → 201', async () => {
+    it('resell CON subtype válido (aws) → 201', async () => {
       queryQueue.push({ rows: [{ id: 'c1', name: 'Acme' }] });
-      queryQueue.push({ rows: [{ id: 'ct-new', name: 'X', type: 'resell', status: 'planned' }] });
-      const res = await client.call('POST', '/api/contracts', { ...baseBody, type: 'resell' });
+      queryQueue.push({ rows: [{ id: 'ct-new', name: 'X', type: 'resell', status: 'planned', contract_subtype: 'aws' }] });
+      const res = await client.call('POST', '/api/contracts', { ...baseBody, type: 'resell', contract_subtype: 'aws' });
       expect(res.status).toBe(201);
     });
 
-    it('resell CON subtype no-null → 400 con code subtype_not_allowed_for_resell', async () => {
+    it('resell CON subtype de otro type → 400 con code subtype_invalid_for_type', async () => {
       const res = await client.call('POST', '/api/contracts', {
         ...baseBody, type: 'resell', contract_subtype: 'fixed_scope',
       });
       expect(res.status).toBe(400);
-      expect(res.body.code).toBe('subtype_not_allowed_for_resell');
+      expect(res.body.code).toBe('subtype_invalid_for_type');
     });
 
-    it('resell con subtype=null o subtype="" → 201 (normaliza)', async () => {
-      queryQueue.push({ rows: [{ id: 'c1', name: 'Acme' }] });
-      queryQueue.push({ rows: [{ id: 'ct-new', name: 'X', type: 'resell', status: 'planned' }] });
+    it('resell SIN subtype → 400 (subtype_required)', async () => {
       const res = await client.call('POST', '/api/contracts', {
-        ...baseBody, type: 'resell', contract_subtype: '',
+        ...baseBody, type: 'resell',
       });
-      expect(res.status).toBe(201);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('subtype_required');
     });
   });
 
@@ -503,14 +502,14 @@ describe('contract_subtype (SPEC subtipo-contrato Abril 2026)', () => {
       expect(res.status).toBe(200);
     });
 
-    it('cambiar a resell vacía el subtype', async () => {
+    it('cambiar a resell con subtype válido (azure)', async () => {
       queryQueue.push({ rows: [{ id: 'ct1', type: 'capacity', contract_subtype: 'staff_augmentation' }] });
-      queryQueue.push({ rows: [{ id: 'ct1', type: 'resell', contract_subtype: null }] });
+      queryQueue.push({ rows: [{ id: 'ct1', type: 'resell', contract_subtype: 'azure' }] });
       const res = await client.call('PUT', '/api/contracts/ct1', {
-        type: 'resell', contract_subtype: null,
+        type: 'resell', contract_subtype: 'azure',
       });
       expect(res.status).toBe(200);
-      expect(res.body.contract_subtype).toBeNull();
+      expect(res.body.contract_subtype).toBe('azure');
     });
 
     it('intentar borrar subtype de un contrato capacity activo → 400', async () => {

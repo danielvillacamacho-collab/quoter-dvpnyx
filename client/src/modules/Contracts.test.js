@@ -136,13 +136,18 @@ describe('Contracts module', () => {
       expect(within(subtypeSelect).getByText('Tiempo y Materiales')).toBeTruthy();
     });
 
-    it('al elegir Reventa, el dropdown Subtipo no aparece', async () => {
+    it('al elegir Reventa, el dropdown Subtipo muestra opciones de resell', async () => {
       mount();
       await screen.findByText('Contrato Alpha');
       fireEvent.click(screen.getByRole('button', { name: /Nuevo Contrato/i }));
       const dialog = await screen.findByRole('dialog');
       fireEvent.change(within(dialog).getByLabelText('Tipo'), { target: { value: 'resell' } });
-      expect(within(dialog).queryByLabelText('Subtipo')).toBeNull();
+      const subtypeSelect = within(dialog).getByLabelText('Subtipo');
+      expect(subtypeSelect).toBeTruthy();
+      expect(within(subtypeSelect).getByText('AWS')).toBeTruthy();
+      expect(within(subtypeSelect).getByText('Azure')).toBeTruthy();
+      expect(within(subtypeSelect).getByText('GCP')).toBeTruthy();
+      expect(within(subtypeSelect).getByText('Otros')).toBeTruthy();
     });
 
     it('al cambiar Capacity → Proyecto, el subtipo se resetea', async () => {
