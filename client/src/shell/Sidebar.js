@@ -9,6 +9,7 @@ import {
   Contact, MessageSquare, Target, ChevronRight,
   Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
   GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
+  UserCircle, ClipboardCheck,
 } from 'lucide-react';
 import cx from './Sidebar.module.css';
 
@@ -48,6 +49,9 @@ const ICONS = {
   '/admin/bulk-import':         Upload,
   '/admin/holidays':            Globe,
   '/admin/budgets':             Target,
+  '/me/profile':                UserCircle,
+  '/me/assignments':            ClipboardCheck,
+  '/dashboard/me':              LayoutDashboard,
 };
 
 /** Build the grouped nav model. */
@@ -56,6 +60,14 @@ export function buildGroups(isAdmin) {
     {
       key: 'home', title: null, collapsible: false, items: [
         { path: '/', label: 'Dashboard' },
+      ],
+    },
+    {
+      key: 'mi_espacio', title: 'Mi espacio', collapsible: true, items: [
+        { path: '/me/profile',     label: 'Mi perfil' },
+        { path: '/me/assignments', label: 'Mis asignaciones' },
+        { path: '/dashboard/me',   label: 'Mi dashboard' },
+        { path: '/time/me',        label: 'Mis horas' },
       ],
     },
     {
@@ -92,7 +104,6 @@ export function buildGroups(isAdmin) {
     },
     {
       key: 'tiempo', title: 'Tiempo', collapsible: true, items: [
-        { path: '/time/me',   label: 'Mis horas' },
         { path: '/time/team', label: 'Equipo semanal' },
       ],
     },

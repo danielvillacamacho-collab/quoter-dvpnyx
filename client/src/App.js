@@ -57,6 +57,8 @@ import InternalInitiativeDetail from './modules/InternalInitiativeDetail';
 import Novelties from './modules/Novelties';
 import IdleTime from './modules/IdleTime';
 import CountryHolidays from './modules/CountryHolidays';
+import MiPerfil from './modules/MiPerfil';
+import MisAsignaciones from './modules/MisAsignaciones';
 import './theme.css';
 import './App.css';
 
@@ -220,6 +222,8 @@ function Layout() {
           <Route path="/reports/finanzas" element={<FinanceReports />} />
           <Route path="/reports/:type" element={<Reports />} />
           <Route path="/dashboard/me" element={<DashboardMe />} />
+          <Route path="/me/profile" element={<MiPerfil />} />
+          <Route path="/me/assignments" element={<MisAsignaciones />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           {isAdmin && <Route path="/admin/employee-costs" element={<EmployeeCosts />} />}

@@ -2452,6 +2452,64 @@ const GOOGLE_OAUTH_SQL = `
   ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
 `;
 
+/* ==================================================================
+ * SPEC-EMP-00 — Employee self-service portal
+ * ================================================================== */
+const SPEC_EMP_00_SQL = `
+  -- Profile fields on employees
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS bio TEXT NULL;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS linkedin_url VARCHAR(300) NULL;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS github_url VARCHAR(300) NULL;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS portfolio_url VARCHAR(300) NULL;
+
+  -- Education history
+  CREATE TABLE IF NOT EXISTS employee_education (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+    institution VARCHAR(200) NOT NULL,
+    degree VARCHAR(200) NOT NULL,
+    field_of_study VARCHAR(200) NULL,
+    start_year INT NULL,
+    end_year INT NULL,
+    description TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS employee_education_emp_idx
+    ON employee_education(employee_id);
+
+  -- Expand skills catalogue with more entries
+  INSERT INTO skills (name, category) VALUES
+    -- additional languages
+    ('Rust','language'),('Scala','language'),('Dart','language'),('R','language'),
+    ('Elixir','language'),('Clojure','language'),
+    -- additional frameworks
+    ('Svelte','framework'),('Remix','framework'),('Astro','framework'),
+    ('FastAPI','framework'),('Gin','framework'),('Flutter','framework'),
+    ('React Native','framework'),('Nuxt.js','framework'),
+    -- devops & infra
+    ('Ansible','tool'),('Prometheus','tool'),('Grafana','tool'),
+    ('ArgoCD','tool'),('Helm','tool'),('Pulumi','tool'),
+    -- data & analytics
+    ('BigQuery','data'),('Redshift','data'),('Tableau','data'),
+    ('Power BI','data'),('Looker','data'),('Metabase','data'),
+    ('Apache Beam','data'),('Delta Lake','data'),
+    -- testing
+    ('Cypress','tool'),('Playwright','tool'),('Jest','tool'),
+    ('Selenium','tool'),('JMeter','tool'),('k6','tool'),
+    -- design & product
+    ('Figma','tool'),('Adobe XD','tool'),
+    -- security
+    ('OWASP','methodology'),('Pentesting','methodology'),('SOC 2','methodology'),
+    -- additional methodologies
+    ('ITIL','methodology'),('Lean','methodology'),('OKRs','methodology'),
+    -- additional soft skills
+    ('Gestión de stakeholders','soft'),('Presentaciones','soft'),
+    ('Negociación','soft'),('Trabajo remoto','soft'),
+    ('Resolución de conflictos','soft')
+  ON CONFLICT (LOWER(name)) DO NOTHING;
+`;
+
 const migrate = async () => {
   let client;
   try {
@@ -2473,6 +2531,7 @@ const migrate = async () => {
       ['SPEC_CRM_01',              SPEC_CRM_01_SQL],
       ['ASSIGNMENT_RATES',         ASSIGNMENT_RATES_SQL],
       ['GOOGLE_OAUTH',             GOOGLE_OAUTH_SQL],
+      ['SPEC_EMP_00',              SPEC_EMP_00_SQL],
     ];
     for (const [label, sql] of blocks) {
       try {
