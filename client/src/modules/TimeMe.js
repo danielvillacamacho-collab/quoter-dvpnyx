@@ -125,10 +125,10 @@ export default function TimeMe() {
     setErrorMsg('');
     try {
       const [ra, re] = await Promise.all([
-        apiGet('/api/assignments?status=active&limit=50'),
+        apiGet('/api/me/assignments?status=active'),
         apiGet(`/api/time-entries?from=${weekFromIso}&to=${weekToIso}&limit=500`),
       ]);
-      setAssignments((ra?.data || []).filter((a) => !['cancelled'].includes(a.status)));
+      setAssignments(ra?.data || []);
       setEntries(re?.data || []);
     } catch (e) {
       setErrorMsg('Error cargando la semana: ' + e.message);

@@ -29,7 +29,7 @@ const sampleEntries = [
 beforeEach(() => {
   jest.resetAllMocks();
   apiV2.apiGet.mockImplementation((url) => {
-    if (url.startsWith('/api/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: { page: 1, limit: 50, total: 1, pages: 1 } });
+    if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: { page: 1, limit: 50, total: 1, pages: 1 } });
     if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: sampleEntries, pagination: { page: 1, limit: 500, total: 0, pages: 1 } });
     return Promise.resolve({});
   });
@@ -79,7 +79,7 @@ describe('TimeMe', () => {
     const diff = day === 0 ? -6 : 1 - day; m.setDate(m.getDate() + diff);
     const monIso = m.toISOString().slice(0, 10);
     apiV2.apiGet.mockImplementation((url) => {
-      if (url.startsWith('/api/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: {} });
+      if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: {} });
       if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: [{ id: 'te1', assignment_id: 'a1', work_date: monIso, hours: 4 }], pagination: {} });
       return Promise.resolve({});
     });
@@ -96,7 +96,7 @@ describe('TimeMe', () => {
     const diff = day === 0 ? -6 : 1 - day; m.setDate(m.getDate() + diff);
     const monIso = m.toISOString().slice(0, 10);
     apiV2.apiGet.mockImplementation((url) => {
-      if (url.startsWith('/api/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: {} });
+      if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: {} });
       if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: [{ id: 'te1', assignment_id: 'a1', work_date: monIso, hours: 4 }], pagination: {} });
       return Promise.resolve({});
     });
@@ -125,7 +125,7 @@ describe('TimeMe', () => {
 
   it('empty state when the user has no active assignments', async () => {
     apiV2.apiGet.mockImplementation((url) => {
-      if (url.startsWith('/api/assignments'))  return Promise.resolve({ data: [], pagination: {} });
+      if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: [], pagination: {} });
       if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: [], pagination: {} });
       return Promise.resolve({});
     });
