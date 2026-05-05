@@ -119,6 +119,28 @@ router.get('/planner', async (req, res) => {
       activeWhere.push(`(LOWER(e.first_name) LIKE $${empParams.length} OR LOWER(e.last_name) LIKE $${empParams.length} OR LOWER(e.first_name || ' ' || e.last_name) LIKE $${empParams.length})`);
     }
 
+    // Inactivos: por defecto sólo aparecen si tienen asignaciones que se
+    // solapan con el viewport (preserva el comportamiento del fix 36a8b37).
+    // Excepción: cuando hay un search activo, también aparecen los inactivos
+    // cuyo nombre matchea el search, aunque no tengan asignaciones visibles.
+    // Esto resuelve el caso "busco a alguien que renunció y no aparece" —
+    // el operador necesita confirmación explícita de que la persona existe
+    // pero sin actividad en el rango. Filtros de área/level NO se aplican
+    // a inactivos (preserva el comportamiento original).
+    const inactiveCriteria = [`EXISTS (
+       SELECT 1 FROM assignments _asg
+        WHERE _asg.employee_id = e.id
+          AND _asg.deleted_at IS NULL
+          AND _asg.status <> 'cancelled'
+          AND _asg.start_date <= $2::date
+          AND (_asg.end_date IS NULL OR _asg.end_date >= $1::date)
+     )`];
+    if (p.search) {
+      // Reusa el mismo parámetro de search del bloque activo (último push).
+      const searchParamIdx = empParams.length; // ya fue pusheado para activos
+      inactiveCriteria.push(`(LOWER(e.first_name) LIKE $${searchParamIdx} OR LOWER(e.last_name) LIKE $${searchParamIdx} OR LOWER(e.first_name || ' ' || e.last_name) LIKE $${searchParamIdx})`);
+    }
+
     const { rows: employeeRows } = await pool.query(
       `SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
               e.end_date, e.weekly_capacity_hours, a.name AS area_name,
@@ -134,14 +156,7 @@ router.get('/planner', async (req, res) => {
          LEFT JOIN areas a ON a.id = e.area_id
          WHERE e.deleted_at IS NULL
            AND (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE))
-           AND EXISTS (
-             SELECT 1 FROM assignments _asg
-              WHERE _asg.employee_id = e.id
-                AND _asg.deleted_at IS NULL
-                AND _asg.status <> 'cancelled'
-                AND _asg.start_date <= $2::date
-                AND (_asg.end_date IS NULL OR _asg.end_date >= $1::date)
-           )
+           AND (${inactiveCriteria.join(' OR ')})
        ORDER BY first_name, last_name
        LIMIT 200`,
       empParams,

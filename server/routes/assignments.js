@@ -478,7 +478,7 @@ router.post('/', adminOnly, async (req, res) => {
 
     const { rows: eRows } = await conn.query(
       `SELECT e.id, e.weekly_capacity_hours, e.status, e.first_name, e.last_name,
-              e.level, e.area_id, a.name AS area_name
+              e.level, e.area_id, e.end_date, a.name AS area_name
          FROM employees e
          LEFT JOIN areas a ON a.id = e.area_id
         WHERE e.id=$1 AND e.deleted_at IS NULL`,
@@ -493,6 +493,35 @@ router.post('/', adminOnly, async (req, res) => {
       return res.status(400).json({ error: 'El empleado está terminado y no puede recibir asignaciones nuevas.' });
     }
     if (emp.status === 'bench') warnings.push(`El empleado está en "bench" — priorízalo si buscas ocupación.`);
+
+    // Invariante: una asignación no puede extenderse más allá del end_date
+    // del empleado. Si el empleado tiene fecha de fin (no indefinida), la
+    // asignación debe cerrarse en o antes de esa fecha. Esto fuerza al
+    // operador a mantener consistencia entre fecha de salida y trabajo
+    // proyectado (sin esto, el planner mostraba barras "fantasma" después
+    // de que la persona ya no estaba en la empresa).
+    if (emp.end_date) {
+      const empEndIso = emp.end_date instanceof Date
+        ? emp.end_date.toISOString().slice(0, 10)
+        : String(emp.end_date).slice(0, 10);
+      if (!end_date) {
+        conn.release();
+        return res.status(409).json({
+          error: `El empleado tiene fecha de fin ${empEndIso}. La asignación necesita una fecha de fin (no puede ser abierta).`,
+          code: 'ASSIGNMENT_OPEN_BUT_EMPLOYEE_HAS_END_DATE',
+          employee_end_date: empEndIso,
+        });
+      }
+      if (end_date > empEndIso) {
+        conn.release();
+        return res.status(409).json({
+          error: `La asignación termina ${end_date}, pero el empleado tiene fecha de fin ${empEndIso}. Ajusta la fecha o quita el end_date del empleado.`,
+          code: 'ASSIGNMENT_AFTER_EMPLOYEE_END_DATE',
+          employee_end_date: empEndIso,
+          assignment_end_date: end_date,
+        });
+      }
+    }
 
     // --- Engine validation (US-BK-2 / US-VAL-4) --------------------------
     const committed = await sumOverlappingHours(conn, employee_id, start_date, end_date || null);
@@ -694,10 +723,40 @@ router.put('/:id', adminOnly, async (req, res) => {
 
     if (hoursOrWindowChanged) {
       const { rows: eRows } = await conn.query(
-        `SELECT weekly_capacity_hours, first_name, last_name FROM employees WHERE id=$1`,
+        `SELECT weekly_capacity_hours, first_name, last_name, end_date FROM employees WHERE id=$1`,
         [before.employee_id]
       );
       const capacity = Number(eRows[0]?.weekly_capacity_hours || 40);
+
+      // Mismo invariante que en POST: la asignación no puede extenderse
+      // más allá del end_date del empleado. Aplica solo cuando se mueve
+      // la ventana (start/end). Si solo cambia weekly_hours, se omite.
+      if (eRows[0]?.end_date && (body.start_date || body.end_date !== undefined)) {
+        const empEndIso = eRows[0].end_date instanceof Date
+          ? eRows[0].end_date.toISOString().slice(0, 10)
+          : String(eRows[0].end_date).slice(0, 10);
+        const nextEndIso = nextEnd
+          ? (nextEnd instanceof Date ? nextEnd.toISOString().slice(0, 10) : String(nextEnd).slice(0, 10))
+          : null;
+        if (!nextEndIso) {
+          conn.release();
+          return res.status(409).json({
+            error: `El empleado tiene fecha de fin ${empEndIso}. La asignación necesita fecha de fin (no puede ser abierta).`,
+            code: 'ASSIGNMENT_OPEN_BUT_EMPLOYEE_HAS_END_DATE',
+            employee_end_date: empEndIso,
+          });
+        }
+        if (nextEndIso > empEndIso) {
+          conn.release();
+          return res.status(409).json({
+            error: `La asignación terminaría ${nextEndIso}, pero el empleado tiene fecha de fin ${empEndIso}. Ajusta la fecha o quita el end_date del empleado.`,
+            code: 'ASSIGNMENT_AFTER_EMPLOYEE_END_DATE',
+            employee_end_date: empEndIso,
+            assignment_end_date: nextEndIso,
+          });
+        }
+      }
+
       const existing = await sumOverlappingHours(conn, before.employee_id, nextStart, nextEnd, before.id);
       const proposed = existing + nextHours;
       const threshold = capacity * OVERBOOK_FACTOR;

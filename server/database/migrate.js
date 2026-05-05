@@ -2331,6 +2331,33 @@ ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_scope        TEXT NUL
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_pains        TEXT NULL;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_requirements TEXT NULL;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_politics     TEXT NULL;
+
+-- 7. Reset masivo de employees.end_date → NULL (mayo 2026)
+-- Decisión de negocio: por defecto los empleados deben tener fecha de fin
+-- "indefinida" (NULL). Sólo se pone fecha cuando hay contrato a término
+-- fijo o cuando renuncian/despiden. El reset previo evita que comerciales
+-- hayan puesto fechas por inercia (lo que después del fix 36a8b37 los
+-- marcaba como inactivos automáticamente cuando esas fechas pasaban).
+--
+-- Mecánica:
+--   1. Snapshot del estado previo en employee_end_date_audit_2026_05
+--      (idempotente vía CREATE TABLE IF NOT EXISTS + INSERT … ON CONFLICT
+--      DO NOTHING — la migración puede correrse N veces sin duplicar).
+--   2. UPDATE … SET end_date = NULL.
+--   3. La auditoría es la fuente de verdad si alguien necesita recuperar
+--      fechas legítimas (Andrew, etc.); el operations_owner re-ingresará
+--      manualmente las fechas reales después del reset.
+CREATE TABLE IF NOT EXISTS employee_end_date_audit_2026_05 (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id),
+  previous_end_date DATE NOT NULL,
+  snapshot_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO employee_end_date_audit_2026_05 (employee_id, previous_end_date)
+  SELECT id, end_date FROM employees WHERE end_date IS NOT NULL
+  ON CONFLICT (employee_id) DO NOTHING;
+
+UPDATE employees SET end_date = NULL, updated_at = NOW() WHERE end_date IS NOT NULL;
 `;
 
 /**
