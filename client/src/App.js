@@ -264,21 +264,38 @@ function Login() {
 
   React.useEffect(() => {
     const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
-    if (!clientId || !window.google?.accounts?.id) return;
-    window.google.accounts.id.initialize({
-      client_id: clientId,
-      callback: handleGoogleResponse,
-    });
-    if (googleBtnRef.current) {
-      window.google.accounts.id.renderButton(googleBtnRef.current, {
-        type: 'standard',
-        theme: 'outline',
-        size: 'large',
-        width: googleBtnRef.current.offsetWidth || 320,
-        text: 'signin_with',
-        logo_alignment: 'center',
+    if (!clientId) return undefined;
+
+    // El <script src="https://accounts.google.com/gsi/client" async defer>
+    // del index.html se carga después de que React monte este componente.
+    // Si window.google aún no existe, hacemos polling hasta que el SDK
+    // termine de inicializarse (timeout de ~5 s para evitar lazos infinitos
+    // si el script falla por bloqueo de red, adblock, etc.).
+    let cancelled = false;
+    let retries = 0;
+    const init = () => {
+      if (cancelled) return;
+      if (!window.google?.accounts?.id) {
+        if (retries++ < 50) setTimeout(init, 100);
+        return;
+      }
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleResponse,
       });
-    }
+      if (googleBtnRef.current) {
+        window.google.accounts.id.renderButton(googleBtnRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          width: googleBtnRef.current.offsetWidth || 320,
+          text: 'signin_with',
+          logo_alignment: 'center',
+        });
+      }
+    };
+    init();
+    return () => { cancelled = true; };
   }, []); // eslint-disable-line
 
   const handleLogin = async (e) => {
