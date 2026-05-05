@@ -155,7 +155,49 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
         </div>
         <div>
           <label style={s.label}>Fecha de fin</label>
-          <input style={s.input} type="date" value={form.end_date ? String(form.end_date).slice(0, 10) : ''} onChange={(e) => set('end_date', e.target.value || null)} aria-label="Fecha de fin" />
+          {/* Indefinida = NULL en BD = "proyectada al futuro" para todos los
+              cálculos internos del quoter (capacity, planner, idle time).
+              Solo se pone fecha si hay contrato a término fijo o si renunció
+              /se despidió. Sin esta opción explícita, los comerciales tendían
+              a poner una fecha cualquiera y el empleado quedaba como inactivo
+              al pasar esa fecha (ver fix 36a8b37). */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 12, fontSize: 13 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="end_date_mode"
+                  checked={!form.end_date}
+                  onChange={() => set('end_date', null)}
+                  aria-label="Fecha de fin indefinida"
+                />
+                Indefinida
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="end_date_mode"
+                  checked={!!form.end_date}
+                  onChange={() => set('end_date', new Date().toISOString().slice(0, 10))}
+                  aria-label="Fecha de fin específica"
+                />
+                Hasta una fecha
+              </label>
+            </div>
+            {form.end_date ? (
+              <input
+                style={s.input}
+                type="date"
+                value={String(form.end_date).slice(0, 10)}
+                onChange={(e) => set('end_date', e.target.value || null)}
+                aria-label="Fecha de fin"
+              />
+            ) : (
+              <div style={{ fontSize: 11, color: 'var(--text-light)', lineHeight: 1.4 }}>
+                Indefinida — se proyecta al futuro. Solo pon fecha si tienes contrato a término fijo o si renunció/se despidió.
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <div>

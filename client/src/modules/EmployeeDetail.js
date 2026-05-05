@@ -203,7 +203,10 @@ export default function EmployeeDetail() {
           <Field label="Tipo de contrato">{emp.employment_type}</Field>
           <Field label="Capacidad">{emp.weekly_capacity_hours ? `${Number(emp.weekly_capacity_hours)}h/sem` : null}</Field>
           <Field label="Inicio">{emp.start_date ? String(emp.start_date).slice(0, 10) : null}</Field>
-          <Field label="Fin">{emp.end_date ? String(emp.end_date).slice(0, 10) : null}</Field>
+          <Field label="Fin">{emp.end_date
+            ? String(emp.end_date).slice(0, 10)
+            : <span style={{ fontStyle: 'italic', color: 'var(--text-light)', fontWeight: 400 }}>Indefinida — proyectada al futuro</span>}
+          </Field>
           <Field label="Seniority">{emp.seniority_label}</Field>
           <Field label="Cuenta de usuario">{emp.user_email || '—'}</Field>
         </div>
