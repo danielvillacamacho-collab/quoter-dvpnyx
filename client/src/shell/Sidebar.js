@@ -9,6 +9,7 @@ import {
   Contact, MessageSquare, Target, ChevronRight,
   Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
   GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
+  UserCircle, ClipboardCheck,
 } from 'lucide-react';
 import cx from './Sidebar.module.css';
 
@@ -48,16 +49,27 @@ const ICONS = {
   '/admin/bulk-import':         Upload,
   '/admin/holidays':            Globe,
   '/admin/budgets':             Target,
+  '/me/profile':                UserCircle,
+  '/me/assignments':            ClipboardCheck,
+  '/dashboard/me':              LayoutDashboard,
 };
 
 /** Build the grouped nav model. */
-export function buildGroups(isAdmin) {
+export function buildGroups(isAdmin, hasEmployee = false) {
   const groups = [
     {
       key: 'home', title: null, collapsible: false, items: [
         { path: '/', label: 'Dashboard' },
       ],
     },
+    ...(hasEmployee ? [{
+      key: 'mi_espacio', title: 'Mi espacio', collapsible: true, items: [
+        { path: '/me/profile',     label: 'Mi perfil' },
+        { path: '/me/assignments', label: 'Mis asignaciones' },
+        { path: '/dashboard/me',   label: 'Mi dashboard' },
+        { path: '/time/me',        label: 'Mis horas' },
+      ],
+    }] : []),
     {
       key: 'comercial', title: 'Comercial', collapsible: true, items: [
         { path: '/clients',                  label: 'Clientes' },
@@ -92,7 +104,6 @@ export function buildGroups(isAdmin) {
     },
     {
       key: 'tiempo', title: 'Tiempo', collapsible: true, items: [
-        { path: '/time/me',   label: 'Mis horas' },
         { path: '/time/team', label: 'Equipo semanal' },
       ],
     },
@@ -212,11 +223,12 @@ function SidebarSection({ group, collapsed, onToggle, itemClass, onNavigate, pat
 export default function Sidebar({
   user,
   isAdmin = false,
+  hasEmployee = false,
   open = false,
   onNavigate,
   onLogout,
 }) {
-  const groups = buildGroups(isAdmin);
+  const groups = buildGroups(isAdmin, hasEmployee);
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(loadCollapsed);
 

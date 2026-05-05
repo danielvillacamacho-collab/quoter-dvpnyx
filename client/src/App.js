@@ -57,6 +57,8 @@ import InternalInitiativeDetail from './modules/InternalInitiativeDetail';
 import Novelties from './modules/Novelties';
 import IdleTime from './modules/IdleTime';
 import CountryHolidays from './modules/CountryHolidays';
+import MiPerfil from './modules/MiPerfil';
+import MisAsignaciones from './modules/MisAsignaciones';
 import './theme.css';
 import './App.css';
 
@@ -101,7 +103,7 @@ const css = {
 
 /* ========== LAYOUT ========== */
 function Layout() {
-  const { user, doLogout, isAdmin } = useAuth();
+  const { user, doLogout, isAdmin, hasEmployee } = useAuth();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -165,6 +167,7 @@ function Layout() {
       <Sidebar
         user={user}
         isAdmin={isAdmin}
+        hasEmployee={hasEmployee}
         open={sidebarOpen}
         onNavigate={closeSidebar}
         onLogout={() => { doLogout(); nav('/login'); }}
@@ -220,6 +223,8 @@ function Layout() {
           <Route path="/reports/finanzas" element={<FinanceReports />} />
           <Route path="/reports/:type" element={<Reports />} />
           <Route path="/dashboard/me" element={<DashboardMe />} />
+          <Route path="/me/profile" element={<MiPerfil />} />
+          <Route path="/me/assignments" element={<MisAsignaciones />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           {isAdmin && <Route path="/admin/employee-costs" element={<EmployeeCosts />} />}

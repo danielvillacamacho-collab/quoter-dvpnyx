@@ -967,8 +967,10 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
       {weeks.map((w, i) => {
         const items = assignByWeek.get(i) || [];
         const inOpenRange = request && request.week_range && i >= request.week_range[0] && i <= request.week_range[1];
-        const showUnassigned = items.length === 0 && inOpenRange && missing > 0;
-        const cellStyle = showUnassigned
+        // Show N yellow bars for each missing slot, even when some are filled.
+        const missingInCell = inOpenRange ? missing : 0;
+        const hasYellow = missingInCell > 0;
+        const cellStyle = (hasYellow && items.length === 0)
           ? { ...s.weekCell('repeating-linear-gradient(45deg, #fffbea, #fffbea 10px, #fff7d6 10px, #fff7d6 20px)') }
           : s.weekCell('transparent');
         return (
@@ -993,11 +995,15 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
                 </div>
               );
             })}
-            {showUnassigned && (
-              <div style={s.unassignedBar(request.color || bucket.contract.color || '#e98b3f')} title={`Sin asignar · ${title}`}>
-                Sin asignar
+            {Array.from({ length: missingInCell }, (_, slotIdx) => (
+              <div
+                key={`vacant-${slotIdx}`}
+                style={{ ...s.unassignedBar(request?.color || bucket.contract.color || '#e98b3f'), cursor: 'pointer' }}
+                title={`Vacante · clic para asignar · ${title}`}
+              >
+                + Asignar
               </div>
-            )}
+            ))}
           </div>
         );
       })}
@@ -1408,8 +1414,8 @@ export default function CapacityPlanner() {
                     </>
                   )}
 
-                  {/* Unassigned requests (US-PLN-5 + US-RR-3: click → candidates modal) */}
-                  {data.open_requests.map((r) => (
+                  {/* Unassigned requests — solo las que aún tienen slots por llenar */}
+                  {data.open_requests.filter((r) => r.missing > 0).map((r) => (
                     <UnassignedRow
                       key={r.id}
                       request={r}

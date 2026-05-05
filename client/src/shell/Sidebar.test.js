@@ -76,9 +76,11 @@ describe('Sidebar', () => {
     expect(container.querySelector('.sidebar')).not.toHaveClass('open');
   });
 
-  it('buildGroups returns 10 groups for admins and 9 for non-admins', () => {
-    expect(buildGroups(true).length).toBe(10);
-    expect(buildGroups(false).length).toBe(9);
+  it('buildGroups returns correct group counts based on role and employee link', () => {
+    expect(buildGroups(true, true).length).toBe(11);
+    expect(buildGroups(false, true).length).toBe(10);
+    expect(buildGroups(true, false).length).toBe(10);
+    expect(buildGroups(false, false).length).toBe(9);
   });
 
   // ── Accordion behavior ──

@@ -357,8 +357,8 @@ describe('CapacityPlanner module', () => {
     const ct3Row = await screen.findByTestId('contract-row-ct3');
     fireEvent.click(ct3Row);
     const row = await screen.findByTestId('project-request-row-rr9');
-    // Unassigned bar in the request's week range.
-    expect(within(row).getAllByText(/Sin asignar/).length).toBeGreaterThan(0);
+    // Vacant slot bars in the request's week range.
+    expect(within(row).getAllByText(/Asignar/).length).toBeGreaterThan(0);
     expect(within(row).getByText(/faltan 2/)).toBeInTheDocument();
   });
 

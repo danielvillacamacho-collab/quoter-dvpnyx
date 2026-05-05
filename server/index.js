@@ -133,6 +133,7 @@ app.use('/api/internal-initiatives', require('./routes/internal_initiatives'));
 app.use('/api/novelties',         require('./routes/novelties'));
 app.use('/api/holidays',          require('./routes/holidays'));
 app.use('/api/idle-time',         require('./routes/idle_time'));
+app.use('/api/me',                require('./routes/me'));           // SPEC-EMP-00 self-service
 app.use('/api/reports/v2',        require('./routes/reports_v2'));    // Reports v2 — aggregate endpoints for charts
 
 if (process.env.NODE_ENV === 'production') {

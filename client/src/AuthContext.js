@@ -98,9 +98,8 @@ export function AuthProvider({ children }) {
 
   const isAdmin       = user && ['admin', 'superadmin'].includes(user.role);
   const isLead        = user && user.role === 'lead';
-  // Cualquier líder o admin puede ver dashboards de equipo (ej. plan-vs-real,
-  // /time/team con picker de su equipo).
   const isLeadOrAdmin = isAdmin || isLead;
+  const hasEmployee   = !!(user && user.has_employee);
 
   if (loading) {
     return (
@@ -111,7 +110,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthCtx.Provider value={{ user, params, doLogin, doGoogleLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin }}>
+    <AuthCtx.Provider value={{ user, params, doLogin, doGoogleLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin, hasEmployee }}>
       {children}
     </AuthCtx.Provider>
   );
