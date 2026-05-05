@@ -2438,6 +2438,20 @@ async function ensurePgVector(client) {
   }
 }
 
+/* ==================================================================
+ * GOOGLE_OAUTH — federated login via Google Workspace
+ * ================================================================== */
+const GOOGLE_OAUTH_SQL = `
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS users_google_id_unique
+    ON users(google_id) WHERE google_id IS NOT NULL;
+
+  -- Allow NULL password_hash for Google-only accounts.
+  -- Existing NOT NULL constraint needs to be dropped and re-added as nullable.
+  -- Idempotent: if already nullable, Postgres silently succeeds.
+  ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+`;
+
 const migrate = async () => {
   let client;
   try {
@@ -2458,6 +2472,7 @@ const migrate = async () => {
       ['SPEC_II_00_HOLIDAY_SEED',  SPEC_II_00_HOLIDAY_SEED_SQL],
       ['SPEC_CRM_01',              SPEC_CRM_01_SQL],
       ['ASSIGNMENT_RATES',         ASSIGNMENT_RATES_SQL],
+      ['GOOGLE_OAUTH',             GOOGLE_OAUTH_SQL],
     ];
     for (const [label, sql] of blocks) {
       try {

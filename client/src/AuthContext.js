@@ -54,6 +54,13 @@ export function AuthProvider({ children }) {
     return { user: u, params: p };
   };
 
+  const doGoogleLogin = async (credential) => {
+    const { token, user: u } = await api.googleLogin(credential);
+    localStorage.setItem('dvpnyx_token', token);
+    const p = await api.getParams();
+    return { user: u, params: p };
+  };
+
   const commitLogin  = (u, p) => { setUser(u); setParams(p); applyPreferences(u?.preferences); };
   const doLogout     = () => {
     localStorage.removeItem('dvpnyx_token');
@@ -104,7 +111,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthCtx.Provider value={{ user, params, doLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin }}>
+    <AuthCtx.Provider value={{ user, params, doLogin, doGoogleLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin }}>
       {children}
     </AuthCtx.Provider>
   );
