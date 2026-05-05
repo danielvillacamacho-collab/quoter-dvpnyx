@@ -247,30 +247,44 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const [changePw, setChangePw] = useState(false);
   const [newPw, setNewPw] = useState('');
-  const { doLogin, doGoogleLogin, commitLogin, user } = useAuth();
+  const { doLogin, commitLogin, user } = useAuth();
   const nav = useNavigate();
   const googleBtnRef = React.useRef(null);
+  const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+
+  // Handle the redirect-mode callback: server redirects here with ?google_token=JWT
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('google_token');
+    const error = params.get('error');
+    if (error) {
+      const msgs = {
+        domain_not_allowed: 'Solo cuentas corporales pueden iniciar sesión',
+        no_account: 'No existe una cuenta asociada a este correo. Contacta al administrador.',
+        google_auth_failed: 'Error al autenticar con Google. Intenta de nuevo.',
+        google_not_configured: 'Google OAuth no está configurado.',
+      };
+      setErr(msgs[error] || 'Error al iniciar sesión con Google');
+      window.history.replaceState({}, '', '/login');
+      return;
+    }
+    if (!token) return;
+    window.history.replaceState({}, '', '/login');
+    setLoading(true);
+    localStorage.setItem('dvpnyx_token', token);
+    api.getMe().then((u) =>
+      api.getParams().then((p) => { commitLogin(u, p); nav('/'); })
+    ).catch((e) => {
+      localStorage.removeItem('dvpnyx_token');
+      setErr(e.message || 'Error al completar login');
+    }).finally(() => setLoading(false));
+  }, []); // eslint-disable-line
 
   if (user && !changePw) return <Navigate to="/" />;
 
-  const handleGoogleResponse = async (response) => {
-    setErr(''); setLoading(true);
-    try {
-      const { user: u, params: p } = await doGoogleLogin(response.credential);
-      commitLogin(u, p);
-      nav('/');
-    } catch (e) { setErr(e.message); } finally { setLoading(false); }
-  };
-
+  // Render Google Sign-In button (redirect mode — no popup)
   React.useEffect(() => {
-    const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
-    if (!clientId) return undefined;
-
-    // El <script src="https://accounts.google.com/gsi/client" async defer>
-    // del index.html se carga después de que React monte este componente.
-    // Si window.google aún no existe, hacemos polling hasta que el SDK
-    // termine de inicializarse (timeout de ~5 s para evitar lazos infinitos
-    // si el script falla por bloqueo de red, adblock, etc.).
+    if (!googleClientId || !window.google?.accounts?.id) return;
     let cancelled = false;
     let retries = 0;
     const init = () => {
@@ -280,8 +294,9 @@ function Login() {
         return;
       }
       window.google.accounts.id.initialize({
-        client_id: clientId,
-        callback: handleGoogleResponse,
+        client_id: googleClientId,
+        ux_mode: 'redirect',
+        login_uri: window.location.origin + '/api/auth/google-callback',
       });
       if (googleBtnRef.current) {
         window.google.accounts.id.renderButton(googleBtnRef.current, {
