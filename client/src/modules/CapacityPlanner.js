@@ -802,9 +802,33 @@ function buildProjectsView(data) {
   const out = [];
   for (const bucket of byId.values()) {
     if (bucket.summary.length === 0 && bucket.requests.size === 0 && bucket.unkeyed.length === 0) continue;
+    const reqs = Array.from(bucket.requests.values());
+    // Coverage: total weekly hours requested vs assigned.
+    // requested_hours = sum of (request.quantity × request.weekly_hours) for all requests
+    // assigned_hours  = sum of weekly_hours across all actual assignments
+    let requested_hours = 0;
+    let assigned_hours = 0;
+    for (const entry of reqs) {
+      if (entry.request) {
+        const qty = Number(entry.request.quantity) || 1;
+        const hrs = Number(entry.request.weekly_hours) || 0;
+        requested_hours += qty * hrs;
+      }
+      for (const a of entry.assignments) {
+        assigned_hours += Number(a.weekly_hours) || 0;
+      }
+    }
+    // Unkeyed assignments (no request) also count as assigned.
+    for (const a of bucket.unkeyed) {
+      assigned_hours += Number(a.weekly_hours) || 0;
+    }
+    const coverage_pct = requested_hours > 0 ? Math.round((assigned_hours / requested_hours) * 100) : null;
     out.push({
       ...bucket,
-      requests: Array.from(bucket.requests.values()),
+      requests: reqs,
+      requested_hours,
+      assigned_hours,
+      coverage_pct,
     });
   }
   out.sort((a, b) => (a.contract.name || '').localeCompare(b.contract.name || ''));
@@ -849,6 +873,21 @@ function ContractRow({ bucket, weeks, onOpen, isExpanded, onToggle }) {
           <div style={s.contractName} title={bucket.contract.name}>{bucket.contract.name}</div>
         </div>
         <div style={s.contractClient}>{bucket.contract.client_name || '—'}</div>
+        {bucket.requested_hours > 0 && (() => {
+          const pct = bucket.coverage_pct;
+          const assigned = bucket.assigned_hours;
+          const requested = bucket.requested_hours;
+          const color = pct >= 100 ? 'var(--ds-ok-text, #166534)' : pct >= 50 ? 'oklch(0.45 0.12 80)' : 'var(--ds-bad-text, #991b1b)';
+          const bg = pct >= 100 ? 'var(--ds-ok-soft, #dcfce7)' : pct >= 50 ? 'var(--ds-warn-soft, #fef9c3)' : 'var(--ds-bad-soft, #fee2e2)';
+          const icon = pct >= 100 ? '✓' : pct > 0 ? '⚠' : '✗';
+          return (
+            <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: bg, color, fontFamily: 'var(--font-mono, monospace)', letterSpacing: '-0.02em' }}>
+                {icon} {assigned}h / {requested}h ({pct}%)
+              </span>
+            </div>
+          );
+        })()}
       </div>
       {weeks.map((w, i) => {
         const items = byWeek.get(i) || [];
