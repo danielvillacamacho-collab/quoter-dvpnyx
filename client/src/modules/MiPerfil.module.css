@@ -1,0 +1,189 @@
+.page { max-width: 1100px; margin: 0 auto; }
+
+.h1 {
+  font-size: 24px;
+  color: var(--ds-accent-text);
+  font-family: 'Montserrat', sans-serif;
+  margin: 0 0 6px;
+}
+.sub { font-size: 13px; color: var(--ds-text-muted); margin-bottom: 20px; }
+
+/* Completeness bar */
+.completenessWrap {
+  margin-bottom: 24px;
+  background: var(--ds-surface);
+  border-radius: var(--ds-radius-lg);
+  border: 1px solid var(--ds-border);
+  padding: 16px 20px;
+}
+.completenessLabel {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ds-text-muted);
+  margin-bottom: 8px;
+}
+.completenessBar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--ds-bg-soft);
+  overflow: hidden;
+}
+.completenessFill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--ds-accent);
+  transition: width 0.4s ease;
+}
+.completenessPct {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ds-accent);
+  margin-top: 6px;
+}
+
+/* Card sections */
+.card {
+  background: var(--ds-surface);
+  border-radius: var(--ds-radius-lg);
+  border: 1px solid var(--ds-border);
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.cardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.cardTitle {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ds-text);
+  font-family: 'Montserrat', sans-serif;
+  margin: 0;
+}
+
+/* Grid for profile fields */
+.profileGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+/* Field */
+.field { display: flex; flex-direction: column; gap: 4px; }
+.label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ds-text-dim);
+}
+.value {
+  font-size: 14px;
+  color: var(--ds-text);
+}
+.valueMuted { composes: value; color: var(--ds-text-muted); font-style: italic; }
+
+/* Input / Textarea */
+.input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--ds-border);
+  border-radius: var(--ds-radius);
+  font-size: 14px;
+  color: var(--ds-text);
+  background: var(--ds-bg);
+  outline: none;
+  font-family: inherit;
+}
+.input:focus { border-color: var(--ds-accent); }
+.textarea { composes: input; min-height: 80px; resize: vertical; }
+
+/* Buttons */
+.btn {
+  padding: 8px 16px;
+  border-radius: var(--ds-radius);
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.btn:hover { opacity: 0.85; }
+.btnPrimary {
+  composes: btn;
+  background: var(--ds-accent);
+  color: #fff;
+}
+.btnSecondary {
+  composes: btn;
+  background: var(--ds-bg-soft);
+  color: var(--ds-text);
+  border: 1px solid var(--ds-border);
+}
+.btnDanger {
+  composes: btn;
+  background: var(--ds-bad);
+  color: #fff;
+}
+.btnSmall {
+  composes: btn;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+/* Badge */
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Skills / Education list */
+.itemRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--ds-border);
+  gap: 12px;
+}
+.itemRow:last-child { border-bottom: none; }
+.itemMain { flex: 1; min-width: 0; }
+.itemName { font-size: 14px; font-weight: 600; color: var(--ds-text); }
+.itemMeta { font-size: 12px; color: var(--ds-text-muted); margin-top: 2px; }
+.itemActions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* Inline form row */
+.formRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.formActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* Error / empty */
+.error { color: var(--ds-bad); font-size: 13px; padding: 12px 0; }
+.empty { color: var(--ds-text-muted); font-size: 13px; padding: 20px 0; text-align: center; }
+.loading { color: var(--ds-text-muted); font-size: 13px; }
+
+/* Links */
+.link {
+  color: var(--ds-accent);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+}
+.link:hover { text-decoration: underline; }
