@@ -262,7 +262,6 @@ function Login() {
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
   };
 
-  // eslint-disable-next-line react-hooks/rules-of-hooks
   React.useEffect(() => {
     const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
     if (!clientId || !window.google?.accounts?.id) return;
@@ -280,8 +279,7 @@ function Login() {
         logo_alignment: 'center',
       });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // eslint-disable-line
 
   const handleLogin = async (e) => {
     e.preventDefault(); setErr(''); setLoading(true);
