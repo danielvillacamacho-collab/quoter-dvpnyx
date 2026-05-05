@@ -147,9 +147,22 @@ router.get('/me', auth, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
     const row = rows[0];
     row.preferences = row.preferences || {};
-    const { rows: empRows } = await pool.query(
+    let { rows: empRows } = await pool.query(
       'SELECT id FROM employees WHERE user_id=$1 AND deleted_at IS NULL', [req.user.id],
     );
+    if (!empRows.length && row.email) {
+      const { rows: match } = await pool.query(
+        `SELECT id FROM employees
+          WHERE user_id IS NULL AND deleted_at IS NULL
+            AND (LOWER(corporate_email)=$1 OR LOWER(personal_email)=$1)
+          LIMIT 1`,
+        [row.email.toLowerCase()],
+      );
+      if (match.length) {
+        await pool.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [row.id, match[0].id]);
+        empRows = match;
+      }
+    }
     row.has_employee = empRows.length > 0;
     res.json(row);
   } catch (err) { serverError(res, 'GET /auth/me', err); }
