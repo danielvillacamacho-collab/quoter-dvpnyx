@@ -971,7 +971,9 @@ router.post('/:id/status', async (req, res) => {
     }
 
     const closingNow = TERMINAL.has(new_status); // closed_won | closed_lost
-    const outcomeValue = (new_status === 'closed_won' || new_status === 'closed_lost') ? new_status : null;
+    const outcomeValue = new_status === 'closed_won' ? 'won'
+                       : new_status === 'closed_lost' ? 'lost'
+                       : null;
 
     // Postponed: persistir fecha + razón. Salir de Postponed: limpiar campos.
     const setPostponedDate = (new_status === 'postponed') ? postponed_until_date : null;

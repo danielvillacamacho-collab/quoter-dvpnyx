@@ -13,7 +13,23 @@ const app = express();
 // cliente y el rate-limit no agrupe todo el tráfico bajo el IP del proxy.
 // Más seguro que 'true' porque sólo confía en un único hop.
 app.set('trust proxy', 1);
-app.use(helmet());
+// Helmet con CSP que permite el SDK de Google Identity Services
+// (https://accounts.google.com/gsi/client) para el botón "Continuar con
+// Google" del Login. Sin estos overrides el script externo se bloquea
+// con CSP "script-src 'self'" por defecto.
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      'script-src':  ["'self'", 'https://accounts.google.com/gsi/client'],
+      'frame-src':   ["'self'", 'https://accounts.google.com/gsi/'],
+      'connect-src': ["'self'", 'https://accounts.google.com/gsi/'],
+      'style-src':   ["'self'", "'unsafe-inline'", 'https://accounts.google.com/gsi/style'],
+      // El SDK de Google sirve avatares e íconos desde estos hosts.
+      'img-src':     ["'self'", 'data:', 'https://*.googleusercontent.com', 'https://lh3.googleusercontent.com'],
+    },
+  },
+}));
 
 // ── Request ID — every request gets a unique ID for log correlation ──
 app.use((req, _res, next) => {
