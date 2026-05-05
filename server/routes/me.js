@@ -237,17 +237,25 @@ router.get('/assignments', async (req, res) => {
   try {
     const empId = await getEmployeeId(req.user.id);
     if (!empId) return res.status(404).json({ error: 'No tienes un perfil de empleado vinculado' });
+    const params = [empId];
+    const statusFilter = req.query.status
+      ? `AND a.status = $${params.push(req.query.status)}`
+      : `AND a.status NOT IN ('cancelled')`;
     const { rows } = await pool.query(
-      `SELECT a.id, a.role_title, a.weekly_hours, a.start_date, a.end_date, a.status,
+      `SELECT a.id, a.employee_id, a.contract_id, a.resource_request_id,
+              a.role_title, a.weekly_hours, a.start_date, a.end_date, a.status,
               c.name AS contract_name,
-              cl.name AS client_name
+              cl.name AS client_name,
+              rr.role_title AS request_role_title
          FROM assignments a
          JOIN contracts c ON c.id = a.contract_id
-         JOIN clients cl ON cl.id = c.client_id
+         LEFT JOIN clients cl ON cl.id = c.client_id
+         LEFT JOIN resource_requests rr ON rr.id = a.resource_request_id
         WHERE a.employee_id = $1
-          AND a.status NOT IN ('cancelled')
+          AND a.deleted_at IS NULL
+          ${statusFilter}
         ORDER BY a.start_date DESC`,
-      [empId],
+      params,
     );
     res.json({ data: rows });
   } catch (err) { serverError(res, 'GET /me/assignments', err); }
