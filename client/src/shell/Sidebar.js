@@ -55,21 +55,21 @@ const ICONS = {
 };
 
 /** Build the grouped nav model. */
-export function buildGroups(isAdmin) {
+export function buildGroups(isAdmin, hasEmployee = false) {
   const groups = [
     {
       key: 'home', title: null, collapsible: false, items: [
         { path: '/', label: 'Dashboard' },
       ],
     },
-    {
+    ...(hasEmployee ? [{
       key: 'mi_espacio', title: 'Mi espacio', collapsible: true, items: [
         { path: '/me/profile',     label: 'Mi perfil' },
         { path: '/me/assignments', label: 'Mis asignaciones' },
         { path: '/dashboard/me',   label: 'Mi dashboard' },
         { path: '/time/me',        label: 'Mis horas' },
       ],
-    },
+    }] : []),
     {
       key: 'comercial', title: 'Comercial', collapsible: true, items: [
         { path: '/clients',                  label: 'Clientes' },
@@ -223,11 +223,12 @@ function SidebarSection({ group, collapsed, onToggle, itemClass, onNavigate, pat
 export default function Sidebar({
   user,
   isAdmin = false,
+  hasEmployee = false,
   open = false,
   onNavigate,
   onLogout,
 }) {
-  const groups = buildGroups(isAdmin);
+  const groups = buildGroups(isAdmin, hasEmployee);
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(loadCollapsed);
 

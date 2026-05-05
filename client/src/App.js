@@ -103,7 +103,7 @@ const css = {
 
 /* ========== LAYOUT ========== */
 function Layout() {
-  const { user, doLogout, isAdmin } = useAuth();
+  const { user, doLogout, isAdmin, hasEmployee } = useAuth();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -167,6 +167,7 @@ function Layout() {
       <Sidebar
         user={user}
         isAdmin={isAdmin}
+        hasEmployee={hasEmployee}
         open={sidebarOpen}
         onNavigate={closeSidebar}
         onLogout={() => { doLogout(); nav('/login'); }}

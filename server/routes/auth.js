@@ -145,11 +145,12 @@ router.get('/me', auth, async (req, res) => {
       [req.user.id],
     );
     if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
-    // Ensure preferences is always an object on the wire — psql returns {} but
-    // if the column were ever NULL (shouldn't, DEFAULT guards it) the client
-    // would crash reading user.preferences.scheme.
     const row = rows[0];
     row.preferences = row.preferences || {};
+    const { rows: empRows } = await pool.query(
+      'SELECT id FROM employees WHERE user_id=$1 AND deleted_at IS NULL', [req.user.id],
+    );
+    row.has_employee = empRows.length > 0;
     res.json(row);
   } catch (err) { serverError(res, 'GET /auth/me', err); }
 });
