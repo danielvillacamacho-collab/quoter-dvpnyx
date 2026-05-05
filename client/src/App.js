@@ -247,20 +247,44 @@ function Login() {
   const [loading, setLoading] = useState(false);
   const [changePw, setChangePw] = useState(false);
   const [newPw, setNewPw] = useState('');
-  const { doLogin, commitLogin, user } = useAuth();
+  const { doLogin, doGoogleLogin, commitLogin, user } = useAuth();
   const nav = useNavigate();
+  const googleBtnRef = React.useRef(null);
 
-  // Only redirect when user is set AND we are NOT waiting for a password change.
-  // This prevents premature redirect during the 'must_change_password' flow.
   if (user && !changePw) return <Navigate to="/" />;
+
+  const handleGoogleResponse = async (response) => {
+    setErr(''); setLoading(true);
+    try {
+      const { user: u, params: p } = await doGoogleLogin(response.credential);
+      commitLogin(u, p);
+      nav('/');
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  };
+
+  React.useEffect(() => {
+    const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+    if (!clientId || !window.google?.accounts?.id) return;
+    window.google.accounts.id.initialize({
+      client_id: clientId,
+      callback: handleGoogleResponse,
+    });
+    if (googleBtnRef.current) {
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        width: googleBtnRef.current.offsetWidth || 320,
+        text: 'signin_with',
+        logo_alignment: 'center',
+      });
+    }
+  }, []); // eslint-disable-line
 
   const handleLogin = async (e) => {
     e.preventDefault(); setErr(''); setLoading(true);
     try {
       const { user: u, params: p } = await doLogin(email, pw);
-      // Set all state in the same microtask → single React render batch.
-      // If we set user first (via doLogin internally) React would re-render
-      // and redirect to "/" before setChangePw(true) runs.
       commitLogin(u, p);
       if (u.must_change_password) setChangePw(true);
       else nav('/');
@@ -283,18 +307,28 @@ function Login() {
           <div style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4 }}>Cotizador de Servicios</div>
         </div>
         {!changePw ? (
-          <form onSubmit={handleLogin}>
-            <div style={{ marginBottom: 16 }}>
-              <label style={css.label}>Email</label>
-              <input style={css.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="correo@dvpnyx.com" required />
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <label style={css.label}>Contraseña</label>
-              <input style={css.input} type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" required />
-            </div>
-            {err && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12, textAlign: 'center' }}>{err}</div>}
-            <button style={{ ...css.btn('var(--ds-accent, var(--purple-dark))'), width: '100%', padding: 14, fontSize: 15 }} disabled={loading}>{loading ? 'Ingresando...' : 'Ingresar'}</button>
-          </form>
+          <>
+            <div ref={googleBtnRef} style={{ marginBottom: 20 }} />
+            {process.env.REACT_APP_GOOGLE_CLIENT_ID && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                <span style={{ fontSize: 12, color: 'var(--text-light)' }}>o con email</span>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+              </div>
+            )}
+            <form onSubmit={handleLogin}>
+              <div style={{ marginBottom: 16 }}>
+                <label style={css.label}>Email</label>
+                <input style={css.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="correo@dvpnyx.com" required />
+              </div>
+              <div style={{ marginBottom: 24 }}>
+                <label style={css.label}>Contraseña</label>
+                <input style={css.input} type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" required />
+              </div>
+              {err && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12, textAlign: 'center' }}>{err}</div>}
+              <button style={{ ...css.btn('var(--ds-accent, var(--purple-dark))'), width: '100%', padding: 14, fontSize: 15 }} disabled={loading}>{loading ? 'Ingresando...' : 'Ingresar'}</button>
+            </form>
+          </>
         ) : (
           <form onSubmit={handleChangePw}>
             <div style={{ fontSize: 14, color: 'var(--purple-mid)', marginBottom: 16, textAlign: 'center' }}>Debe cambiar su contraseña</div>

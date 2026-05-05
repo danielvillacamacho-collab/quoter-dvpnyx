@@ -1,9 +1,12 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { serverError } = require('../utils/http');
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 router.post('/login', async (req, res) => {
   try {
@@ -22,6 +25,59 @@ router.post('/login', async (req, res) => {
       [user.id, req.ip]);
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null, must_change_password: user.must_change_password } });
   } catch (err) { serverError(res, 'POST /auth/login', err); }
+});
+
+router.post('/google', async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: 'Token de Google requerido' });
+
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) return res.status(500).json({ error: 'Google OAuth no configurado en el servidor' });
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: clientId,
+    });
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, hd } = payload;
+
+    const allowedDomain = process.env.GOOGLE_ALLOWED_DOMAIN;
+    if (allowedDomain && hd !== allowedDomain) {
+      return res.status(403).json({ error: `Solo cuentas @${allowedDomain} pueden iniciar sesión` });
+    }
+
+    let { rows } = await pool.query(
+      'SELECT * FROM users WHERE google_id=$1 AND active=true', [googleId]
+    );
+
+    if (!rows.length) {
+      ({ rows } = await pool.query(
+        'SELECT * FROM users WHERE email=$1 AND active=true', [email.toLowerCase()]
+      ));
+      if (rows.length) {
+        await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, rows[0].id]);
+      }
+    }
+
+    if (!rows.length) {
+      return res.status(403).json({ error: 'No existe una cuenta asociada a este correo. Contacta al administrador.' });
+    }
+
+    const user = rows[0];
+    const token = jwt.sign(
+      { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null },
+      process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+    );
+    await pool.query(
+      `INSERT INTO audit_log (user_id, action, details, ip_address) VALUES ($1, 'google_login', '{}', $2)`,
+      [user.id, req.ip]
+    );
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null, must_change_password: false },
+    });
+  } catch (err) { serverError(res, 'POST /auth/google', err); }
 });
 
 router.post('/change-password', auth, async (req, res) => {

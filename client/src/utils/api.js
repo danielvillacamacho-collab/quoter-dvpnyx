@@ -20,6 +20,7 @@ export const api = async (path, opts = {}) => {
 };
 
 export const login = (email, password) => api('/auth/login', { method: 'POST', body: { email, password } });
+export const googleLogin = (credential) => api('/auth/google', { method: 'POST', body: { credential } });
 export const getMe = () => api('/auth/me');
 export const changePassword = (current_password, new_password) => api('/auth/change-password', { method: 'POST', body: { current_password, new_password } });
 export const updatePreferences = (patch) => api('/auth/me/preferences', { method: 'PUT', body: patch });
