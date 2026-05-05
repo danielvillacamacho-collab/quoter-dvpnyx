@@ -449,6 +449,7 @@ router.put('/:contract_id/plan', async (req, res) => {
     const contract = cRows[0];
     const isProject = contract.type === 'project';
 
+    // Validación per-entry: rango y formato.
     for (const e of entries) {
       if (isProject) {
         if (e.pct == null || isNaN(Number(e.pct))) {
@@ -458,7 +459,7 @@ router.put('/:contract_id/plan', async (req, res) => {
         const pct = Number(e.pct);
         if (pct < 0 || pct > 1) {
           await conn.query('ROLLBACK');
-          return res.status(400).json({ error: `Entry ${e.yyyymm}: pct debe estar entre 0 y 1` });
+          return res.status(400).json({ error: `Entry ${e.yyyymm}: pct debe estar entre 0 y 1 (avance acumulado a fin de mes)` });
         }
       } else {
         if (e.projected_usd == null || isNaN(Number(e.projected_usd))) {
@@ -469,41 +470,80 @@ router.put('/:contract_id/plan', async (req, res) => {
     }
 
     let warnings = [];
-    if (isProject) {
-      const sumPct = entries.reduce((s, e) => s + Number(e.pct || 0), 0);
-      // RR-MVP-00.4: la suma >100% ahora es bloqueo duro, no warning. Un
-      // proyecto no puede tener avance acumulado mayor al 100% del contrato.
-      if (sumPct > 1.0001) {
-        await conn.query('ROLLBACK');
-        return res.status(400).json({
-          error: `La suma de % declarados es ${(sumPct * 100).toFixed(2)}%. No puede exceder 100%.`,
-          code: 'pct_sum_exceeds_1',
-          sum_pct: sumPct,
-        });
-      }
-    }
-
     const upserted = [];
-    for (const e of entries) {
-      const yyyymm = String(e.yyyymm);
-      const projectedPct = isProject ? Number(e.pct) : null;
-      const projectedUsd = isProject
-        ? Number(e.pct) * totalValue
-        : Number(e.projected_usd);
 
-      const { rows } = await conn.query(
-        `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, projected_pct,
-                                      created_by, updated_by)
-           VALUES ($1, $2, $3::numeric, $4::numeric, $5, $5)
-         ON CONFLICT (contract_id, yyyymm) DO UPDATE SET
-           projected_usd = EXCLUDED.projected_usd,
-           projected_pct = EXCLUDED.projected_pct,
-           updated_by    = EXCLUDED.updated_by,
-           updated_at    = NOW()
-         RETURNING contract_id, yyyymm, projected_usd, projected_pct, real_usd, status`,
-        [contract_id, yyyymm, projectedUsd, projectedPct, req.user.id],
+    if (isProject) {
+      // Modelo de avance ACUMULADO: pct[mes] = avance total a fin de ese mes.
+      // projected_usd[mes] = (pct[mes] - pct[mes_anterior]) × total_value_usd.
+      //
+      // Al guardar, recalculamos TODO el plan del contrato (no solo las
+      // entries enviadas), porque cambiar un mes afecta el delta del mes
+      // siguiente. Esto es lo único que mantiene la consistencia cuando
+      // el editor hace saves parciales o ediciones de meses intermedios.
+      const { rows: existingRows } = await conn.query(
+        `SELECT yyyymm, projected_pct FROM revenue_periods WHERE contract_id=$1`,
+        [contract_id],
       );
-      upserted.push(rows[0]);
+      const merged = new Map(); // yyyymm → projected_pct
+      for (const row of existingRows) {
+        if (row.projected_pct != null) merged.set(String(row.yyyymm), Number(row.projected_pct));
+      }
+      for (const e of entries) merged.set(String(e.yyyymm), Number(e.pct));
+
+      const sorted = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+      // Validar secuencia no decreciente: el avance acumulado nunca retrocede.
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i][1] < sorted[i - 1][1] - 1e-6) {
+          await conn.query('ROLLBACK');
+          return res.status(400).json({
+            error: `Mes ${sorted[i][0]}: avance acumulado ${(sorted[i][1] * 100).toFixed(2)}% no puede ser menor que el de ${sorted[i - 1][0]} (${(sorted[i - 1][1] * 100).toFixed(2)}%).`,
+            code: 'pct_not_monotonic',
+          });
+        }
+      }
+
+      // Calcular y persistir projected_usd como delta entre meses.
+      let prevPct = 0;
+      const enteredYyyymms = new Set(entries.map((e) => String(e.yyyymm)));
+      for (const [yyyymm, pct] of sorted) {
+        const projectedUsd = (pct - prevPct) * totalValue;
+        const { rows } = await conn.query(
+          `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, projected_pct,
+                                        created_by, updated_by)
+             VALUES ($1, $2, $3::numeric, $4::numeric, $5, $5)
+           ON CONFLICT (contract_id, yyyymm) DO UPDATE SET
+             projected_usd = EXCLUDED.projected_usd,
+             projected_pct = EXCLUDED.projected_pct,
+             updated_by    = EXCLUDED.updated_by,
+             updated_at    = NOW()
+           RETURNING contract_id, yyyymm, projected_usd, projected_pct, real_usd, status`,
+          [contract_id, yyyymm, projectedUsd, pct, req.user.id],
+        );
+        // Solo devolver los meses tocados explícitamente por el caller en el
+        // payload — los recalculados por delta son side-effect interno.
+        if (enteredYyyymms.has(yyyymm)) upserted.push(rows[0]);
+        prevPct = pct;
+      }
+    } else {
+      // No-project: projected_usd directo, sin recalculos.
+      for (const e of entries) {
+        const yyyymm = String(e.yyyymm);
+        const projectedUsd = Number(e.projected_usd);
+        const { rows } = await conn.query(
+          `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, projected_pct,
+                                        created_by, updated_by)
+             VALUES ($1, $2, $3::numeric, NULL, $4, $4)
+           ON CONFLICT (contract_id, yyyymm) DO UPDATE SET
+             projected_usd = EXCLUDED.projected_usd,
+             projected_pct = NULL,
+             updated_by    = EXCLUDED.updated_by,
+             updated_at    = NOW()
+           RETURNING contract_id, yyyymm, projected_usd, projected_pct, real_usd, status`,
+          [contract_id, yyyymm, projectedUsd, req.user.id],
+        );
+        upserted.push(rows[0]);
+      }
     }
 
     await conn.query(
@@ -579,40 +619,69 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
     let finalRealUsd = existing[0].real_usd != null ? Number(existing[0].real_usd) : null;
 
     if (isProject) {
+      // Modelo de avance ACUMULADO: real_pct = avance total real a fin del mes.
+      // real_usd = (real_pct[mes] - real_pct[mes_anterior]) × total_value_usd.
+      // El "mes anterior" es el período cronológicamente menor con real_pct
+      // declarado (no necesariamente yyyymm−1, porque puede haber huecos).
       const realPctProvided = Object.prototype.hasOwnProperty.call(body, 'real_pct');
       const realUsdProvidedFallback = Object.prototype.hasOwnProperty.call(body, 'real_usd');
       if (realPctProvided) {
         const v = body.real_pct == null ? null : Number(body.real_pct);
         if (v != null && (isNaN(v) || v < 0 || v > 1)) {
           await conn.query('ROLLBACK');
-          return res.status(400).json({ error: 'real_pct debe estar entre 0 y 1' });
+          return res.status(400).json({ error: 'real_pct debe estar entre 0 y 1 (avance acumulado a fin de mes)' });
         }
         finalRealPct = v;
-        const totalValue = Number(contract.total_value_usd || 0);
-        finalRealUsd = v == null ? null : v * totalValue;
+        // real_usd se calcula al final junto con el recálculo de meses afectados.
+        finalRealUsd = null; // placeholder, se asigna abajo
       } else if (realUsdProvidedFallback) {
         // Fallback legacy: si llega real_usd directo, lo guardamos sin
         // tocar real_pct. No lo recomendamos para project pero no rompemos.
         finalRealUsd = body.real_usd == null ? null : Number(body.real_usd);
       }
-      // Validación cumulative: la suma de real_pct (incluyendo el nuevo) no
-      // puede exceder 100% de avance del proyecto.
+      // Validar secuencia no decreciente: el real_pct de este mes no puede
+      // ser menor que el del mes anterior con datos, ni mayor que el del
+      // siguiente con datos. Y recalcular real_usd de este mes y los
+      // posteriores cuyos deltas cambian al cambiar este pct.
       if (finalRealPct != null) {
-        const { rows: sumRows } = await conn.query(
-          `SELECT COALESCE(SUM(real_pct), 0)::numeric AS sum_pct
-             FROM revenue_periods
-            WHERE contract_id=$1 AND yyyymm <> $2 AND real_pct IS NOT NULL`,
+        const { rows: otherRows } = await conn.query(
+          `SELECT yyyymm, real_pct FROM revenue_periods
+            WHERE contract_id=$1 AND yyyymm <> $2 AND real_pct IS NOT NULL
+            ORDER BY yyyymm ASC`,
           [contract_id, yyyymm],
         );
-        const otherSum = Number(sumRows[0].sum_pct);
-        const newSum = otherSum + finalRealPct;
-        if (newSum > 1.0001) {
-          await conn.query('ROLLBACK');
-          return res.status(400).json({
-            error: `La suma de % real declarados sería ${(newSum * 100).toFixed(2)}%. No puede exceder 100%.`,
-            code: 'real_pct_sum_exceeds_1',
-            sum_pct: newSum,
-          });
+        const merged = new Map(otherRows.map((r) => [String(r.yyyymm), Number(r.real_pct)]));
+        merged.set(yyyymm, finalRealPct);
+        const sorted = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+        for (let i = 1; i < sorted.length; i++) {
+          if (sorted[i][1] < sorted[i - 1][1] - 1e-6) {
+            await conn.query('ROLLBACK');
+            return res.status(400).json({
+              error: `Mes ${sorted[i][0]}: real acumulado ${(sorted[i][1] * 100).toFixed(2)}% no puede ser menor que el de ${sorted[i - 1][0]} (${(sorted[i - 1][1] * 100).toFixed(2)}%).`,
+              code: 'real_pct_not_monotonic',
+            });
+          }
+        }
+        // Persistir real_usd recalculado para este mes y los meses cuyos deltas
+        // cambiaron por el nuevo valor (cualquier mes posterior con real_pct).
+        const totalValue = Number(contract.total_value_usd || 0);
+        let prevPct = 0;
+        for (const [m, pct] of sorted) {
+          const realUsd = (pct - prevPct) * totalValue;
+          if (m === yyyymm) {
+            finalRealUsd = realUsd;
+          } else {
+            // Solo updatear los que cambiaron; los demás meses permanecen.
+            await conn.query(
+              `UPDATE revenue_periods
+                  SET real_usd = $3::numeric,
+                      updated_by = $4,
+                      updated_at = NOW()
+                WHERE contract_id=$1 AND yyyymm=$2`,
+              [contract_id, m, realUsd, req.user.id],
+            );
+          }
+          prevPct = pct;
         }
       }
     } else {

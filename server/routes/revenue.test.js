@@ -227,19 +227,24 @@ describe('GET/PUT /api/revenue/:contract_id/plan (RR-MVP-00.2)', () => {
     expect(res.status).toBe(400);
   });
 
-  it('PUT plan for project: validates pct required + computes projected_usd from total_value_usd', async () => {
+  it('PUT plan for project: pct = avance acumulado, projected_usd = (pct - pct_anterior) × total', async () => {
     queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
+    queryQueue.push({ rows: [] }); // SELECT existing periods (vacío, primera vez)
     queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 20000, projected_pct: 0.2 }] });
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', projected_usd: 50000, projected_pct: 0.5 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', projected_usd: 30000, projected_pct: 0.5 }] });
     queryQueue.push({ rows: [] }); // audit_log
     const res = await client.call('PUT', '/api/revenue/k1/plan', {
       entries: [{ yyyymm: '202602', pct: 0.2 }, { yyyymm: '202603', pct: 0.5 }],
     });
     expect(res.status).toBe(200);
     expect(res.body.entries).toHaveLength(2);
-    // The INSERT call sent projected_usd = pct × total_value_usd = 0.2 × 100000 = 20000
-    const insert1 = issuedQueries.find((q) => q.sql.includes('INSERT INTO revenue_periods'));
-    expect(insert1.params[2]).toBe(20000);
+    // Modelo acumulado:
+    //   mes 1: pct=0.2 acumulado → delta = 0.2 - 0 = 0.2 → projected_usd = 20000
+    //   mes 2: pct=0.5 acumulado → delta = 0.5 - 0.2 = 0.3 → projected_usd = 30000
+    const inserts = issuedQueries.filter((q) => q.sql.includes('INSERT INTO revenue_periods'));
+    expect(inserts).toHaveLength(2);
+    expect(inserts[0].params[2]).toBe(20000);  // delta del primer mes
+    expect(inserts[1].params[2]).toBeCloseTo(30000, 4); // delta del segundo mes
   });
 
   it('PUT plan for project: rejects pct out of range', async () => {
@@ -265,6 +270,7 @@ describe('GET/PUT /api/revenue/:contract_id/plan (RR-MVP-00.2)', () => {
   it('RR-MVP-00.3: PUT plan also updates contracts.total_value_usd + original_currency when sent in body', async () => {
     queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 0, original_currency: 'USD' }] });
     queryQueue.push({ rows: [] }); // UPDATE contracts
+    queryQueue.push({ rows: [] }); // SELECT existing periods (vacío)
     queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 30000, projected_pct: 0.3 }] });
     queryQueue.push({ rows: [] }); // audit_log
     const res = await client.call('PUT', '/api/revenue/k1/plan', {
@@ -275,7 +281,7 @@ describe('GET/PUT /api/revenue/:contract_id/plan (RR-MVP-00.2)', () => {
     expect(res.status).toBe(200);
     expect(res.body.contract.total_value_usd).toBe(100000);
     expect(res.body.contract.original_currency).toBe('COP');
-    // INSERT projected_usd computed from NEW total_value_usd: 0.3 × 100000 = 30000
+    // Modelo acumulado, primer y único mes: delta = 0.3 - 0 = 0.3 → 30000.
     const insertCall = issuedQueries.find((q) => q.sql.includes('INSERT INTO revenue_periods'));
     expect(insertCall.params[2]).toBe(30000);
     const updateContract = issuedQueries.find((q) => q.sql.includes('UPDATE contracts SET total_value_usd'));
@@ -293,14 +299,36 @@ describe('GET/PUT /api/revenue/:contract_id/plan (RR-MVP-00.2)', () => {
     expect(res.body.error).toMatch(/total_value_usd/);
   });
 
-  it('RR-MVP-00.4: PUT plan for project BLOCKS (400) when pct sum exceeds 1', async () => {
+  it('PUT plan for project BLOCKS (400) when avance acumulado retrocede entre meses', async () => {
     queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000, original_currency: 'USD' }] });
+    queryQueue.push({ rows: [] }); // SELECT existing periods (vacío)
+    // 0.7 (mes 1) → 0.6 (mes 2): el avance acumulado retrocede de 70% a 60%.
     const res = await client.call('PUT', '/api/revenue/k1/plan', {
       entries: [{ yyyymm: '202602', pct: 0.7 }, { yyyymm: '202603', pct: 0.6 }],
     });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('pct_sum_exceeds_1');
-    expect(res.body.error).toMatch(/100%/);
+    expect(res.body.code).toBe('pct_not_monotonic');
+  });
+
+  it('PUT plan for project: avance acumulado válido (no decrece) se acepta', async () => {
+    queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000, original_currency: 'USD' }] });
+    queryQueue.push({ rows: [] }); // SELECT existing periods (vacío)
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', projected_usd: 20000, projected_pct: 0.2 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', projected_usd: 30000, projected_pct: 0.5 }] });
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202604', projected_usd: 50000, projected_pct: 1.0 }] });
+    queryQueue.push({ rows: [] }); // audit_log
+    const res = await client.call('PUT', '/api/revenue/k1/plan', {
+      entries: [
+        { yyyymm: '202602', pct: 0.2 },
+        { yyyymm: '202603', pct: 0.5 },
+        { yyyymm: '202604', pct: 1.0 },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // Deltas: 0.2, 0.3, 0.5 → 20k, 30k, 50k. Suma = 100k = total contrato.
+    const inserts = issuedQueries.filter((q) => q.sql.includes('INSERT INTO revenue_periods'));
+    const totalUsd = inserts.reduce((s, q) => s + q.params[2], 0);
+    expect(totalUsd).toBeCloseTo(100000, 4);
   });
 });
 
@@ -339,11 +367,12 @@ describe('POST /api/revenue/:contract_id/:yyyymm/close', () => {
   it('RR-MVP-00.5: closes a project period using real_pct, derives real_usd', async () => {
     queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
     queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, real_pct: null, status: 'open' }] });
+    queryQueue.push({ rows: [] }); // SELECT otros meses con real_pct (vacío, primer cierre)
     queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: 30000, real_pct: 0.3, status: 'closed' }] });
     queryQueue.push({ rows: [] });
     const res = await client.call('POST', '/api/revenue/k1/202602/close', { real_pct: 0.3 });
     expect(res.status).toBe(200);
-    // The UPDATE was issued with real_usd = 0.3 × 100000 = 30000, real_pct = 0.3
+    // Modelo acumulado, primer cierre, prev=0 → delta = 0.3 → real_usd = 30000.
     const update = issuedQueries.find((q) => q.sql.includes('UPDATE revenue_periods SET') && q.sql.includes("status='closed'"));
     expect(update.params[2]).toBe(30000);
     expect(update.params[3]).toBe(0.3);
@@ -359,28 +388,31 @@ describe('RR-MVP-00.5: PUT real_pct for project contracts', () => {
     expect(res.body.error).toMatch(/real_pct/);
   });
 
-  it('blocks (400) when cumulative SUM(real_pct) would exceed 1', async () => {
+  it('blocks (400) when avance real acumulado retrocede entre meses', async () => {
     queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
     queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', real_usd: null, real_pct: null, status: 'open' }] });
-    queryQueue.push({ rows: [{ sum_pct: 0.8 }] }); // existing other months sum to 80%
-    const res = await client.call('PUT', '/api/revenue/k1/202603', { real_pct: 0.3 }); // 0.8 + 0.3 = 1.1
+    queryQueue.push({ rows: [{ yyyymm: '202604', real_pct: 0.8 }] }); // mes posterior ya tiene 80% acumulado
+    // 0.3 en marzo es < 0.8 en abril → retrocede en el tiempo, no permitido.
+    const res = await client.call('PUT', '/api/revenue/k1/202603', { real_pct: 0.9 }); // 0.9 mar > 0.8 abr → retrocede después
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('real_pct_sum_exceeds_1');
+    expect(res.body.code).toBe('real_pct_not_monotonic');
   });
 
-  it('happy path: persists real_pct + derived real_usd', async () => {
+  it('happy path: persists real_pct + delta-derived real_usd', async () => {
     queryQueue.push({ rows: [{ id: 'k1', type: 'project', total_value_usd: 100000 }] });
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: null, real_pct: null, status: 'open' }] });
-    queryQueue.push({ rows: [{ sum_pct: 0.4 }] }); // other months sum to 40%
-    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202602', real_usd: 30000, real_pct: 0.3, status: 'open' }] }); // UPDATE
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', real_usd: null, real_pct: null, status: 'open' }] });
+    // Mes anterior tiene 0.4 acumulado declarado; este mes va a 0.7 acumulado.
+    queryQueue.push({ rows: [{ yyyymm: '202602', real_pct: 0.4 }] });
+    // El código recalcula real_usd de TODOS los meses afectados (idempotente).
+    // Mes anterior (202602): UPDATE con realUsd = 0.4 × 100000 = 40000.
+    queryQueue.push({ rows: [] }); // UPDATE 202602 (lateral re-cómputo)
+    // Mes actual: UPDATE final que retorna la fila.
+    queryQueue.push({ rows: [{ contract_id: 'k1', yyyymm: '202603', real_usd: 30000, real_pct: 0.7, status: 'open' }] });
     queryQueue.push({ rows: [] }); // audit_log
-    const res = await client.call('PUT', '/api/revenue/k1/202602', { real_pct: 0.3 });
+    const res = await client.call('PUT', '/api/revenue/k1/202603', { real_pct: 0.7 });
     expect(res.status).toBe(200);
-    expect(res.body.real_pct).toBe(0.3);
-    expect(res.body.real_usd).toBe(30000);
-    const update = issuedQueries.find((q) => q.sql.includes('UPDATE revenue_periods SET') && q.sql.includes("real_pct"));
-    // params: [contract_id, yyyymm, real_usd, real_pct, notes, user_id]
-    expect(update.params[2]).toBe(30000);
-    expect(update.params[3]).toBe(0.3);
+    expect(res.body.real_pct).toBe(0.7);
+    // Modelo acumulado: delta = 0.7 - 0.4 = 0.3 → real_usd del mes = 30000 (NO 70000).
+    expect(res.body.real_usd).toBeCloseTo(30000, 4);
   });
 });
