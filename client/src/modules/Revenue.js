@@ -221,7 +221,7 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
                 aria-label={`Real ${yyyymm}`}
                 title={!planExists
                   ? 'Declara primero el plan de reconocimiento del contrato'
-                  : (isProject ? 'Avance del proyecto este mes (0-100%)' : `Monto real en ${ccyOrig}`)}
+                  : (isProject ? 'Avance acumulado del proyecto a fin de mes (0-100%). El revenue del mes se calcula como (este % − % del mes anterior) × valor del contrato.' : `Monto real en ${ccyOrig}`)}
               />
               {planExists && (
                 <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
