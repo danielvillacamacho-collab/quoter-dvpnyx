@@ -256,3 +256,59 @@ describe('GET /api/reports/plan-vs-real (EI-8)', () => {
     expect(lines.find((l) => l.assignment_id === 'a-under').status).toBe('under');
   });
 });
+
+describe('GET /api/reports/deviations', () => {
+  it('person view: casts employee_ids as uuid[] and returns shape', async () => {
+    queryQueue.push({ rows: [
+      { id: 'e1', employee_name: 'Ana G', area_name: 'Desarrollo', level: 'L4' },
+    ]});
+    queryQueue.push({ rows: [
+      { employee_id: 'e1', weekly_hours: 40, start_date: new Date('2026-05-01'), end_date: new Date('2026-05-31') },
+    ]});
+    queryQueue.push({ rows: [
+      { employee_id: 'e1', total_hours: '120' },
+    ]});
+    const res = await client.call('GET', '/api/reports/deviations?from=2026-05-01&to=2026-05-31&group_by=person');
+    expect(res.status).toBe(200);
+    expect(issuedQueries[1].sql).toMatch(/asg\.employee_id = ANY\(\$1::uuid\[\]\)/);
+    expect(issuedQueries[2].sql).toMatch(/te\.employee_id = ANY\(\$1::uuid\[\]\)/);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ employee_id: 'e1', actual_hours: 120 });
+  });
+
+  it('project view: uses uuid[] and joins assignments for actual hours', async () => {
+    queryQueue.push({ rows: [
+      { id: 'c1', contract_name: 'Project A', client_name: 'Client X' },
+    ]});
+    queryQueue.push({ rows: [
+      { contract_id: 'c1', weekly_hours: 20, start_date: new Date('2026-05-01'), end_date: new Date('2026-05-31') },
+    ]});
+    queryQueue.push({ rows: [
+      { contract_id: 'c1', total_hours: '50' },
+    ]});
+    const res = await client.call('GET', '/api/reports/deviations?from=2026-05-01&to=2026-05-31&group_by=project');
+    expect(res.status).toBe(200);
+    // Assignments query must use uuid[] (was the source of "operator does not exist: uuid = integer")
+    expect(issuedQueries[1].sql).toMatch(/asg\.contract_id = ANY\(\$1::uuid\[\]\)/);
+    // time_entries does not have contract_id; must come via JOIN assignments
+    expect(issuedQueries[2].sql).toMatch(/JOIN assignments asg ON asg\.id = te\.assignment_id/);
+    expect(issuedQueries[2].sql).toMatch(/asg\.contract_id = ANY\(\$1::uuid\[\]\)/);
+    expect(issuedQueries[2].sql).not.toMatch(/te\.contract_id/);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0]).toMatchObject({ contract_id: 'c1', actual_hours: 50 });
+  });
+
+  it('person view: contract_id filter joins assignments for time_entries (no te.contract_id)', async () => {
+    queryQueue.push({ rows: [
+      { id: 'e1', employee_name: 'Ana G', area_name: null, level: null },
+    ]});
+    queryQueue.push({ rows: [] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/reports/deviations?group_by=person&contract_id=c1');
+    expect(issuedQueries[2].sql).toMatch(/JOIN assignments asg ON asg\.id = te\.assignment_id/);
+    expect(issuedQueries[2].sql).toMatch(/asg\.contract_id = \$\d+::uuid/);
+    expect(issuedQueries[2].sql).not.toMatch(/te\.contract_id/);
+    // contract_id must be passed as string (UUID), not coerced to NaN via Number()
+    expect(issuedQueries[2].params).toContain('c1');
+  });
+});

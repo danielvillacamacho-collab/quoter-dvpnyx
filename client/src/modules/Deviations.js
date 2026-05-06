@@ -223,6 +223,7 @@ export default function Deviations() {
       }
     } catch (ex) {
       setErr(ex.message || 'Error al cargar datos');
+      setRows([]);
     } finally {
       setLoading(false);
     }
