@@ -2523,6 +2523,33 @@ const SPEC_EMP_00_SQL = `
   ON CONFLICT (LOWER(name)) DO NOTHING;
 `;
 
+// ── SPEC-RM-00 — Resource Management: locks + bulk assignments ──────
+const SPEC_RM_00_SQL = `
+  -- assignment_locks: tracks which (employee, week) pairs are locked
+  CREATE TABLE IF NOT EXISTS assignment_locks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id UUID NOT NULL REFERENCES employees(id),
+    week_starting DATE NOT NULL,
+    locked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    locked_by UUID NULL REFERENCES users(id),
+    lock_reason VARCHAR(40) NOT NULL DEFAULT 'time_entries_submitted'
+      CHECK (lock_reason IN ('time_entries_submitted','period_closed','manual_lock')),
+    unlocked_at TIMESTAMPTZ NULL,
+    unlocked_by UUID NULL REFERENCES users(id),
+    CONSTRAINT uq_assignment_lock UNIQUE (employee_id, week_starting)
+  );
+  CREATE INDEX IF NOT EXISTS idx_al_employee_week
+    ON assignment_locks (employee_id, week_starting) WHERE unlocked_at IS NULL;
+
+  -- Extend assignments with lock tracking
+  ALTER TABLE assignments ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE;
+
+  -- Performance index for planner bulk queries
+  CREATE INDEX IF NOT EXISTS idx_asg_employee_dates_status
+    ON assignments (employee_id, start_date, end_date, status)
+    WHERE deleted_at IS NULL AND status IN ('planned','active');
+`;
+
 const migrate = async () => {
   let client;
   try {
@@ -2545,6 +2572,7 @@ const migrate = async () => {
       ['ASSIGNMENT_RATES',         ASSIGNMENT_RATES_SQL],
       ['GOOGLE_OAUTH',             GOOGLE_OAUTH_SQL],
       ['SPEC_EMP_00',              SPEC_EMP_00_SQL],
+      ['SPEC_RM_00',               SPEC_RM_00_SQL],
     ];
     for (const [label, sql] of blocks) {
       try {

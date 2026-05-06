@@ -102,13 +102,97 @@ function exportCSV(rows, groupBy) {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+function WeeklyBreakdownTable({ data, groupBy }) {
+  const { weeks, rows, summary } = data;
+  if (!rows || rows.length === 0) {
+    return <div style={{ textAlign: 'center', padding: 40, color: 'var(--ds-text-soft)' }}>Sin datos semanales.</div>;
+  }
+
+  const weekLabels = (weeks || []).map((w) => {
+    const d = new Date(w + 'T00:00:00Z');
+    return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  });
+
+  const mono = { fontFamily: 'var(--font-mono, monospace)', fontFeatureSettings: "'tnum'" };
+
+  return (
+    <div>
+      {summary && (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12, fontSize: 12 }}>
+          <span>En plan: <strong>{summary.employees_on_plan ?? 0}</strong></span>
+          <span style={{ color: 'var(--ds-warn)' }}>Sobre plan: <strong>{summary.employees_over_plan ?? 0}</strong></span>
+          <span style={{ color: 'var(--ds-danger)' }}>Bajo plan: <strong>{summary.employees_under_plan ?? 0}</strong></span>
+          <span style={mono}>Total: {fmtHours(summary.total_actual_hours)} / {fmtHours(summary.total_planned_hours)} ({fmtPct(summary.total_variance_pct)})</span>
+        </div>
+      )}
+      <div className="table-wrapper">
+        <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={th}>{groupBy === 'person' ? 'Empleado' : 'Contrato'}</th>
+              {weekLabels.map((lbl, i) => (
+                <th key={i} style={{ ...th, textAlign: 'center', fontSize: 11, minWidth: 80 }}>
+                  S{i + 1}<br /><span style={{ fontWeight: 400, fontSize: 10 }}>{lbl}</span>
+                </th>
+              ))}
+              <th style={{ ...th, textAlign: 'right' }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const key = groupBy === 'person' ? row.employee_id : row.contract_id;
+              const label = groupBy === 'person' ? row.employee_name : row.contract_name;
+              const totalVar = row.totals?.variance_pct ?? 0;
+              return (
+                <tr key={key}>
+                  <td style={{ ...td, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    {label}
+                    {groupBy === 'person' && row.area_name && (
+                      <span style={{ fontWeight: 400, fontSize: 11, color: 'var(--ds-text-dim)', marginLeft: 6 }}>{row.area_name}</span>
+                    )}
+                  </td>
+                  {(weeks || []).map((w, i) => {
+                    const wk = row.weeks?.[w];
+                    if (!wk) return <td key={i} style={{ ...td, textAlign: 'center', color: 'var(--ds-text-dim)' }}>—</td>;
+                    const vPct = wk.variance_pct ?? 0;
+                    const color = deviationColor(vPct);
+                    const bg = deviationBg(vPct);
+                    return (
+                      <td key={i} style={{ ...td, textAlign: 'center', background: bg, ...mono, fontSize: 12 }}>
+                        <span style={{ color, fontWeight: 600 }}>{fmtHours(wk.actual_hours)}</span>
+                        <br />
+                        <span style={{ fontSize: 10, color: 'var(--ds-text-dim)' }}>{fmtHours(wk.planned_hours)}</span>
+                      </td>
+                    );
+                  })}
+                  <td style={{ ...td, textAlign: 'right', ...mono }}>
+                    <span style={{ color: deviationColor(totalVar), fontWeight: 600 }}>
+                      {fmtPct(totalVar)}
+                    </span>
+                    <br />
+                    <span style={{ fontSize: 11, color: 'var(--ds-text-dim)' }}>
+                      {fmtHours(row.totals?.actual ?? 0)} / {fmtHours(row.totals?.planned ?? 0)}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function Deviations() {
   const [groupBy, setGroupBy] = useState('person');
+  const [viewMode, setViewMode] = useState('aggregate'); // 'aggregate' | 'weekly'
   const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState(defaultTo);
   const [areaId, setAreaId] = useState('');
   const [areas, setAreas] = useState([]);
   const [rows, setRows] = useState([]);
+  const [weeklyData, setWeeklyData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
 
@@ -124,16 +208,25 @@ export default function Deviations() {
     setLoading(true);
     setErr('');
     try {
-      const params = new URLSearchParams({ from, to, group_by: groupBy });
-      if (areaId) params.set('area_id', areaId);
-      const res = await apiGet(`/api/reports/deviations?${params}`);
-      setRows(res?.data || []);
+      if (viewMode === 'weekly') {
+        const params = new URLSearchParams({ week_from: from, week_to: to, group_by: groupBy });
+        if (areaId) params.set('area_id', areaId);
+        const res = await apiGet(`/api/rm/deviations/weekly?${params}`);
+        setWeeklyData(res);
+        setRows([]);
+      } else {
+        const params = new URLSearchParams({ from, to, group_by: groupBy });
+        if (areaId) params.set('area_id', areaId);
+        const res = await apiGet(`/api/reports/deviations?${params}`);
+        setRows(res?.data || []);
+        setWeeklyData(null);
+      }
     } catch (ex) {
       setErr(ex.message || 'Error al cargar datos');
     } finally {
       setLoading(false);
     }
-  }, [from, to, groupBy, areaId]);
+  }, [from, to, groupBy, areaId, viewMode]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -155,6 +248,13 @@ export default function Deviations() {
           <div style={{ display: 'flex', gap: 4 }}>
             <button style={ds.toggle(groupBy === 'person')} onClick={() => setGroupBy('person')}>Por persona</button>
             <button style={ds.toggle(groupBy === 'project')} onClick={() => setGroupBy('project')}>Por proyecto</button>
+          </div>
+        </div>
+        <div>
+          <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--ds-text-dim)', display: 'block', marginBottom: 4 }}>Detalle</label>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button style={ds.toggle(viewMode === 'aggregate')} onClick={() => setViewMode('aggregate')}>Agregado</button>
+            <button style={ds.toggle(viewMode === 'weekly')} onClick={() => setViewMode('weekly')}>Semanal</button>
           </div>
         </div>
         <div>
@@ -208,6 +308,8 @@ export default function Deviations() {
         {err && <div style={{ color: 'var(--ds-danger, #dc2626)', marginBottom: 12 }}>{err}</div>}
         {loading ? (
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--ds-text-soft)' }}>Cargando...</div>
+        ) : viewMode === 'weekly' ? (
+          weeklyData ? <WeeklyBreakdownTable data={weeklyData} groupBy={groupBy} /> : <div style={{ textAlign: 'center', padding: 40, color: 'var(--ds-text-soft)' }}>Sin datos semanales.</div>
         ) : rows.length === 0 ? (
           <div style={{ textAlign: 'center', padding: 40, color: 'var(--ds-text-soft)' }}>Sin datos para el periodo seleccionado.</div>
         ) : (
