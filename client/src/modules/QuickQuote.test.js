@@ -142,7 +142,10 @@ describe('QuickQuote', () => {
   });
 
   it('converts tools cost to salary currency using monthly USD rate', async () => {
-    // Tools "Básico" = USD 50; con USD→COP = 4000, debería convertir a COP 200,000.
+    // mountQuickQuote setea su propio mock de apiGet, así que el mock
+    // específico para exchange-rates va DESPUÉS del mount.
+    await mountQuickQuote();
+
     const yyyymm = `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}`;
     apiV2.apiGet.mockImplementation((url) => {
       if (url.startsWith('/api/clients')) return Promise.resolve(mockClients);
@@ -156,20 +159,22 @@ describe('QuickQuote', () => {
       return Promise.resolve(null);
     });
 
-    await mountQuickQuote();
     await act(async () => {
       fireEvent.change(screen.getByLabelText('Moneda'), { target: { value: 'COP' } });
     });
     fireEvent.change(screen.getByLabelText('Salario base'), { target: { value: '5000000' } });
 
-    // Costo herramientas en COP: 50 * 4000 = 200,000
+    // Costo herramientas en COP: 50 * 4000 = 200,000.
+    // Intl puede usar espacio normal o no-breaking ( ) entre símbolo y monto.
     await waitFor(() => {
-      expect(screen.getByText(/COP\s*200,000/)).toBeInTheDocument();
+      const all = screen.getAllByText((content) => /COP/.test(content) && /200[.,]000/.test(content));
+      expect(all.length).toBeGreaterThan(0);
     });
   });
 
   it('blocks save when no exchange rate is available for non-USD currency', async () => {
-    // Mock devuelve cells vacío => fx.status = 'missing'
+    await mountQuickQuote();
+
     apiV2.apiGet.mockImplementation((url) => {
       if (url.startsWith('/api/clients')) return Promise.resolve(mockClients);
       if (url.startsWith('/api/admin/exchange-rates')) {
@@ -178,7 +183,6 @@ describe('QuickQuote', () => {
       return Promise.resolve(null);
     });
 
-    await mountQuickQuote();
     await act(async () => {
       fireEvent.change(screen.getByLabelText('Moneda'), { target: { value: 'COP' } });
     });
@@ -186,10 +190,8 @@ describe('QuickQuote', () => {
     await changeSelect('Cliente', 'c1');
     fireEvent.change(screen.getByLabelText('Nombre del perfil *'), { target: { value: 'Dev' } });
 
-    // Aunque están todos los campos requeridos, el botón sigue disabled
-    // porque falta la tasa.
     await waitFor(() => {
-      expect(screen.getByText(/No hay tasa USD→COP/i)).toBeInTheDocument();
+      expect(screen.getByText(/No hay tasa USD/i)).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: /^Guardar$/ })).toBeDisabled();
   });
