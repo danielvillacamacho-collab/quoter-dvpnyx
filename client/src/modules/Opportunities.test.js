@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import Opportunities from './Opportunities';
 import * as apiV2 from '../utils/apiV2';
+import { changeSelect } from '../utils/testHelpers';
 
 jest.mock('../utils/apiV2');
 
@@ -59,15 +60,20 @@ describe('Opportunities module', () => {
     await screen.findByText('Proyecto Atlas');
     const clientFilter = screen.getByLabelText('Filtro por cliente');
     expect(clientFilter).toBeInTheDocument();
-    // Client option from loadClients mock
-    expect(clientFilter.querySelector('option[value="c1"]')).not.toBeNull();
+    // Open the dropdown and verify the client option is present
+    fireEvent.click(clientFilter);
+    await waitFor(() => {
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      expect(listbox.querySelector('[data-value="c1"]')).not.toBeNull();
+    });
   });
 
   it('filters by status and refetches', async () => {
     mount();
     await screen.findByText('Proyecto Atlas');
     apiV2.apiGet.mockClear();
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'closed_won' } });
+    await changeSelect('Filtro por estado', 'closed_won');
     await waitFor(() => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes('status=closed_won'))).toBe(true);
@@ -87,15 +93,18 @@ describe('Opportunities module', () => {
     apiV2.apiPost.mockResolvedValue({ id: 'o-new' });
     mount();
     await screen.findByText('Proyecto Atlas');
-    // Wait for the clients dropdown to populate before opening the form,
-    // otherwise setting the client_id select to 'c1' is a no-op (option missing).
+    // Wait for the clients dropdown to populate before opening the form
+    const clientFilterInput = screen.getByLabelText('Filtro por cliente');
+    fireEvent.click(clientFilterInput);
     await waitFor(() => {
-      const filter = screen.getByLabelText('Filtro por cliente');
-      expect(filter.querySelector('option[value="c1"]')).not.toBeNull();
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      expect(listbox.querySelector('[data-value="c1"]')).not.toBeNull();
     });
+    fireEvent.keyDown(clientFilterInput, { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: /Nueva Oportunidad/i }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
+    await changeSelect('Cliente', 'c1');
     // Inside the dialog the first textbox is the name input; the second is the
     // description textarea. Scope to dialog so page-level filter inputs don't leak in.
     const nameInput = within(dialog).getAllByRole('textbox')[0];
@@ -178,7 +187,7 @@ describe('Opportunities module', () => {
       expect(within(dialog).getByRole('alert')).toHaveTextContent(/razón de pérdida/i),
     );
     // pick reason but submit with short detail → exige 30 chars
-    fireEvent.change(within(dialog).getByLabelText('Razón de pérdida'), { target: { value: 'competitor_won' } });
+    await changeSelect('Razón de pérdida', 'competitor_won');
     fireEvent.change(within(dialog).getByLabelText('Descripción detallada de la pérdida'), {
       target: { value: 'corto' },
     });
@@ -250,15 +259,19 @@ describe('Opportunities module', () => {
     fireEvent.click(screen.getByLabelText('Mover Proyecto Atlas a Ganada'));
     const dialog = await screen.findByRole('dialog');
     // wait for quotations to load — the q1 option only appears after the /api/opportunities/o1 fetch resolves
+    const quotSelect = within(dialog).getByLabelText('Cotización ganadora');
+    fireEvent.click(quotSelect);
     await waitFor(() => {
-      const select = within(dialog).getByLabelText('Cotización ganadora');
-      expect(select.querySelector('option[value="q1"]')).not.toBeNull();
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      expect(listbox.querySelector('[data-value="q1"]')).not.toBeNull();
     });
+    fireEvent.keyDown(quotSelect, { key: 'Escape' });
     // submit without selection → validation error
     fireEvent.submit(within(dialog).getByRole('button', { name: /Confirmar/i }).closest('form'));
     await waitFor(() => expect(within(dialog).getByText(/Selecciona cotización ganadora/i)).toBeInTheDocument());
     // pick and confirm
-    fireEvent.change(within(dialog).getByLabelText('Cotización ganadora'), { target: { value: 'q1' } });
+    await changeSelect('Cotización ganadora', 'q1');
     fireEvent.click(within(dialog).getByRole('button', { name: /Confirmar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
@@ -273,10 +286,15 @@ describe('Opportunities module', () => {
     const openCreateModal = async () => {
       mount();
       await screen.findByText('Proyecto Atlas');
+      // Wait for the clients dropdown to populate
+      const clientFilterInput = screen.getByLabelText('Filtro por cliente');
+      fireEvent.click(clientFilterInput);
       await waitFor(() => {
-        const filter = screen.getByLabelText('Filtro por cliente');
-        expect(filter.querySelector('option[value="c1"]')).not.toBeNull();
+        const listbox = document.querySelector('[role="listbox"]');
+        expect(listbox).not.toBeNull();
+        expect(listbox.querySelector('[data-value="c1"]')).not.toBeNull();
       });
+      fireEvent.keyDown(clientFilterInput, { key: 'Escape' });
       fireEvent.click(screen.getByRole('button', { name: /Nueva Oportunidad/i }));
       return await screen.findByRole('dialog');
     };
@@ -296,9 +314,9 @@ describe('Opportunities module', () => {
     it('tipo de contrato se envía como contract_type al guardar', async () => {
       apiV2.apiPost.mockResolvedValue({ id: 'o-new' });
       const dialog = await openCreateModal();
-      fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
+      await changeSelect('Cliente', 'c1');
       fireEvent.change(within(dialog).getAllByRole('textbox')[0], { target: { value: 'Resell Deal' } });
-      fireEvent.change(within(dialog).getByLabelText('Tipo de contrato'), { target: { value: 'resell' } });
+      await changeSelect('Tipo de contrato', 'resell');
       fireEvent.change(within(dialog).getByLabelText('Monto estimado USD'), { target: { value: '30000' } });
       fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
       await waitFor(() => {
@@ -316,14 +334,14 @@ describe('Opportunities module', () => {
     it('opciones avanzadas: Champion / EB / funding aws_mdf con monto / drive_url', async () => {
       apiV2.apiPost.mockResolvedValue({ id: 'o-new' });
       const dialog = await openCreateModal();
-      fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: 'c1' } });
+      await changeSelect('Cliente', 'c1');
       fireEvent.change(within(dialog).getAllByRole('textbox')[0], { target: { value: 'Avanzado' } });
       fireEvent.change(within(dialog).getByLabelText('Monto estimado USD'), { target: { value: '15000' } });
       // toggle "Más opciones"
       fireEvent.click(within(dialog).getByLabelText('Mostrar opciones avanzadas'));
       fireEvent.click(within(dialog).getByLabelText('Champion identificado'));
       fireEvent.click(within(dialog).getByLabelText('Economic Buyer identificado'));
-      fireEvent.change(within(dialog).getByLabelText('Funding source'), { target: { value: 'aws_mdf' } });
+      await changeSelect('Funding source', 'aws_mdf');
       fireEvent.change(within(dialog).getByLabelText('Monto de funding USD'), { target: { value: '5000' } });
       fireEvent.change(within(dialog).getByLabelText('Drive URL'), {
         target: { value: 'https://drive.google.com/folder/abc' },
@@ -361,7 +379,7 @@ describe('Opportunities module', () => {
     await screen.findByText('Proyecto Atlas');
 
     // Apply a status filter so the CSV request should carry it.
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'proposal_validated' } });
+    await changeSelect('Filtro por estado', 'proposal_validated');
 
     fireEvent.click(screen.getByTestId('opportunities-export-csv'));
     await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));

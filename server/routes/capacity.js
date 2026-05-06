@@ -231,6 +231,36 @@ router.get('/planner', async (req, res) => {
       rrParams,
     );
 
+    /* ── 3b. Actual hours from time_entries ─────────────────── */
+    const assignmentIds = assignmentRows.map((a) => a.id);
+    const actualByAsgWeek = new Map(); // key: `${assignment_id}::${weekIdx}` → hours
+    if (assignmentIds.length > 0) {
+      const { rows: teRows } = await pool.query(
+        `SELECT te.assignment_id,
+                te.work_date,
+                SUM(te.hours) AS actual_hours
+           FROM time_entries te
+          WHERE te.deleted_at IS NULL
+            AND te.assignment_id = ANY($1::uuid[])
+            AND te.work_date >= $2::date
+            AND te.work_date <= $3::date
+          GROUP BY te.assignment_id, te.work_date`,
+        [assignmentIds, viewportStart, viewportEnd],
+      );
+      for (const row of teRows) {
+        const wd = row.work_date instanceof Date ? row.work_date : new Date(row.work_date + 'T00:00:00Z');
+        for (let wi = 0; wi < weekWindows.length; wi++) {
+          const ws = new Date(weekWindows[wi].start_date + 'T00:00:00Z');
+          const we = new Date(weekWindows[wi].end_date + 'T00:00:00Z');
+          if (wd >= ws && wd <= we) {
+            const key = `${row.assignment_id}::${wi}`;
+            actualByAsgWeek.set(key, (actualByAsgWeek.get(key) || 0) + Number(row.actual_hours));
+            break;
+          }
+        }
+      }
+    }
+
     /* ── 4. Assemble response ────────────────────────────────── */
     // Assignments grouped by employee, enriched with week_range + color.
     const asgByEmp = new Map();
@@ -238,6 +268,11 @@ router.get('/planner', async (req, res) => {
     for (const a of assignmentRows) {
       const range = weekRangeForAssignment(a.start_date, a.end_date, weekWindows);
       const color = colorFor(a.contract_id);
+      // Build actual_hours_by_week array matching weekWindows length.
+      const actual_hours_by_week = weekWindows.map((_, wi) => {
+        const key = `${a.id}::${wi}`;
+        return actualByAsgWeek.get(key) || 0;
+      });
       const enriched = {
         id: a.id,
         contract_id: a.contract_id,
@@ -253,6 +288,7 @@ router.get('/planner', async (req, res) => {
         week_range: range, // [first, last] or null
         request_level: a.request_level || null,
         request_area_id: a.request_area_id || null,
+        actual_hours_by_week,
       };
       if (!asgByEmp.has(a.employee_id)) asgByEmp.set(a.employee_id, []);
       asgByEmp.get(a.employee_id).push(enriched);
@@ -268,6 +304,14 @@ router.get('/planner', async (req, res) => {
         as,
         weekWindows,
       );
+      // Enrich weekly with actual_hours (sum across all assignments for this employee).
+      const actual_weekly = weekly.map((w, wi) => {
+        let actual_hours = 0;
+        for (const a of as) {
+          actual_hours += (a.actual_hours_by_week && a.actual_hours_by_week[wi]) || 0;
+        }
+        return { ...w, actual_hours };
+      });
       return {
         id: e.id,
         first_name: e.first_name,
@@ -281,7 +325,7 @@ router.get('/planner', async (req, res) => {
         inactive: !!e.inactive,
         weekly_capacity_hours: Number(e.weekly_capacity_hours),
         assignments: as,
-        weekly,
+        weekly: actual_weekly,
       };
     });
 
@@ -343,6 +387,269 @@ router.get('/planner', async (req, res) => {
     const status = err.status || 500;
     // eslint-disable-next-line no-console
     console.error('GET /api/capacity/planner failed:', err);
+    res.status(status).json({ error: err.message || 'Error interno' });
+  }
+});
+
+/**
+ * GET /api/capacity/planner/export
+ * Excel export of the planner view — same data as GET /planner but rendered
+ * as an .xlsx file with planned vs actual hours per week per employee.
+ */
+router.get('/planner/export', async (req, res) => {
+  try {
+    const ExcelJS = require('exceljs');
+    const p = parseParams(req.query);
+    const weekWindows = buildWeekWindows(p.start, p.weeks);
+    const viewportStart = weekWindows[0].start_date;
+    const viewportEnd   = weekWindows[weekWindows.length - 1].end_date;
+
+    /* ── 1. Employees ──────────────────────────────────────────── */
+    const empParams = [viewportStart, viewportEnd];
+    const activeWhere = [
+      `e.deleted_at IS NULL`,
+      `e.status <> 'terminated'`,
+      `(e.end_date IS NULL OR e.end_date >= CURRENT_DATE)`,
+    ];
+    if (p.areaId) { empParams.push(p.areaId); activeWhere.push(`e.area_id = $${empParams.length}`); }
+    if (p.levelMin) {
+      const mins = LEVEL_VALUES.slice(p.levelMin - 1);
+      empParams.push(mins);
+      activeWhere.push(`e.level = ANY($${empParams.length}::text[])`);
+    }
+    if (p.levelMax) {
+      const maxs = LEVEL_VALUES.slice(0, p.levelMax);
+      empParams.push(maxs);
+      activeWhere.push(`e.level = ANY($${empParams.length}::text[])`);
+    }
+    if (p.search) {
+      empParams.push(`%${p.search.toLowerCase()}%`);
+      activeWhere.push(`(LOWER(e.first_name) LIKE $${empParams.length} OR LOWER(e.last_name) LIKE $${empParams.length} OR LOWER(e.first_name || ' ' || e.last_name) LIKE $${empParams.length})`);
+    }
+    const inactiveCriteria = [`EXISTS (
+       SELECT 1 FROM assignments _asg
+        WHERE _asg.employee_id = e.id
+          AND _asg.deleted_at IS NULL
+          AND _asg.status <> 'cancelled'
+          AND _asg.start_date <= $2::date
+          AND (_asg.end_date IS NULL OR _asg.end_date >= $1::date)
+     )`];
+    if (p.search) {
+      const searchParamIdx = empParams.length;
+      inactiveCriteria.push(`(LOWER(e.first_name) LIKE $${searchParamIdx} OR LOWER(e.last_name) LIKE $${searchParamIdx} OR LOWER(e.first_name || ' ' || e.last_name) LIKE $${searchParamIdx})`);
+    }
+    const { rows: employeeRows } = await pool.query(
+      `SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
+              e.end_date, e.weekly_capacity_hours, a.name AS area_name,
+              (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE)) AS inactive
+         FROM employees e
+         LEFT JOIN areas a ON a.id = e.area_id
+         WHERE ${activeWhere.join(' AND ')}
+       UNION
+       SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
+              e.end_date, e.weekly_capacity_hours, a.name AS area_name,
+              true AS inactive
+         FROM employees e
+         LEFT JOIN areas a ON a.id = e.area_id
+         WHERE e.deleted_at IS NULL
+           AND (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE))
+           AND (${inactiveCriteria.join(' OR ')})
+       ORDER BY first_name, last_name
+       LIMIT 200`,
+      empParams,
+    );
+    const employeeIds = employeeRows.map((e) => e.id);
+
+    /* ── 2. Assignments ────────────────────────────────────────── */
+    const asgParams = [viewportStart, viewportEnd];
+    let asgWhere = `asg.deleted_at IS NULL
+                    AND asg.status <> 'cancelled'
+                    AND asg.start_date <= $2::date
+                    AND (asg.end_date IS NULL OR asg.end_date >= $1::date)`;
+    if (employeeIds.length) {
+      asgParams.push(employeeIds);
+      asgWhere += ` AND asg.employee_id = ANY($${asgParams.length}::uuid[])`;
+    }
+    if (p.contractId) {
+      asgParams.push(p.contractId);
+      asgWhere += ` AND asg.contract_id = $${asgParams.length}`;
+    }
+    const assignmentRows = employeeIds.length
+      ? (await pool.query(
+          `SELECT asg.id, asg.employee_id, asg.contract_id,
+                  asg.weekly_hours, asg.start_date, asg.end_date, asg.status
+             FROM assignments asg
+             WHERE ${asgWhere}`,
+          asgParams,
+        )).rows
+      : [];
+
+    /* ── 3. Actual hours ───────────────────────────────────────── */
+    const assignmentIds = assignmentRows.map((a) => a.id);
+    const actualByAsgWeek = new Map();
+    if (assignmentIds.length > 0) {
+      const { rows: teRows } = await pool.query(
+        `SELECT te.assignment_id, te.work_date, SUM(te.hours) AS actual_hours
+           FROM time_entries te
+          WHERE te.deleted_at IS NULL
+            AND te.assignment_id = ANY($1::uuid[])
+            AND te.work_date >= $2::date
+            AND te.work_date <= $3::date
+          GROUP BY te.assignment_id, te.work_date`,
+        [assignmentIds, viewportStart, viewportEnd],
+      );
+      for (const row of teRows) {
+        const wd = row.work_date instanceof Date ? row.work_date : new Date(row.work_date + 'T00:00:00Z');
+        for (let wi = 0; wi < weekWindows.length; wi++) {
+          const ws = new Date(weekWindows[wi].start_date + 'T00:00:00Z');
+          const we = new Date(weekWindows[wi].end_date + 'T00:00:00Z');
+          if (wd >= ws && wd <= we) {
+            const key = `${row.assignment_id}::${wi}`;
+            actualByAsgWeek.set(key, (actualByAsgWeek.get(key) || 0) + Number(row.actual_hours));
+            break;
+          }
+        }
+      }
+    }
+
+    /* ── 4. Build per-employee weekly data ─────────────────────── */
+    // Group assignments by employee
+    const asgByEmp = new Map();
+    for (const a of assignmentRows) {
+      const range = weekRangeForAssignment(a.start_date, a.end_date, weekWindows);
+      if (!range) continue;
+      if (!asgByEmp.has(a.employee_id)) asgByEmp.set(a.employee_id, []);
+      asgByEmp.get(a.employee_id).push({ ...a, weekly_hours: Number(a.weekly_hours), week_range: range });
+    }
+
+    const rows = employeeRows.map((e) => {
+      const as = asgByEmp.get(e.id) || [];
+      const cap = Number(e.weekly_capacity_hours) || 0;
+      const weeklyData = weekWindows.map((_, wi) => {
+        let planned = 0;
+        for (const a of as) {
+          if (a.status === 'cancelled') continue;
+          if (wi >= a.week_range[0] && wi <= a.week_range[1]) {
+            planned += a.weekly_hours;
+          }
+        }
+        let actual = 0;
+        for (const a of as) {
+          const key = `${a.id}::${wi}`;
+          actual += actualByAsgWeek.get(key) || 0;
+        }
+        return { planned, actual, delta: actual - planned };
+      });
+      return {
+        name: `${e.first_name} ${e.last_name}`.trim(),
+        area: e.area_name || '',
+        level: e.level || '',
+        capacity: cap,
+        weeklyData,
+      };
+    });
+
+    /* ── 5. Generate Excel ─────────────────────────────────────── */
+    const DVP_PURPLE = 'FF56234D';
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'DVPNYX Quoter';
+    wb.created = new Date();
+
+    const sheet = wb.addWorksheet('Planner');
+    const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: DVP_PURPLE } };
+    const headerFont = { color: { argb: 'FFFFFFFF' }, bold: true };
+
+    // Build header row
+    const headerCells = ['Empleado', 'Área', 'Level', 'Capacidad (h/sem)'];
+    for (const w of weekWindows) {
+      headerCells.push(`${w.start_date} Plan`);
+      headerCells.push(`${w.start_date} Real`);
+      headerCells.push(`${w.start_date} Δ`);
+    }
+    const hRow = sheet.addRow(headerCells);
+    hRow.eachCell((c) => { c.fill = headerFill; c.font = headerFont; c.alignment = { vertical: 'middle', horizontal: 'center' }; });
+
+    // Column widths
+    sheet.getColumn(1).width = 28;
+    sheet.getColumn(2).width = 18;
+    sheet.getColumn(3).width = 8;
+    sheet.getColumn(4).width = 16;
+    for (let i = 0; i < weekWindows.length * 3; i++) {
+      sheet.getColumn(5 + i).width = 13;
+    }
+
+    // Conditional fill colors for deviations
+    const positiveFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDFF5E6' } };
+    const negativeFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFBDCDC' } };
+    const neutralFill  = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4F5F7' } };
+
+    // Totals accumulators
+    const totals = weekWindows.map(() => ({ planned: 0, actual: 0 }));
+
+    // Data rows
+    for (const r of rows) {
+      const cells = [r.name, r.area, r.level, r.capacity];
+      r.weeklyData.forEach((wd, wi) => {
+        cells.push(wd.planned);
+        cells.push(wd.actual);
+        cells.push(wd.delta);
+        totals[wi].planned += wd.planned;
+        totals[wi].actual  += wd.actual;
+      });
+      const row = sheet.addRow(cells);
+      row.getCell(1).font = { bold: true };
+      // Apply conditional coloring to delta cells
+      r.weeklyData.forEach((wd, wi) => {
+        const deltaCol = 5 + wi * 3 + 2; // 1-based: col 4 + wi*3 + 3
+        const cell = row.getCell(deltaCol);
+        if (wd.delta > 0) {
+          cell.fill = positiveFill;
+          cell.font = { color: { argb: 'FF166534' }, bold: true };
+        } else if (wd.delta < 0) {
+          cell.fill = negativeFill;
+          cell.font = { color: { argb: 'FF991B1B' }, bold: true };
+        } else {
+          cell.fill = neutralFill;
+        }
+      });
+    }
+
+    // Totals row
+    const totalCells = ['TOTAL', '', '', ''];
+    totals.forEach((t) => {
+      const delta = t.actual - t.planned;
+      totalCells.push(t.planned);
+      totalCells.push(t.actual);
+      totalCells.push(delta);
+    });
+    const totRow = sheet.addRow(totalCells);
+    totRow.font = { bold: true };
+    totRow.getCell(1).font = { bold: true, size: 12 };
+    totals.forEach((t, wi) => {
+      const delta = t.actual - t.planned;
+      const deltaCol = 5 + wi * 3 + 2;
+      const cell = totRow.getCell(deltaCol);
+      if (delta > 0) {
+        cell.fill = positiveFill;
+        cell.font = { color: { argb: 'FF166534' }, bold: true };
+      } else if (delta < 0) {
+        cell.fill = negativeFill;
+        cell.font = { color: { argb: 'FF991B1B' }, bold: true };
+      } else {
+        cell.fill = neutralFill;
+        cell.font = { bold: true };
+      }
+    });
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="planner_${date}.xlsx"`);
+    res.send(Buffer.from(buffer));
+  } catch (err) {
+    const status = err.status || 500;
+    // eslint-disable-next-line no-console
+    console.error('GET /api/capacity/planner/export failed:', err);
     res.status(status).json({ error: err.message || 'Error interno' });
   }
 });

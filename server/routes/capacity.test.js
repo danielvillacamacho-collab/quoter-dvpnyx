@@ -108,6 +108,7 @@ describe('GET /api/capacity/planner', () => {
     queryQueue.push({ rows: [empAna, empPedro] });
     queryQueue.push({ rows: [asgAlpha, asgBeta] });
     queryQueue.push({ rows: [rrOpen] });
+    queryQueue.push({ rows: [] }); // time_entries actual hours (step 3b)
 
     const res = await client.call('GET', '/api/capacity/planner?start=2026-04-20&weeks=12');
     expect(res.status).toBe(200);
@@ -191,6 +192,7 @@ describe('GET /api/capacity/planner', () => {
     queryQueue.push({ rows: [empAna] });
     queryQueue.push({ rows: [asgAlpha] });      // filtered server-side in SQL
     queryQueue.push({ rows: [rrOpen] });
+    queryQueue.push({ rows: [] }); // time_entries actual hours (step 3b)
 
     const res = await client.call('GET', '/api/capacity/planner?start=2026-04-20&weeks=4&contract_id=ct1');
     expect(res.status).toBe(200);

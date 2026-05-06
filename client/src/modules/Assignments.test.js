@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import Assignments from './Assignments';
 import * as apiV2 from '../utils/apiV2';
+import { changeSelect } from '../utils/testHelpers';
 
 jest.mock('../utils/apiV2');
 
@@ -237,7 +238,7 @@ describe('Assignments module', () => {
     mount();
     await screen.findByText('Ana García');
     apiV2.apiGet.mockClear();
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'active' } });
+    await changeSelect('Filtro por estado', 'active');
     await waitFor(() => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes('status=active'))).toBe(true);
@@ -248,7 +249,7 @@ describe('Assignments module', () => {
     apiV2.apiDownload.mockResolvedValue();
     mount();
     await screen.findByText('Ana García');
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'active' } });
+    await changeSelect('Filtro por estado', 'active');
     fireEvent.click(screen.getByTestId('assignments-export-csv'));
     await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));
     const [url, filename] = apiV2.apiDownload.mock.calls[0];
@@ -405,7 +406,7 @@ describe('Assignments module', () => {
     await screen.findByText('Ana García');
 
     // Apply a status filter to make "Limpiar filtros" appear
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'active' } });
+    await changeSelect('Filtro por estado', 'active');
     const clearBtn = await screen.findByLabelText('Limpiar filtros');
 
     apiV2.apiGet.mockClear();

@@ -4,6 +4,7 @@ import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -76,10 +77,16 @@ function ResourceRequestForm({ initial, contracts, areas, onSave, onCancel, savi
       </h2>
       <div>
         <label style={s.label}>Contrato *</label>
-        <select style={s.input} value={form.contract_id || ''} onChange={(e) => set('contract_id', e.target.value)} aria-label="Contrato" required disabled={!!initial?.id}>
-          <option value="">— Selecciona —</option>
-          {contracts.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.status})</option>)}
-        </select>
+        <FilterableSelect
+          value={form.contract_id || ''}
+          onChange={(e) => set('contract_id', e.target.value)}
+          aria-label="Contrato"
+          required
+          disabled={!!initial?.id}
+          inputStyle={s.input}
+          placeholder="— Selecciona —"
+          options={contracts.map((c) => ({ id: String(c.id), label: `${c.name} (${c.status})` }))}
+        />
       </div>
       <div>
         <label style={s.label}>Role title *</label>
@@ -88,16 +95,26 @@ function ResourceRequestForm({ initial, contracts, areas, onSave, onCancel, savi
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Área *</label>
-          <select style={s.input} value={form.area_id || ''} onChange={(e) => set('area_id', Number(e.target.value) || '')} aria-label="Área" required>
-            <option value="">— Selecciona —</option>
-            {areas.filter((a) => a.active).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.area_id ? String(form.area_id) : ''}
+            onChange={(e) => set('area_id', Number(e.target.value) || '')}
+            aria-label="Área"
+            required
+            inputStyle={s.input}
+            placeholder="— Selecciona —"
+            options={areas.filter((a) => a.active).map((a) => ({ id: String(a.id), label: a.name }))}
+          />
         </div>
         <div>
           <label style={s.label}>Level *</label>
-          <select style={s.input} value={form.level} onChange={(e) => set('level', e.target.value)} aria-label="Level" required>
-            {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.level}
+            onChange={(e) => set('level', e.target.value)}
+            aria-label="Level"
+            required
+            inputStyle={s.input}
+            options={LEVELS.map((l) => ({ id: l, label: l }))}
+          />
         </div>
         <div>
           <label style={s.label}>País</label>
@@ -115,9 +132,13 @@ function ResourceRequestForm({ initial, contracts, areas, onSave, onCancel, savi
         </div>
         <div>
           <label style={s.label}>Prioridad</label>
-          <select style={s.input} value={form.priority} onChange={(e) => set('priority', e.target.value)} aria-label="Prioridad">
-            {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.priority}
+            onChange={(e) => set('priority', e.target.value)}
+            aria-label="Prioridad"
+            inputStyle={s.input}
+            options={PRIORITIES.map((p) => ({ id: p.value, label: p.label }))}
+          />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -254,24 +275,36 @@ export default function ResourceRequests() {
           </div>
           <div style={{ minWidth: 180 }}>
             <label style={s.label}>Contrato</label>
-            <select style={s.input} value={contractFilter} onChange={(e) => setContractFilter(e.target.value)} aria-label="Filtro por contrato">
-              <option value="">Cualquiera</option>
-              {contracts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <FilterableSelect
+              value={contractFilter}
+              onChange={(e) => setContractFilter(e.target.value)}
+              aria-label="Filtro por contrato"
+              inputStyle={s.input}
+              placeholder="Cualquiera"
+              options={contracts.map((c) => ({ id: String(c.id), label: c.name }))}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Estado</label>
-            <select style={s.input} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtro por estado">
-              <option value="">Todos</option>
-              {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filtro por estado"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+            />
           </div>
           <div style={{ minWidth: 130 }}>
             <label style={s.label}>Prioridad</label>
-            <select style={s.input} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Filtro por prioridad">
-              <option value="">Todas</option>
-              {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              aria-label="Filtro por prioridad"
+              inputStyle={s.input}
+              placeholder="Todas"
+              options={PRIORITIES.map((p) => ({ id: p.value, label: p.label }))}
+            />
           </div>
         </div>
 

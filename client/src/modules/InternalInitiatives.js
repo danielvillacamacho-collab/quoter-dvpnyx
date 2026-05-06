@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import { useAuth } from '../AuthContext';
 
 /**
@@ -98,16 +99,24 @@ function CreateModal({ areas, onClose, onSaved }) {
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
               <label style={ds.label}>Área *</label>
-              <select style={ds.input} value={form.business_area_id} onChange={(e) => set('business_area_id', e.target.value)}>
-                {areas.map((a) => <option key={a.id} value={a.id}>{a.label_es}</option>)}
-              </select>
+              <FilterableSelect
+                inputStyle={ds.input}
+                value={form.business_area_id}
+                onChange={(e) => set('business_area_id', e.target.value)}
+                placeholder="— seleccionar área —"
+                options={areas.map((a) => ({ id: String(a.id), label: a.label_es }))}
+              />
             </div>
             <div style={{ flex: 1 }}>
               <label style={ds.label}>Operations owner *</label>
-              <select style={ds.input} value={form.operations_owner_id} onChange={(e) => set('operations_owner_id', e.target.value)} required>
-                <option value="">— seleccionar —</option>
-                {users.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
-              </select>
+              <FilterableSelect
+                inputStyle={ds.input}
+                value={form.operations_owner_id}
+                onChange={(e) => set('operations_owner_id', e.target.value)}
+                required
+                placeholder="— seleccionar —"
+                options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
+              />
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -212,17 +221,25 @@ export default function InternalInitiatives() {
       )}
 
       <div style={ds.filterRow}>
-        <select style={ds.input} value={filter.status} onChange={(e) => setFilter((f) => ({ ...f, status: e.target.value }))}>
-          <option value="">Todos los estados</option>
-          <option value="active">Activas</option>
-          <option value="paused">En pausa</option>
-          <option value="completed">Completadas</option>
-          <option value="cancelled">Canceladas</option>
-        </select>
-        <select style={ds.input} value={filter.business_area} onChange={(e) => setFilter((f) => ({ ...f, business_area: e.target.value }))}>
-          <option value="">Todas las áreas</option>
-          {areas.map((a) => <option key={a.id} value={a.id}>{a.label_es}</option>)}
-        </select>
+        <FilterableSelect
+          inputStyle={ds.input}
+          value={filter.status}
+          onChange={(e) => setFilter((f) => ({ ...f, status: e.target.value }))}
+          placeholder="Todos los estados"
+          options={[
+            { id: 'active', label: 'Activas' },
+            { id: 'paused', label: 'En pausa' },
+            { id: 'completed', label: 'Completadas' },
+            { id: 'cancelled', label: 'Canceladas' },
+          ]}
+        />
+        <FilterableSelect
+          inputStyle={ds.input}
+          value={filter.business_area}
+          onChange={(e) => setFilter((f) => ({ ...f, business_area: e.target.value }))}
+          placeholder="Todas las áreas"
+          options={areas.map((a) => ({ id: String(a.id), label: a.label_es }))}
+        />
         <input style={ds.input} placeholder="Buscar…" value={filter.search} onChange={(e) => setFilter((f) => ({ ...f, search: e.target.value }))} />
         <div style={{ flex: 1 }} />
         {isAdmin && (

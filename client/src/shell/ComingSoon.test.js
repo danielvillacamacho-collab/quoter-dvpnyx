@@ -31,7 +31,7 @@ describe('ComingSoon', () => {
 
   it('navigates back to "/" on button click', () => {
     mount('/contracts');
-    fireEvent.click(screen.getByRole('button', { name: /Volver al Dashboard/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Volver/i }));
     expect(screen.getByText('Home mocked')).toBeInTheDocument();
   });
 });

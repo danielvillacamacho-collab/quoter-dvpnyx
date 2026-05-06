@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import Users from './Users';
 import * as api from '../utils/api';
+import { changeSelect } from '../utils/testHelpers';
 
 // Stub AuthContext so Users can call useAuth()
 jest.mock('../AuthContext', () => ({
@@ -35,11 +36,9 @@ describe('Users — render', () => {
     render(<Users />);
     // "comercial" raw key → should show "Comercial" label somewhere
     await screen.findByText('Ana López');
-    // The function dropdown for Ana should have "Comercial" as selected label
-    // (it renders as a select with the label text)
-    const selects = screen.getAllByRole('combobox');
-    const functionSelects = selects.filter(s => s.value === 'comercial' || s.value === 'delivery_manager');
-    expect(functionSelects.length).toBeGreaterThan(0);
+    // FilterableSelect shows the label as the input display value
+    expect(screen.getByDisplayValue('Comercial')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Delivery Manager')).toBeInTheDocument();
   });
 
   it('shows V2 role badges (not the old "preventa" badge)', async () => {
@@ -61,14 +60,21 @@ describe('Users — create', () => {
     expect(document.getElementById('new-function')).toBeInTheDocument();
 
     // Role select should have V2 options, not "preventa"
-    const roleSelect = document.getElementById('new-role');
-    const options = Array.from(roleSelect.options).map(o => o.value);
-    expect(options).toContain('member');
-    expect(options).toContain('lead');
-    expect(options).toContain('viewer');
-    expect(options).toContain('admin'); // superadmin can create admin
-    expect(options).not.toContain('preventa');
-    expect(options).not.toContain('superadmin');
+    // FilterableSelect: open the dropdown and check listbox options
+    const roleInput = screen.getByLabelText('Rol *');
+    fireEvent.click(roleInput);
+    await waitFor(() => {
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      const opts = listbox.querySelectorAll('[data-value]');
+      const values = Array.from(opts).map(o => o.getAttribute('data-value'));
+      expect(values).toContain('member');
+      expect(values).toContain('lead');
+      expect(values).toContain('viewer');
+      expect(values).toContain('admin'); // superadmin can create admin
+      expect(values).not.toContain('preventa');
+      expect(values).not.toContain('superadmin');
+    });
   });
 
   it('calls api.createUser with role and function, then refreshes the list', async () => {
@@ -83,8 +89,8 @@ describe('Users — create', () => {
     // Use id-based selectors — multiple labels with "Función" exist in the table rows
     fireEvent.change(document.getElementById('new-name'), { target: { value: 'New' } });
     fireEvent.change(document.getElementById('new-email'), { target: { value: 'new@dvpnyx.com' } });
-    fireEvent.change(document.getElementById('new-role'), { target: { value: 'viewer' } });
-    fireEvent.change(document.getElementById('new-function'), { target: { value: 'finance' } });
+    await changeSelect('Rol *', 'viewer');
+    await changeSelect('Función', 'finance');
 
     fireEvent.click(screen.getByRole('button', { name: /Crear usuario/i }));
 

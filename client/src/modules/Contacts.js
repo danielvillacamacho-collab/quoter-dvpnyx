@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
@@ -64,14 +65,13 @@ function ContactForm({ initial, clients, onSave, onCancel, saving }) {
       </h2>
       <div>
         <label style={s.label}>Cliente</label>
-        <select
-          style={{ ...s.input, padding: '8px 10px' }}
+        <FilterableSelect
+          inputStyle={{ ...s.input, padding: '8px 10px' }}
           value={form.client_id || ''}
           onChange={(e) => set('client_id', e.target.value)}
-        >
-          <option value="">— Sin cliente —</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+          placeholder="— Sin cliente —"
+          options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+        />
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
@@ -90,9 +90,13 @@ function ContactForm({ initial, clients, onSave, onCancel, saving }) {
         </div>
         <div>
           <label style={s.label}>Seniority</label>
-          <select style={{ ...s.input, padding: '8px 10px' }} value={form.seniority || ''} onChange={(e) => set('seniority', e.target.value)}>
-            {SENIORITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
+          <FilterableSelect
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            value={form.seniority || ''}
+            onChange={(e) => set('seniority', e.target.value)}
+            placeholder="—"
+            options={SENIORITY_OPTIONS.filter((o) => o.value !== '').map((o) => ({ id: o.value, label: o.label }))}
+          />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -222,21 +226,25 @@ export default function Contacts() {
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Cliente</label>
-            <select
-              style={s.input}
+            <FilterableSelect
+              inputStyle={s.input}
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               aria-label="Filtro por cliente"
-            >
-              <option value="">Todos</option>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+              placeholder="Todos"
+              options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Seniority</label>
-            <select style={s.input} value={seniority} onChange={(e) => setSeniority(e.target.value)} aria-label="Filtro por seniority">
-              {SENIORITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label || 'Todos'}</option>)}
-            </select>
+            <FilterableSelect
+              inputStyle={s.input}
+              value={seniority}
+              onChange={(e) => setSeniority(e.target.value)}
+              aria-label="Filtro por seniority"
+              placeholder="Todos"
+              options={SENIORITY_OPTIONS.filter((o) => o.value !== '').map((o) => ({ id: o.value, label: o.label }))}
+            />
           </div>
         </div>
 

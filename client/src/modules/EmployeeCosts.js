@@ -17,6 +17,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import { useAuth } from '../AuthContext';
 import {
   VALID_CURRENCIES, formatPeriod, normalizePeriod, currentPeriod,
@@ -254,14 +255,14 @@ export default function EmployeeCosts() {
         <div style={{ display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }}>
           <div>
             <div style={s.label}>Período</div>
-            <select
-              style={{ ...s.input, width: 140 }}
+            <FilterableSelect
+              inputStyle={{ ...s.input, width: 140 }}
               value={period}
               onChange={(e) => setPeriod(e.target.value)}
               aria-label="Período"
-            >
-              {periodOptions.map((p) => <option key={p} value={p}>{formatPeriod(p)}</option>)}
-            </select>
+              placeholder="— Período —"
+              options={periodOptions.map((p) => ({ id: p, label: formatPeriod(p) }))}
+            />
           </div>
         </div>
       </div>
@@ -405,15 +406,15 @@ export default function EmployeeCosts() {
                         {row.theoretical_cost_usd != null ? formatMoney(row.theoretical_cost_usd, 'USD', { decimals: 0 }) : '—'}
                       </td>
                       <td style={s.td}>
-                        <select
-                          style={{ ...s.input, width: 80 }}
+                        <FilterableSelect
+                          inputStyle={{ ...s.input, width: 80 }}
                           value={currentCurrency}
                           onChange={(e) => setDraft(empId, { currency: e.target.value })}
                           disabled={isLocked || busy}
                           aria-label={`Moneda ${row.employee.first_name}`}
-                        >
-                          {VALID_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                        </select>
+                          placeholder="—"
+                          options={VALID_CURRENCIES.map((c) => ({ id: c, label: c }))}
+                        />
                       </td>
                       <td style={s.td}>
                         <input
@@ -488,32 +489,33 @@ export default function EmployeeCosts() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 16 }}>
               <div>
                 <label style={s.label}>Período base (opcional)</label>
-                <select
-                  style={s.input}
+                <FilterableSelect
+                  inputStyle={s.input}
                   value={projectModal.basePeriod}
                   onChange={(e) => updateProjectField('basePeriod', e.target.value)}
                   aria-label="Período base"
-                >
-                  <option value="">— Último período con costos (auto) —</option>
-                  {periodOptions.map((p) => <option key={p} value={p}>{formatPeriod(p)}</option>)}
-                </select>
+                  placeholder="— Último período con costos (auto) —"
+                  options={periodOptions.map((p) => ({ id: p, label: formatPeriod(p) }))}
+                />
                 <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
                   Si lo dejas vacío, el sistema usa el último período con datos.
                 </div>
               </div>
               <div>
                 <label style={s.label}>Meses a proyectar *</label>
-                <select
-                  style={s.input}
-                  value={projectModal.monthsAhead}
+                <FilterableSelect
+                  inputStyle={s.input}
+                  value={String(projectModal.monthsAhead)}
                   onChange={(e) => updateProjectField('monthsAhead', e.target.value)}
                   aria-label="Meses a proyectar"
-                >
-                  <option value={3}>3 meses</option>
-                  <option value={6}>6 meses</option>
-                  <option value={9}>9 meses</option>
-                  <option value={12}>12 meses</option>
-                </select>
+                  placeholder="— Meses —"
+                  options={[
+                    { id: '3', label: '3 meses' },
+                    { id: '6', label: '6 meses' },
+                    { id: '9', label: '9 meses' },
+                    { id: '12', label: '12 meses' },
+                  ]}
+                />
               </div>
               <div style={{ gridColumn: '1 / -1' }}>
                 <label style={s.label}>Crecimiento anual % (opcional)</label>

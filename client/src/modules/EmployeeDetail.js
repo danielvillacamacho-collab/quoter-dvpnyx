@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPut, apiPost, apiDelete } from '../utils/apiV2';
 import StatusBadge from '../shell/StatusBadge';
+import FilterableSelect from '../shell/FilterableSelect';
 import { useAuth } from '../AuthContext';
 import {
   VALID_CURRENCIES, formatPeriod, normalizePeriod, currentPeriod,
@@ -218,20 +219,18 @@ export default function EmployeeDetail() {
           <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
             Determina quién puede ver/editar el tiempo y los reportes plan-vs-real de este empleado (además de los admins).
           </div>
-          <select
+          <FilterableSelect
             value={emp.manager_user_id || ''}
             onChange={(e) => updateManager(e.target.value || null)}
             disabled={savingManager}
-            style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, minWidth: 280 }}
+            inputStyle={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, minWidth: 280 }}
             aria-label="Líder directo"
-          >
-            <option value="">— Sin líder asignado —</option>
-            {managerCandidates.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name || u.email} {u.role !== 'lead' ? `(${u.role})` : ''}
-              </option>
-            ))}
-          </select>
+            placeholder="— Sin líder asignado —"
+            options={managerCandidates.map((u) => ({
+              id: String(u.id),
+              label: `${u.name || u.email} ${u.role !== 'lead' ? `(${u.role})` : ''}`,
+            }))}
+          />
           {savingManager && <span style={{ fontSize: 12, color: 'var(--text-light)', marginLeft: 10 }}>Guardando…</span>}
         </div>
       )}
@@ -355,14 +354,14 @@ export default function EmployeeDetail() {
             </div>
             <div>
               <label style={s.label}>Moneda *</label>
-              <select
-                style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%' }}
+              <FilterableSelect
+                inputStyle={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%' }}
                 value={costForm.currency}
                 onChange={(e) => setCostForm({ ...costForm, currency: e.target.value })}
                 aria-label="Moneda"
-              >
-                {VALID_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+                placeholder="— Selecciona moneda —"
+                options={VALID_CURRENCIES.map((c) => ({ id: c, label: c }))}
+              />
             </div>
             <div>
               <label style={s.label}>Costo bruto *</label>

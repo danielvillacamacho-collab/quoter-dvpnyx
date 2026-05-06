@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import { useAuth } from '../AuthContext';
 
 /**
@@ -116,20 +117,24 @@ function CreateModal({ types, onClose, onSaved }) {
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
             <label style={ds.label}>Empleado *</label>
-            <select style={ds.input} value={form.employee_id} onChange={(e) => set('employee_id', e.target.value)} required>
-              <option value="">— seleccionar —</option>
-              {employees.map((e) => (
-                <option key={e.id} value={e.id}>{e.first_name} {e.last_name} · {e.country}</option>
-              ))}
-            </select>
+            <FilterableSelect
+              inputStyle={ds.input}
+              value={form.employee_id}
+              onChange={(e) => set('employee_id', e.target.value)}
+              required
+              placeholder="— seleccionar —"
+              options={employees.map((e) => ({ id: String(e.id), label: `${e.first_name} ${e.last_name} · ${e.country}` }))}
+            />
           </div>
           <div>
             <label style={ds.label}>Tipo *</label>
-            <select style={ds.input} value={form.novelty_type_id} onChange={(e) => set('novelty_type_id', e.target.value)}>
-              {types.map((t) => (
-                <option key={t.id} value={t.id}>{TYPE_ICONS[t.id] || ''} {t.label_es}</option>
-              ))}
-            </select>
+            <FilterableSelect
+              inputStyle={ds.input}
+              value={form.novelty_type_id}
+              onChange={(e) => set('novelty_type_id', e.target.value)}
+              placeholder="— seleccionar tipo —"
+              options={types.map((t) => ({ id: String(t.id), label: `${TYPE_ICONS[t.id] || ''} ${t.label_es}` }))}
+            />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
@@ -227,15 +232,23 @@ export default function Novelties() {
       </div>
 
       <div style={ds.filterRow}>
-        <select style={ds.input} value={filter.status} onChange={(e) => setFilter((f) => ({ ...f, status: e.target.value }))}>
-          <option value="">Todos</option>
-          <option value="approved">Aprobadas</option>
-          <option value="cancelled">Canceladas</option>
-        </select>
-        <select style={ds.input} value={filter.novelty_type_id} onChange={(e) => setFilter((f) => ({ ...f, novelty_type_id: e.target.value }))}>
-          <option value="">Todos los tipos</option>
-          {types.map((t) => <option key={t.id} value={t.id}>{TYPE_ICONS[t.id] || ''} {t.label_es}</option>)}
-        </select>
+        <FilterableSelect
+          inputStyle={ds.input}
+          value={filter.status}
+          onChange={(e) => setFilter((f) => ({ ...f, status: e.target.value }))}
+          placeholder="Todos"
+          options={[
+            { id: 'approved', label: 'Aprobadas' },
+            { id: 'cancelled', label: 'Canceladas' },
+          ]}
+        />
+        <FilterableSelect
+          inputStyle={ds.input}
+          value={filter.novelty_type_id}
+          onChange={(e) => setFilter((f) => ({ ...f, novelty_type_id: e.target.value }))}
+          placeholder="Todos los tipos"
+          options={types.map((t) => ({ id: String(t.id), label: `${TYPE_ICONS[t.id] || ''} ${t.label_es}` }))}
+        />
         <input style={ds.input} type="date" value={filter.from_date} onChange={(e) => setFilter((f) => ({ ...f, from_date: e.target.value }))} />
         <input style={ds.input} type="date" value={filter.to_date} onChange={(e) => setFilter((f) => ({ ...f, to_date: e.target.value }))} />
         <div style={{ flex: 1 }} />

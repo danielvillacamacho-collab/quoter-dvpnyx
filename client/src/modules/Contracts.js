@@ -8,6 +8,7 @@ import { useSort } from '../utils/useSort';
 import {
   SUBTYPES_BY_TYPE, SUBTYPE_LABEL, formatSubtype, typeRequiresSubtype, subtypesFor,
 } from '../utils/contractSubtype';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -118,36 +119,44 @@ function ContractForm({ initial, clients, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Cliente *</label>
-          <select style={s.input} value={form.client_id || ''} onChange={(e) => set('client_id', e.target.value)} aria-label="Cliente" required disabled={!!initial?.id}>
-            <option value="">— Selecciona —</option>
-            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.client_id || ''}
+            onChange={(e) => set('client_id', e.target.value)}
+            aria-label="Cliente"
+            required
+            disabled={!!initial?.id}
+            inputStyle={s.input}
+            placeholder="— Selecciona —"
+            options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+          />
         </div>
         <div>
           <label style={s.label}>Tipo *</label>
-          <select style={s.input} value={form.type} onChange={(e) => set('type', e.target.value)} aria-label="Tipo" required>
-            {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.type}
+            onChange={(e) => set('type', e.target.value)}
+            aria-label="Tipo"
+            required
+            inputStyle={s.input}
+            options={TYPES.map((t) => ({ id: t.value, label: t.label }))}
+          />
         </div>
       </div>
       {showSubtype && (
         <div>
           <label style={s.label}>Subtipo *</label>
-          <select
-            style={{
-              ...s.input,
-              borderColor: subtypeError ? 'var(--danger, #b00020)' : s.input.border,
-            }}
+          <FilterableSelect
             value={form.contract_subtype || ''}
             onChange={(e) => set('contract_subtype', e.target.value)}
             aria-label="Subtipo"
             required
-          >
-            <option value="">Selecciona un subtipo</option>
-            {subtypeOptions.map((sub) => (
-              <option key={sub.value} value={sub.value}>{sub.label}</option>
-            ))}
-          </select>
+            inputStyle={{
+              ...s.input,
+              borderColor: subtypeError ? 'var(--danger, #b00020)' : s.input.border,
+            }}
+            placeholder="Selecciona un subtipo"
+            options={subtypeOptions.map((sub) => ({ id: sub.value, label: sub.label }))}
+          />
           {subtypeError && (
             <div role="alert" style={{ color: 'var(--danger, #b00020)', fontSize: 12, marginTop: 4 }}>
               {subtypeError}
@@ -315,15 +324,18 @@ export default function Contracts() {
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Cliente</label>
-            <select style={s.input} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filtro por cliente">
-              <option value="">Cualquiera</option>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <FilterableSelect
+              value={clientFilter}
+              onChange={(e) => setClientFilter(e.target.value)}
+              aria-label="Filtro por cliente"
+              inputStyle={s.input}
+              placeholder="Cualquiera"
+              options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Tipo</label>
-            <select
-              style={s.input}
+            <FilterableSelect
               value={typeFilter}
               onChange={(e) => {
                 setTypeFilter(e.target.value);
@@ -337,34 +349,39 @@ export default function Contracts() {
                 }
               }}
               aria-label="Filtro por tipo"
-            >
-              <option value="">Todos</option>
-              {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={TYPES.map((t) => ({ id: t.value, label: t.label }))}
+            />
           </div>
           <div style={{ minWidth: 200 }}>
             <label style={s.label}>Subtipo</label>
-            <select
-              style={s.input}
+            <FilterableSelect
               value={subtypeFilter}
               onChange={(e) => setSubtypeFilter(e.target.value)}
               aria-label="Filtro por subtipo"
-            >
-              <option value="">Todos</option>
-              {/* Si hay un type filtrado, mostrar sólo los subtipos de ese type;
-                  sin type, mostrar todos. 'none' permite filtrar contratos sin subtipo (legacy). */}
-              {(typeFilter ? subtypesFor(typeFilter) : Object.values(SUBTYPES_BY_TYPE).flat()).map((sub) => (
-                <option key={sub.value} value={sub.value}>{sub.label}</option>
-              ))}
-              <option value="none">— Sin especificar —</option>
-            </select>
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={[
+                /* Si hay un type filtrado, mostrar sólo los subtipos de ese type;
+                   sin type, mostrar todos. 'none' permite filtrar contratos sin subtipo (legacy). */
+                ...(typeFilter ? subtypesFor(typeFilter) : Object.values(SUBTYPES_BY_TYPE).flat()).map((sub) => (
+                  { id: sub.value, label: sub.label }
+                )),
+                { id: 'none', label: '— Sin especificar —' },
+              ]}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Estado</label>
-            <select style={s.input} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtro por estado">
-              <option value="">Todos</option>
-              {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filtro por estado"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+            />
           </div>
         </div>
 

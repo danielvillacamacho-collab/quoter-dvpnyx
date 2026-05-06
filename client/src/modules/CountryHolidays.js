@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost, apiDelete } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import { useAuth } from '../AuthContext';
 
 /**
@@ -44,9 +45,13 @@ function CreateModal({ countries, onClose, onSaved }) {
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
             <label style={ds.label}>País *</label>
-            <select style={ds.input} value={form.country_id} onChange={(e) => setForm((f) => ({ ...f, country_id: e.target.value }))}>
-              {countries.map((c) => <option key={c.id} value={c.id}>{c.label_es} ({c.id})</option>)}
-            </select>
+            <FilterableSelect
+              inputStyle={ds.input}
+              value={form.country_id}
+              onChange={(e) => setForm((f) => ({ ...f, country_id: e.target.value }))}
+              placeholder="— seleccionar país —"
+              options={countries.map((c) => ({ id: String(c.id), label: `${c.label_es} (${c.id})` }))}
+            />
           </div>
           <div>
             <label style={ds.label}>Fecha *</label>
@@ -58,12 +63,18 @@ function CreateModal({ countries, onClose, onSaved }) {
           </div>
           <div>
             <label style={ds.label}>Tipo</label>
-            <select style={ds.input} value={form.holiday_type} onChange={(e) => setForm((f) => ({ ...f, holiday_type: e.target.value }))}>
-              <option value="national">Nacional</option>
-              <option value="regional">Regional</option>
-              <option value="optional">Opcional</option>
-              <option value="company">De la empresa</option>
-            </select>
+            <FilterableSelect
+              inputStyle={ds.input}
+              value={form.holiday_type}
+              onChange={(e) => setForm((f) => ({ ...f, holiday_type: e.target.value }))}
+              placeholder="— seleccionar tipo —"
+              options={[
+                { id: 'national', label: 'Nacional' },
+                { id: 'regional', label: 'Regional' },
+                { id: 'optional', label: 'Opcional' },
+                { id: 'company', label: 'De la empresa' },
+              ]}
+            />
           </div>
           {err && <div style={{ color: 'var(--ds-bad, #ef4444)', fontSize: 12 }}>{err}</div>}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -124,12 +135,20 @@ export default function CountryHolidays() {
       </div>
 
       <div style={ds.filterRow}>
-        <select style={ds.input} value={country} onChange={(e) => setCountry(e.target.value)}>
-          {countries.map((c) => <option key={c.id} value={c.id}>{c.label_es}</option>)}
-        </select>
-        <select style={ds.input} value={year} onChange={(e) => setYear(parseInt(e.target.value, 10))}>
-          {[CURRENT_YEAR - 1, CURRENT_YEAR, CURRENT_YEAR + 1].map((y) => <option key={y} value={y}>{y}</option>)}
-        </select>
+        <FilterableSelect
+          inputStyle={ds.input}
+          value={country}
+          onChange={(e) => setCountry(e.target.value)}
+          placeholder="— seleccionar país —"
+          options={countries.map((c) => ({ id: String(c.id), label: c.label_es }))}
+        />
+        <FilterableSelect
+          inputStyle={ds.input}
+          value={String(year)}
+          onChange={(e) => setYear(parseInt(e.target.value, 10))}
+          placeholder="— seleccionar año —"
+          options={[CURRENT_YEAR - 1, CURRENT_YEAR, CURRENT_YEAR + 1].map((y) => ({ id: String(y), label: String(y) }))}
+        />
         <div style={{ flex: 1 }} />
         {isAdmin && (
           <button style={ds.btn} onClick={() => setShowCreate(true)}>+ Nuevo festivo</button>

@@ -13,6 +13,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPut } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const fmtUSD = (n) => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n)));
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(2)}%`);
@@ -263,14 +264,20 @@ export default function RevenuePlanEditor() {
               style={{ ...s.inp, width: 160, textAlign: 'right' }}
               aria-label="Valor del contrato"
             />
-            <select value={contractCurrency} onChange={(e) => setContractCurrency(e.target.value)}
-                    style={{ ...s.inp, width: 80 }} aria-label="Moneda">
-              <option value="USD">USD</option>
-              <option value="COP">COP</option>
-              <option value="MXN">MXN</option>
-              <option value="GTQ">GTQ</option>
-              <option value="EUR">EUR</option>
-            </select>
+            <FilterableSelect
+              value={contractCurrency}
+              onChange={(e) => setContractCurrency(e.target.value)}
+              inputStyle={{ ...s.inp, width: 80 }}
+              aria-label="Moneda"
+              placeholder="— Moneda —"
+              options={[
+                { id: 'USD', label: 'USD' },
+                { id: 'COP', label: 'COP' },
+                { id: 'MXN', label: 'MXN' },
+                { id: 'GTQ', label: 'GTQ' },
+                { id: 'EUR', label: 'EUR' },
+              ]}
+            />
             <span style={{ fontSize: 11, color: 'var(--text-light)' }}>
               ≈ {fmtUSD(liveTotalValueUsd)}
             </span>

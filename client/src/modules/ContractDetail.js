@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPut, apiPost } from '../utils/apiV2';
 import { useAuth } from '../AuthContext';
 import { formatSubtype, typeRequiresSubtype } from '../utils/contractSubtype';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
   page:   { maxWidth: 1200, margin: '0 auto' },
@@ -192,20 +193,18 @@ export default function ContractDetail() {
           <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
             El delivery manager es quien hace el kick-off (sembrar solicitudes desde la cotización) y administra los recursos del contrato.
           </div>
-          <select
+          <FilterableSelect
             value={contract.delivery_manager_id || ''}
             onChange={(e) => updateDeliveryManager(e.target.value || null)}
             disabled={savingDM}
-            style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, minWidth: 320 }}
+            inputStyle={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, minWidth: 320 }}
             aria-label="Delivery manager"
-          >
-            <option value="">— Sin delivery manager asignado —</option>
-            {userCandidates.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name || u.email} {u.role !== 'lead' ? `(${u.role})` : ''}
-              </option>
-            ))}
-          </select>
+            placeholder="— Sin delivery manager asignado —"
+            options={userCandidates.map((u) => ({
+              id: String(u.id),
+              label: `${u.name || u.email} ${u.role !== 'lead' ? `(${u.role})` : ''}`,
+            }))}
+          />
           {savingDM && <span style={{ fontSize: 12, color: 'var(--text-light)', marginLeft: 10 }}>Guardando…</span>}
         </div>
       )}

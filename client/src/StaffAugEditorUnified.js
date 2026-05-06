@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import useAutosave from './hooks/useAutosave';
 import AutosaveIndicator from './AutosaveIndicator';
+import FilterableSelect from './shell/FilterableSelect';
 import {
   calcStaffAugLine,
   formatUSD,
@@ -177,45 +178,32 @@ function ResourceTable({ data, onChange, params, marginOverride }) {
                   <input style={{ ...s.inputSm, minWidth: 140 }} value={line.role_title || ''} onChange={(e) => updateLine(idx, 'role_title', e.target.value)} placeholder="Ej: Senior React Dev" aria-label={`Rol recurso ${idx + 1}`} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, minWidth: 120 }} value={line.specialty || ''} onChange={(e) => updateLine(idx, 'specialty', e.target.value)} aria-label={`Especialidad recurso ${idx + 1}`}>
-                    <option value="">—</option>
-                    {SPECIALTIES.map((sp) => <option key={sp}>{sp}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, minWidth: 120 }} value={line.specialty || ''} onChange={(e) => updateLine(idx, 'specialty', e.target.value)} aria-label={`Especialidad recurso ${idx + 1}`} placeholder="—" options={SPECIALTIES.map((sp) => ({ id: sp, label: sp }))} />
                 </td>
                 <td style={s.td}>
-                  <select
-                    style={{ ...s.select, width: 60 }}
+                  <FilterableSelect
+                    inputStyle={{ ...s.select, width: 60 }}
                     value={line.level || ''}
                     onChange={(e) => updateLine(idx, 'level', Number(e.target.value))}
-                    title={line.level ? levelTooltip(line.level, params) : 'Selecciona un nivel L1-L11'}
                     aria-label={`Nivel recurso ${idx + 1}`}
-                  >
-                    <option value="">—</option>
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => <option key={n} value={n} title={LEVEL_BRIEF[n]}>L{n}</option>)}
-                  </select>
+                    placeholder="—"
+                    options={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((n) => ({ id: String(n), label: `L${n}` }))}
+                  />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, minWidth: 110 }} value={line.country || 'Colombia'} onChange={(e) => updateLine(idx, 'country', e.target.value)} aria-label={`País recurso ${idx + 1}`}>
-                    {countries.map((c) => <option key={c}>{c}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, minWidth: 110 }} value={line.country || 'Colombia'} onChange={(e) => updateLine(idx, 'country', e.target.value)} aria-label={`País recurso ${idx + 1}`} placeholder="—" options={countries.map((c) => ({ id: c, label: c }))} />
                 </td>
                 <td style={{ ...s.td, textAlign: 'center' }}>
                   <input type="checkbox" checked={line.bilingual || false} onChange={(e) => updateLine(idx, 'bilingual', e.target.checked)} aria-label={`Bilingüe recurso ${idx + 1}`} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, minWidth: 90 }} value={line.tools || 'Sin'} onChange={(e) => updateLine(idx, 'tools', e.target.value)} aria-label={`Herramientas recurso ${idx + 1}`}>
-                    {toolsOpts.map((t) => <option key={t}>{t}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, minWidth: 90 }} value={line.tools || 'Sin'} onChange={(e) => updateLine(idx, 'tools', e.target.value)} aria-label={`Herramientas recurso ${idx + 1}`} placeholder="—" options={toolsOpts.map((t) => ({ id: t, label: t }))} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, minWidth: 110 }} value={line.stack || 'Especializada'} onChange={(e) => updateLine(idx, 'stack', e.target.value)} aria-label={`Stack recurso ${idx + 1}`}>
-                    {stacks.map((st) => <option key={st}>{st}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, minWidth: 110 }} value={line.stack || 'Especializada'} onChange={(e) => updateLine(idx, 'stack', e.target.value)} aria-label={`Stack recurso ${idx + 1}`} placeholder="—" options={stacks.map((st) => ({ id: st, label: st }))} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, minWidth: 100 }} value={line.modality || 'Remoto'} onChange={(e) => updateLine(idx, 'modality', e.target.value)} aria-label={`Modalidad recurso ${idx + 1}`}>
-                    {modalities.map((m) => <option key={m}>{m}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, minWidth: 100 }} value={line.modality || 'Remoto'} onChange={(e) => updateLine(idx, 'modality', e.target.value)} aria-label={`Modalidad recurso ${idx + 1}`} placeholder="—" options={modalities.map((m) => ({ id: m, label: m }))} />
                 </td>
                 <td style={s.td}>
                   <input

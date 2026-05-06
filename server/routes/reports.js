@@ -472,4 +472,226 @@ router.get('/my-dashboard', async (req, res) => {
   }
 });
 
+/**
+ * Deviations — Planned hours vs actual logged hours.
+ *
+ * Compares assignment-based planned hours against time_entries actual hours
+ * over a date range. Can be grouped by person or by project (contract).
+ *
+ * Query params:
+ *   from        date  (default: first day of current month)
+ *   to          date  (default: last day of current month)
+ *   group_by    'person' | 'project'  (default: 'person')
+ *   area_id     int   (optional filter)
+ *   contract_id int   (optional filter)
+ */
+router.get('/deviations', async (req, res) => {
+  try {
+    const now = new Date();
+    const from = req.query.from || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const toDefault = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    const to = req.query.to || toDefault.toISOString().slice(0, 10);
+    const groupBy = req.query.group_by === 'project' ? 'project' : 'person';
+    const areaId = req.query.area_id ? Number(req.query.area_id) : null;
+    const contractId = req.query.contract_id ? Number(req.query.contract_id) : null;
+
+    /** Count business days (Mon-Fri) between two date strings inclusive. */
+    function businessDays(f, t) {
+      let count = 0;
+      const d = new Date(f);
+      const end = new Date(t);
+      while (d <= end) {
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6) count++;
+        d.setDate(d.getDate() + 1);
+      }
+      return count;
+    }
+
+    /** Clamp a date string to [lo, hi] range. */
+    function clampDate(dateStr, lo, hi) {
+      if (dateStr < lo) return lo;
+      if (dateStr > hi) return hi;
+      return dateStr;
+    }
+
+    if (groupBy === 'person') {
+      // --- Person view ---
+      const empFilters = [`e.deleted_at IS NULL`, `e.status IN ('active','on_leave','bench')`];
+      const empParams = [];
+      if (areaId) { empParams.push(areaId); empFilters.push(`e.area_id = $${empParams.length}`); }
+
+      const { rows: employees } = await pool.query(
+        `SELECT e.id, (e.first_name || ' ' || e.last_name) AS employee_name,
+                a.name AS area_name, e.level
+           FROM employees e
+           LEFT JOIN areas a ON a.id = e.area_id
+          WHERE ${empFilters.join(' AND ')}
+          ORDER BY e.last_name, e.first_name`,
+        empParams
+      );
+      if (!employees.length) return res.json({ data: [] });
+
+      const empIds = employees.map((e) => e.id);
+
+      // Assignments overlapping [from, to]
+      const asgParams = [empIds, from, to];
+      let asgFilter = '';
+      if (contractId) { asgParams.push(contractId); asgFilter = ` AND asg.contract_id = $${asgParams.length}`; }
+
+      const { rows: assignments } = await pool.query(
+        `SELECT asg.employee_id, asg.weekly_hours, asg.start_date, asg.end_date
+           FROM assignments asg
+          WHERE asg.employee_id = ANY($1::uuid[])
+            AND asg.deleted_at IS NULL
+            AND asg.status IN ('active','planned')
+            AND asg.start_date <= $3::date
+            AND (asg.end_date IS NULL OR asg.end_date >= $2::date)
+            ${asgFilter}`,
+        asgParams
+      );
+
+      // Actual hours from time_entries
+      const teParams = [empIds, from, to];
+      let teFilter = '';
+      if (contractId) { teParams.push(contractId); teFilter = ` AND te.contract_id = $${teParams.length}`; }
+
+      const { rows: timeRows } = await pool.query(
+        `SELECT te.employee_id, COALESCE(SUM(te.hours), 0)::numeric AS total_hours
+           FROM time_entries te
+          WHERE te.employee_id = ANY($1::uuid[])
+            AND te.work_date >= $2::date AND te.work_date <= $3::date
+            AND te.deleted_at IS NULL
+            ${teFilter}
+          GROUP BY te.employee_id`,
+        teParams
+      );
+      const actualMap = {};
+      timeRows.forEach((r) => { actualMap[r.employee_id] = Number(r.total_hours); });
+
+      // Calculate planned hours per employee
+      const plannedMap = {};
+      assignments.forEach((asg) => {
+        const asgStart = asg.start_date ? asg.start_date.toISOString().slice(0, 10) : from;
+        const asgEnd = asg.end_date ? asg.end_date.toISOString().slice(0, 10) : to;
+        const overlapStart = clampDate(asgStart, from, to);
+        const overlapEnd = clampDate(asgEnd, from, to);
+        const bDays = businessDays(overlapStart, overlapEnd);
+        const planned = (Number(asg.weekly_hours) / 5) * bDays;
+        plannedMap[asg.employee_id] = (plannedMap[asg.employee_id] || 0) + planned;
+      });
+
+      const data = employees.map((emp) => {
+        const planned = Math.round((plannedMap[emp.id] || 0) * 100) / 100;
+        const actual = Math.round((actualMap[emp.id] || 0) * 100) / 100;
+        const deviation = Math.round((actual - planned) * 100) / 100;
+        const deviationPct = planned > 0 ? Math.round((deviation / planned) * 10000) / 100 : 0;
+        return {
+          employee_id: emp.id,
+          employee_name: emp.employee_name,
+          area_name: emp.area_name,
+          level: emp.level,
+          planned_hours: planned,
+          actual_hours: actual,
+          deviation_hours: deviation,
+          deviation_pct: deviationPct,
+        };
+      });
+
+      return res.json({ data });
+    }
+
+    // --- Project view ---
+    const cFilters = [`c.deleted_at IS NULL`, `c.status IN ('planned','active','paused')`];
+    const cParams = [];
+    if (contractId) { cParams.push(contractId); cFilters.push(`c.id = $${cParams.length}`); }
+
+    const { rows: contracts } = await pool.query(
+      `SELECT c.id, c.name AS contract_name, cl.name AS client_name
+         FROM contracts c
+         LEFT JOIN clients cl ON cl.id = c.client_id
+        WHERE ${cFilters.join(' AND ')}
+        ORDER BY c.name`,
+      cParams
+    );
+    if (!contracts.length) return res.json({ data: [] });
+
+    const contractIds = contracts.map((c) => c.id);
+
+    // Assignments overlapping [from, to] for these contracts
+    const asgParams2 = [contractIds, from, to];
+    let asgFilter2 = '';
+    if (areaId) {
+      asgParams2.push(areaId);
+      asgFilter2 = ` AND e.area_id = $${asgParams2.length}`;
+    }
+
+    const { rows: assignments2 } = await pool.query(
+      `SELECT asg.contract_id, asg.weekly_hours, asg.start_date, asg.end_date
+         FROM assignments asg
+         ${areaId ? 'JOIN employees e ON e.id = asg.employee_id' : ''}
+        WHERE asg.contract_id = ANY($1::int[])
+          AND asg.deleted_at IS NULL
+          AND asg.status IN ('active','planned')
+          AND asg.start_date <= $3::date
+          AND (asg.end_date IS NULL OR asg.end_date >= $2::date)
+          ${asgFilter2}`,
+      asgParams2
+    );
+
+    // Actual hours grouped by contract
+    const teParams2 = [contractIds, from, to];
+    let teFilter2 = '';
+    if (areaId) {
+      teParams2.push(areaId);
+      teFilter2 = ` AND e.area_id = $${teParams2.length}`;
+    }
+
+    const { rows: timeRows2 } = await pool.query(
+      `SELECT te.contract_id, COALESCE(SUM(te.hours), 0)::numeric AS total_hours
+         FROM time_entries te
+         ${areaId ? 'JOIN employees e ON e.id = te.employee_id' : ''}
+        WHERE te.contract_id = ANY($1::int[])
+          AND te.work_date >= $2::date AND te.work_date <= $3::date
+          AND te.deleted_at IS NULL
+          ${teFilter2}
+        GROUP BY te.contract_id`,
+      teParams2
+    );
+    const actualMap2 = {};
+    timeRows2.forEach((r) => { actualMap2[r.contract_id] = Number(r.total_hours); });
+
+    const plannedMap2 = {};
+    assignments2.forEach((asg) => {
+      const asgStart = asg.start_date ? asg.start_date.toISOString().slice(0, 10) : from;
+      const asgEnd = asg.end_date ? asg.end_date.toISOString().slice(0, 10) : to;
+      const overlapStart = clampDate(asgStart, from, to);
+      const overlapEnd = clampDate(asgEnd, from, to);
+      const bDays = businessDays(overlapStart, overlapEnd);
+      const planned = (Number(asg.weekly_hours) / 5) * bDays;
+      plannedMap2[asg.contract_id] = (plannedMap2[asg.contract_id] || 0) + planned;
+    });
+
+    const data = contracts.map((c) => {
+      const planned = Math.round((plannedMap2[c.id] || 0) * 100) / 100;
+      const actual = Math.round((actualMap2[c.id] || 0) * 100) / 100;
+      const deviation = Math.round((actual - planned) * 100) / 100;
+      const deviationPct = planned > 0 ? Math.round((deviation / planned) * 10000) / 100 : 0;
+      return {
+        contract_id: c.id,
+        contract_name: c.contract_name,
+        client_name: c.client_name,
+        planned_hours: planned,
+        actual_hours: actual,
+        deviation_hours: deviation,
+        deviation_pct: deviationPct,
+      };
+    });
+
+    return res.json({ data });
+  } catch (err) {
+    serverError(res, 'GET /reports/deviations', err);
+  }
+});
+
 module.exports = router;
