@@ -8,6 +8,7 @@ import cx from './QuickQuote.module.css';
 const STORAGE_KEY = 'dvpnyx_quick_quotes_v1';
 const COMPANY_FACTOR = 1.5;
 const CURRENCIES = ['USD', 'COP', 'MXN', 'EUR', 'GTQ', 'PEN', 'CLP', 'ARS'];
+const FX_FALLBACK_MONTHS = 3;
 
 const loadSaved = () => {
   try {
@@ -35,6 +36,22 @@ const fmtMoney = (n, ccy) => {
 };
 
 const fmtPct = (n) => `${(n * 100).toFixed(1)}%`;
+
+// es-CO locale: 5000000 → "5.000.000". Estado mantiene solo dígitos.
+const fmtThousands = (digits) => (digits ? Number(digits).toLocaleString('es-CO') : '');
+
+function currentYyyymm() {
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function shiftYyyymm(yyyymm, deltaMonths) {
+  let y = Number(yyyymm.slice(0, 4));
+  let m = Number(yyyymm.slice(4)) + deltaMonths;
+  while (m < 1) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  return `${y}${String(m).padStart(2, '0')}`;
+}
 
 export default function QuickQuote() {
   const { params } = useAuth();
@@ -68,6 +85,12 @@ export default function QuickQuote() {
   const [savedList, setSavedList] = useState(() => loadSaved());
   const [feedback, setFeedback] = useState(null);
 
+  // FX: para convertir el costo de herramientas (USD) a la moneda del salario.
+  // status: 'loading' | 'ok' | 'fallback' | 'missing' | 'error'
+  // rate: USD→<currency> (1 USD = N <currency>); 1 cuando currency=USD.
+  // sourceMonth: yyyymm del cual se tomó la tasa.
+  const [fx, setFx] = useState({ status: 'ok', rate: 1, sourceMonth: null });
+
   useEffect(() => {
     if (toolsOpts.length && !toolsKey) setToolsKey(toolsOpts[0].key);
   }, [toolsOpts, toolsKey]);
@@ -92,19 +115,68 @@ export default function QuickQuote() {
     return () => { cancelled = true; };
   }, []);
 
+  // Carga la tasa USD→currency. Intenta el mes actual; si no está,
+  // mira hasta FX_FALLBACK_MONTHS atrás y usa el más reciente.
+  useEffect(() => {
+    if (currency === 'USD') {
+      setFx({ status: 'ok', rate: 1, sourceMonth: null });
+      return undefined;
+    }
+    let cancelled = false;
+    setFx({ status: 'loading', rate: null, sourceMonth: null });
+    const to = currentYyyymm();
+    const from = shiftYyyymm(to, -FX_FALLBACK_MONTHS);
+    apiGet(`/api/admin/exchange-rates?from=${from}&to=${to}&currency=${currency}`)
+      .then((r) => {
+        if (cancelled) return;
+        const cells = r?.cells || {};
+        // Buscar de más reciente a más viejo dentro del rango.
+        let found = null;
+        for (let i = 0; i <= FX_FALLBACK_MONTHS; i++) {
+          const ym = shiftYyyymm(to, -i);
+          const cell = cells[`${currency}|${ym}`];
+          if (cell && Number.isFinite(Number(cell.usd_rate)) && Number(cell.usd_rate) > 0) {
+            found = { rate: Number(cell.usd_rate), month: ym };
+            break;
+          }
+        }
+        if (!found) {
+          setFx({ status: 'missing', rate: null, sourceMonth: null });
+          return;
+        }
+        setFx({
+          status: found.month === to ? 'ok' : 'fallback',
+          rate: found.rate,
+          sourceMonth: found.month,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setFx({ status: 'error', rate: null, sourceMonth: null });
+      });
+    return () => { cancelled = true; };
+  }, [currency]);
+
   const calc = useMemo(() => {
     const salaryNum = Number(salary) || 0;
     const personMargin = Math.max(0, Math.min(0.99, (Number(personMarginPct) || 0) / 100));
     const toolsMargin = Math.max(0, Math.min(0.99, (Number(toolsMarginPct) || 0) / 100));
-    const toolsCost = toolsOpts.find((t) => t.key === toolsKey)?.value || 0;
+    const toolsCostUsd = toolsOpts.find((t) => t.key === toolsKey)?.value || 0;
+    // Tools están almacenadas en USD; convertir a la moneda del salario.
+    // Si la tasa todavía está cargando o no hay rate, toolsCost queda 0
+    // para que el usuario vea claramente que falta el dato.
+    const fxRate = currency === 'USD' ? 1 : (Number.isFinite(fx.rate) && fx.rate > 0 ? fx.rate : null);
+    const toolsCost = fxRate == null ? 0 : toolsCostUsd * fxRate;
     const companyCost = salaryNum * COMPANY_FACTOR;
     const personPrice = personMargin >= 1 ? 0 : companyCost / (1 - personMargin);
     const toolsPrice = toolsMargin >= 1 ? 0 : toolsCost / (1 - toolsMargin);
     const price = personPrice + toolsPrice;
-    return { salaryNum, personMargin, toolsMargin, toolsCost, companyCost, personPrice, toolsPrice, price };
-  }, [salary, personMarginPct, toolsMarginPct, toolsKey, toolsOpts]);
+    return { salaryNum, personMargin, toolsMargin, toolsCostUsd, toolsCost, companyCost, personPrice, toolsPrice, price, fxRate };
+  }, [salary, personMarginPct, toolsMarginPct, toolsKey, toolsOpts, currency, fx.rate]);
 
-  const canSave = Boolean(clientId) && profileName.trim().length > 0 && calc.salaryNum > 0;
+  // Si la moneda no es USD, requerimos una tasa válida para que el precio
+  // guardado sea correcto. Sin tasa, toolsCost queda 0 y es engañoso.
+  const fxBlocksSave = currency !== 'USD' && !(Number.isFinite(calc.fxRate) && calc.fxRate > 0);
+  const canSave = Boolean(clientId) && profileName.trim().length > 0 && calc.salaryNum > 0 && !fxBlocksSave;
 
   const handleSave = useCallback(() => {
     setFeedback(null);
@@ -124,9 +196,12 @@ export default function QuickQuote() {
       person_margin: calc.personMargin,
       tools_margin: calc.toolsMargin,
       tools_key: toolsKey,
+      tools_cost_usd: calc.toolsCostUsd,
       tools_cost: calc.toolsCost,
       company_cost: calc.companyCost,
       price: calc.price,
+      fx_rate: calc.fxRate,
+      fx_source_month: fx.sourceMonth,
     };
     // Functional update guards against rapid double-clicks: the second
     // call sees the post-update list, not the stale closure value.
@@ -181,12 +256,12 @@ export default function QuickQuote() {
               <input
                 id="qq-salary"
                 className={cx.input}
-                type="number"
-                min="0"
-                step="any"
-                value={salary}
-                onChange={(e) => setSalary(e.target.value)}
-                placeholder="Ej. 5000"
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                value={fmtThousands(salary)}
+                onChange={(e) => setSalary(e.target.value.replace(/\D/g, ''))}
+                placeholder="Ej. 5.000.000"
               />
               <select
                 aria-label="Moneda"
@@ -240,12 +315,42 @@ export default function QuickQuote() {
               onChange={(e) => setToolsKey(e.target.value)}
             >
               {toolsOpts.length === 0 && <option value="">— Sin parámetros de herramientas —</option>}
-              {toolsOpts.map((t) => (
-                <option key={t.key} value={t.key}>
-                  {t.key} — {fmtMoney(t.value, currency)}
-                </option>
-              ))}
+              {toolsOpts.map((t) => {
+                const usd = Number(t.value) || 0;
+                const inCurrency = currency === 'USD'
+                  ? usd
+                  : (Number.isFinite(calc.fxRate) && calc.fxRate > 0 ? usd * calc.fxRate : null);
+                const valueLabel = inCurrency == null
+                  ? `${fmtMoney(usd, 'USD')} (sin tasa)`
+                  : currency === 'USD'
+                    ? fmtMoney(usd, 'USD')
+                    : `${fmtMoney(inCurrency, currency)} · ${fmtMoney(usd, 'USD')}`;
+                return (
+                  <option key={t.key} value={t.key}>{t.key} — {valueLabel}</option>
+                );
+              })}
             </select>
+            {currency !== 'USD' && (
+              <span className={cx.hint}>
+                {fx.status === 'loading' && 'Cargando tasa USD→' + currency + '…'}
+                {fx.status === 'ok' && `Tasa USD→${currency} ${currentYyyymm()}: 1 USD = ${fmtMoney(fx.rate, currency)}`}
+                {fx.status === 'fallback' && (
+                  <span style={{ color: 'var(--ds-warn, #d97706)' }}>
+                    No hay tasa para {currentYyyymm()}; usando {fx.sourceMonth}: 1 USD = {fmtMoney(fx.rate, currency)}
+                  </span>
+                )}
+                {fx.status === 'missing' && (
+                  <span style={{ color: 'var(--ds-danger, #dc2626)' }}>
+                    No hay tasa USD→{currency} cargada en los últimos {FX_FALLBACK_MONTHS + 1} meses. Las herramientas no pueden convertirse — pedile a admin que cargue la tasa.
+                  </span>
+                )}
+                {fx.status === 'error' && (
+                  <span style={{ color: 'var(--ds-danger, #dc2626)' }}>
+                    Error al cargar tasa de cambio.
+                  </span>
+                )}
+              </span>
+            )}
           </div>
 
           <div className={cx.formula}>

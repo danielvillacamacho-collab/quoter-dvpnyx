@@ -129,4 +129,68 @@ describe('QuickQuote', () => {
     // 2000*1.5/(1-0.35) + 50/(1-0.20) = 4615.384... + 62.5 = 4677.884...
     expect(stored[0].price).toBeCloseTo(4677.88, 1);
   });
+
+  it('formats salary with thousand separators while typing (es-CO)', async () => {
+    await mountQuickQuote();
+    const input = screen.getByLabelText('Salario base');
+    fireEvent.change(input, { target: { value: '5000000' } });
+    expect(input).toHaveValue('5.000.000');
+
+    // Pegar valor con separadores los strippea y reformatea.
+    fireEvent.change(input, { target: { value: '12,345,678' } });
+    expect(input).toHaveValue('12.345.678');
+  });
+
+  it('converts tools cost to salary currency using monthly USD rate', async () => {
+    // Tools "Básico" = USD 50; con USD→COP = 4000, debería convertir a COP 200,000.
+    const yyyymm = `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+    apiV2.apiGet.mockImplementation((url) => {
+      if (url.startsWith('/api/clients')) return Promise.resolve(mockClients);
+      if (url.startsWith('/api/admin/exchange-rates')) {
+        return Promise.resolve({
+          months: [yyyymm],
+          currencies: ['COP'],
+          cells: { [`COP|${yyyymm}`]: { usd_rate: 4000 } },
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    await mountQuickQuote();
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Moneda'), { target: { value: 'COP' } });
+    });
+    fireEvent.change(screen.getByLabelText('Salario base'), { target: { value: '5000000' } });
+
+    // Costo herramientas en COP: 50 * 4000 = 200,000
+    await waitFor(() => {
+      expect(screen.getByText(/COP\s*200,000/)).toBeInTheDocument();
+    });
+  });
+
+  it('blocks save when no exchange rate is available for non-USD currency', async () => {
+    // Mock devuelve cells vacío => fx.status = 'missing'
+    apiV2.apiGet.mockImplementation((url) => {
+      if (url.startsWith('/api/clients')) return Promise.resolve(mockClients);
+      if (url.startsWith('/api/admin/exchange-rates')) {
+        return Promise.resolve({ months: [], currencies: [], cells: {} });
+      }
+      return Promise.resolve(null);
+    });
+
+    await mountQuickQuote();
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText('Moneda'), { target: { value: 'COP' } });
+    });
+    fireEvent.change(screen.getByLabelText('Salario base'), { target: { value: '1000000' } });
+    await changeSelect('Cliente', 'c1');
+    fireEvent.change(screen.getByLabelText('Nombre del perfil *'), { target: { value: 'Dev' } });
+
+    // Aunque están todos los campos requeridos, el botón sigue disabled
+    // porque falta la tasa.
+    await waitFor(() => {
+      expect(screen.getByText(/No hay tasa USD→COP/i)).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /^Guardar$/ })).toBeDisabled();
+  });
 });
