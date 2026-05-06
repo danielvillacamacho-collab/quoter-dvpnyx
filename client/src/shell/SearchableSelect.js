@@ -10,19 +10,28 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
  * casos donde se prefiera selector estable.
  *
  * Props:
- *   - value:       id seleccionado (string | '' | null)
- *   - onChange:    (id) => void   (recibe '' al limpiar)
- *   - options:     [{ id, label, hint?, searchText? }]
- *                  • label   — línea principal visible
- *                  • hint    — línea secundaria (chica, gris)
- *                  • searchText — texto contra el que se filtra (opcional;
- *                    si no, se busca contra `${label} ${hint}`).
+ *   - value:         id seleccionado (string | '' | null)
+ *   - onChange:      (id) => void   (recibe '' al limpiar)
+ *   - options:       [{ id, label, hint?, searchText? }]
+ *                    • label      — línea principal visible
+ *                    • hint       — línea secundaria (chica, gris)
+ *                    • searchText — texto contra el que se filtra (opcional;
+ *                      si no, se busca contra `${label} ${hint}`).
+ *   - noResultsText  — mensaje cuando no hay coincidencias (default 'Sin coincidencias')
  *   - placeholder, disabled, required, name, id, aria-label, inputStyle
  *
  * No usa portal: el popover se posiciona con `absolute` debajo del input
  * (limitado a 240px de alto + scroll) — funciona dentro de modales.
  */
-const norm = (s) => String(s || '').toLowerCase();
+
+// Lowercase + strip diacritics so "banco" == "bánco" == "Banco" (U+0300–U+036F block).
+const norm = (s) =>
+  String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .split('')
+    .filter((c) => { const cp = c.codePointAt(0); return cp < 0x300 || cp > 0x36f; })
+    .join('');
 
 export default function SearchableSelect({
   value,
@@ -31,6 +40,7 @@ export default function SearchableSelect({
   placeholder = '— Selecciona —',
   disabled = false,
   required = false,
+  noResultsText = 'Sin coincidencias',
   inputStyle,
   id,
   name,
@@ -196,7 +206,7 @@ export default function SearchableSelect({
         >
           {filtered.length === 0 && (
             <li style={{ padding: '8px 12px', fontSize: 13, color: 'var(--text-light)' }}>
-              Sin coincidencias
+              {noResultsText}
             </li>
           )}
           {filtered.map((o, i) => {

@@ -381,6 +381,7 @@ function happyEmp(overrides = {}) {
 describe('PUT /api/assignments/:id — EN-2 on update', () => {
   it('rejects 409 when increasing hours would overbook', async () => {
     queryQueue.push({ rows: [{ id: 'a1', employee_id: 'e1', weekly_hours: 10, start_date: '2026-05-01', end_date: '2026-08-01', status: 'active' }] });
+    queryQueue.push({ rows: [] }); // checkAssignmentLocks → no locked weeks
     queryQueue.push({ rows: [{ weekly_capacity_hours: 40, first_name: 'Ana', last_name: 'G' }] });
     queryQueue.push({ rows: [{ total: 30 }] }); // existing OTHER assignments
 
@@ -390,6 +391,7 @@ describe('PUT /api/assignments/:id — EN-2 on update', () => {
 
   it('updates when hours change stays under threshold', async () => {
     queryQueue.push({ rows: [{ id: 'a1', employee_id: 'e1', weekly_hours: 10, start_date: '2026-05-01', end_date: '2026-08-01', status: 'active' }] });
+    queryQueue.push({ rows: [] }); // checkAssignmentLocks → no locked weeks
     queryQueue.push({ rows: [{ weekly_capacity_hours: 40 }] });
     queryQueue.push({ rows: [{ total: 10 }] });
     queryQueue.push({ rows: [{ id: 'a1', weekly_hours: 20 }] });
@@ -538,6 +540,8 @@ describe('DELETE /api/assignments/:id — EN-5', () => {
   it('hard-deletes when there are no time entries', async () => {
     const { emitEvent } = require('../utils/events');
     emitEvent.mockClear();
+    queryQueue.push({ rows: [{ employee_id: 'e1', start_date: '2026-05-01', end_date: '2026-08-01' }] }); // assignment fetch for lock check
+    queryQueue.push({ rows: [] }); // checkAssignmentLocks → no locked weeks
     queryQueue.push({ rows: [{ count: 0 }] });
     queryQueue.push({ rows: [{ id: 'a1' }] });
     const res = await client.call('DELETE', '/api/assignments/a1');
@@ -550,6 +554,8 @@ describe('DELETE /api/assignments/:id — EN-5', () => {
   it('soft-deletes + cancels when time entries exist', async () => {
     const { emitEvent } = require('../utils/events');
     emitEvent.mockClear();
+    queryQueue.push({ rows: [{ employee_id: 'e1', start_date: '2026-05-01', end_date: '2026-08-01' }] }); // assignment fetch for lock check
+    queryQueue.push({ rows: [] }); // checkAssignmentLocks → no locked weeks
     queryQueue.push({ rows: [{ count: 12 }] });
     queryQueue.push({ rows: [{ id: 'a1', status: 'cancelled', deleted_at: 'now' }] });
     const res = await client.call('DELETE', '/api/assignments/a1');
@@ -558,6 +564,17 @@ describe('DELETE /api/assignments/:id — EN-5', () => {
     expect(res.body.preserved_time_entries).toBe(12);
     const evt = emitEvent.mock.calls.find((c) => c[1].event_type === 'assignment.soft_deleted');
     expect(evt).toBeTruthy();
+  });
+
+  it('returns 423 when assignment has locked weeks', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ employee_id: 'e1', start_date: '2026-05-01', end_date: '2026-08-01' }] });
+    queryQueue.push({ rows: [{ week_starting: '2026-05-04' }] }); // assignment_locks → has lock
+    const res = await client.call('DELETE', '/api/assignments/a1');
+    expect(res.status).toBe(423);
+    expect(res.body.code).toBe('ASSIGNMENT_LOCKED');
+    expect(res.body.locked_weeks).toContain('2026-05-04');
   });
 });
 

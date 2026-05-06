@@ -9,12 +9,13 @@ import {
   Contact, MessageSquare, Target, ChevronRight,
   Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
   GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
-  UserCircle, ClipboardCheck,
+  UserCircle, ClipboardCheck, Zap,
 } from 'lucide-react';
 import cx from './Sidebar.module.css';
 
 const ICONS = {
   '/quotations':                Home,
+  '/quotation/quick':           Zap,
   '/quotation/new/staff_aug':   UserPlus,
   '/quotation/new/fixed_scope': FileText,
   '/clients':                   Building2,
@@ -97,6 +98,7 @@ export function buildGroups(isAdmin, hasEmployee = false, isStaff = false, isLea
     {
       key: 'cotizaciones', title: 'Cotizaciones', collapsible: true, items: [
         { path: '/quotations',                label: 'Historial' },
+        { path: '/quotation/quick',           label: 'Cotización Rápida' },
         { path: '/quotation/new/staff_aug',   label: 'Staff Augmentation' },
         { path: '/quotation/new/fixed_scope', label: 'Proyecto (fixed)' },
       ],

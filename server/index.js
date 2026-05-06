@@ -135,6 +135,7 @@ app.use('/api/holidays',          require('./routes/holidays'));
 app.use('/api/idle-time',         require('./routes/idle_time'));
 app.use('/api/me',                require('./routes/me'));           // SPEC-EMP-00 self-service
 app.use('/api/reports/v2',        require('./routes/reports_v2'));    // Reports v2 — aggregate endpoints for charts
+app.use('/api/rm',                require('./routes/rm'));            // SPEC-RM-00 Resource Management
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.
