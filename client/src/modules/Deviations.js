@@ -130,6 +130,7 @@ export default function Deviations() {
       setRows(res?.data || []);
     } catch (ex) {
       setErr(ex.message || 'Error al cargar datos');
+      setRows([]);
     } finally {
       setLoading(false);
     }

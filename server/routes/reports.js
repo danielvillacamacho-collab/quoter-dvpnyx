@@ -493,7 +493,7 @@ router.get('/deviations', async (req, res) => {
     const to = req.query.to || toDefault.toISOString().slice(0, 10);
     const groupBy = req.query.group_by === 'project' ? 'project' : 'person';
     const areaId = req.query.area_id ? Number(req.query.area_id) : null;
-    const contractId = req.query.contract_id ? Number(req.query.contract_id) : null;
+    const contractId = req.query.contract_id ? String(req.query.contract_id) : null;
 
     /** Count business days (Mon-Fri) between two date strings inclusive. */
     function businessDays(f, t) {
@@ -551,14 +551,20 @@ router.get('/deviations', async (req, res) => {
         asgParams
       );
 
-      // Actual hours from time_entries
+      // Actual hours from time_entries (contract derived via assignments)
       const teParams = [empIds, from, to];
       let teFilter = '';
-      if (contractId) { teParams.push(contractId); teFilter = ` AND te.contract_id = $${teParams.length}`; }
+      let teJoin = '';
+      if (contractId) {
+        teParams.push(contractId);
+        teJoin = 'JOIN assignments asg ON asg.id = te.assignment_id';
+        teFilter = ` AND asg.contract_id = $${teParams.length}::uuid`;
+      }
 
       const { rows: timeRows } = await pool.query(
         `SELECT te.employee_id, COALESCE(SUM(te.hours), 0)::numeric AS total_hours
            FROM time_entries te
+           ${teJoin}
           WHERE te.employee_id = ANY($1::uuid[])
             AND te.work_date >= $2::date AND te.work_date <= $3::date
             AND te.deleted_at IS NULL
@@ -630,7 +636,7 @@ router.get('/deviations', async (req, res) => {
       `SELECT asg.contract_id, asg.weekly_hours, asg.start_date, asg.end_date
          FROM assignments asg
          ${areaId ? 'JOIN employees e ON e.id = asg.employee_id' : ''}
-        WHERE asg.contract_id = ANY($1::int[])
+        WHERE asg.contract_id = ANY($1::uuid[])
           AND asg.deleted_at IS NULL
           AND asg.status IN ('active','planned')
           AND asg.start_date <= $3::date
@@ -639,7 +645,8 @@ router.get('/deviations', async (req, res) => {
       asgParams2
     );
 
-    // Actual hours grouped by contract
+    // Actual hours grouped by contract (joined via assignments since
+    // time_entries does not store contract_id directly).
     const teParams2 = [contractIds, from, to];
     let teFilter2 = '';
     if (areaId) {
@@ -648,14 +655,15 @@ router.get('/deviations', async (req, res) => {
     }
 
     const { rows: timeRows2 } = await pool.query(
-      `SELECT te.contract_id, COALESCE(SUM(te.hours), 0)::numeric AS total_hours
+      `SELECT asg.contract_id, COALESCE(SUM(te.hours), 0)::numeric AS total_hours
          FROM time_entries te
+         JOIN assignments asg ON asg.id = te.assignment_id
          ${areaId ? 'JOIN employees e ON e.id = te.employee_id' : ''}
-        WHERE te.contract_id = ANY($1::int[])
+        WHERE asg.contract_id = ANY($1::uuid[])
           AND te.work_date >= $2::date AND te.work_date <= $3::date
           AND te.deleted_at IS NULL
           ${teFilter2}
-        GROUP BY te.contract_id`,
+        GROUP BY asg.contract_id`,
       teParams2
     );
     const actualMap2 = {};
