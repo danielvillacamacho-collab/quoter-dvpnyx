@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import App from './App';
 import * as api from './utils/api';
 import * as apiV2 from './utils/apiV2';
+import { changeSelect } from './utils/testHelpers';
 
 jest.mock('./utils/api');
 jest.mock('./utils/apiV2');
@@ -15,18 +16,9 @@ jest.mock('./utils/apiV2');
  */
 async function walkPastPreModal() {
   // Pre-modal is up when its Cliente selector is on screen
-  const clientSelect = await screen.findByLabelText('Cliente');
-  // Wait for the mocked clients list to populate the <option>s
-  // — otherwise the change event's value has no matching option and is a no-op.
-  await waitFor(() => {
-    expect(clientSelect.querySelector('option[value="c-pre"]')).not.toBeNull();
-  });
-  fireEvent.change(clientSelect, { target: { value: 'c-pre' } });
-  await waitFor(() => {
-    const opps = screen.getByLabelText('Oportunidad');
-    expect(opps.querySelector('option[value="o-pre"]')).not.toBeNull();
-  });
-  fireEvent.change(screen.getByLabelText('Oportunidad'), { target: { value: 'o-pre' } });
+  await screen.findByLabelText('Cliente');
+  await changeSelect('Cliente', 'c-pre');
+  await changeSelect('Oportunidad', 'o-pre');
   fireEvent.click(screen.getByRole('button', { name: /Continuar/i }));
 }
 
@@ -87,7 +79,7 @@ describe('Login', () => {
     await waitFor(() => expect(screen.getByText('Credenciales inválidas')).toBeInTheDocument());
   });
 
-  it('redirects to dashboard after successful login', async () => {
+  it('redirects to reports after successful login', async () => {
     api.login.mockResolvedValue({ token: 'tok123', user: mockUser });
     api.getParams.mockResolvedValue(mockParams);
     api.getQuotations.mockResolvedValue([]);
@@ -115,13 +107,14 @@ describe('Login', () => {
   });
 });
 
-/* ===== DASHBOARD ===== */
-describe('Dashboard', () => {
+/* ===== QUOTATION HISTORY ===== */
+describe('QuotationHistory', () => {
   beforeEach(() => {
     localStorage.setItem('dvpnyx_token', 'valid-token');
     jest.resetAllMocks();
     api.getMe.mockResolvedValue(mockUser);
     api.getParams.mockResolvedValue(mockParams);
+    window.history.pushState({}, '', '/quotations');
   });
 
   it('shows 4 metric cards', async () => {
@@ -242,11 +235,7 @@ describe('Layout — hamburger sidebar', () => {
     fireEvent.click(screen.getByLabelText('Menú'));
     expect(document.querySelector('.sidebar')).toHaveClass('open');
 
-    // The sidebar was rebuilt as a lucide-icon + text component (Phase 3
-    // of the UI refresh), so labels no longer include emoji prefixes.
-    // Click the Dashboard link inside the sidebar; the <nav> inside the
-    // Topbar's breadcrumb doesn't expose it, so this remains unambiguous.
-    fireEvent.click(screen.getByRole('link', { name: /^Dashboard$/ }));
+    fireEvent.click(screen.getByRole('link', { name: /^Historial$/ }));
     expect(document.querySelector('.sidebar')).not.toHaveClass('open');
   });
 });
@@ -346,14 +335,14 @@ describe('ProjectEditor — fixed_scope stepper', () => {
   });
 });
 
-/* ===== Dashboard — US-9.1 badge ===== */
-describe('Dashboard — fixed_scope badge says "Proyecto"', () => {
+/* ===== QuotationHistory — US-9.1 badge ===== */
+describe('QuotationHistory — fixed_scope badge says "Proyecto"', () => {
   beforeEach(() => {
     localStorage.setItem('dvpnyx_token', 'valid-token');
     jest.resetAllMocks();
     api.getMe.mockResolvedValue(mockUser);
     api.getParams.mockResolvedValue(mockParams);
-    window.history.pushState({}, '', '/');
+    window.history.pushState({}, '', '/quotations');
   });
 
   it('shows "Proyecto" (not "Alcance Fijo") for fixed_scope rows', async () => {
@@ -401,7 +390,7 @@ describe('AdminUsers — superadmin: change role & delete user', () => {
     api.updateUser.mockResolvedValue({ ...otherUser, role: 'admin' });
     render(<App />);
     await waitFor(() => screen.getByText('Alice'));
-    fireEvent.change(screen.getByLabelText('Rol de Alice'), { target: { value: 'admin' } });
+    await changeSelect('Rol de Alice', 'admin');
     await waitFor(() => expect(api.updateUser).toHaveBeenCalledWith('u2', { role: 'admin' }));
   });
 

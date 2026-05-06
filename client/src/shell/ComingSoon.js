@@ -48,7 +48,7 @@ export default function ComingSoon() {
           padding: '10px 20px', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
           fontFamily: 'Montserrat',
         }}
-      >← Volver al Dashboard</button>
+      >← Volver</button>
     </div>
   );
 }

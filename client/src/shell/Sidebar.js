@@ -14,7 +14,7 @@ import {
 import cx from './Sidebar.module.css';
 
 const ICONS = {
-  '/':                          Home,
+  '/quotations':                Home,
   '/quotation/new/staff_aug':   UserPlus,
   '/quotation/new/fixed_scope': FileText,
   '/clients':                   Building2,
@@ -52,10 +52,12 @@ const ICONS = {
   '/me/profile':                UserCircle,
   '/me/assignments':            ClipboardCheck,
   '/dashboard/me':              LayoutDashboard,
+  '/time/admin':                ClipboardCheck,
+  '/deviations':                Activity,
 };
 
 /** Build the grouped nav model. */
-export function buildGroups(isAdmin, hasEmployee = false, isStaff = false) {
+export function buildGroups(isAdmin, hasEmployee = false, isStaff = false, isLeadOrAdmin = false) {
   if (isStaff) {
     return [
       {
@@ -75,11 +77,6 @@ export function buildGroups(isAdmin, hasEmployee = false, isStaff = false) {
   }
 
   const groups = [
-    {
-      key: 'home', title: null, collapsible: false, items: [
-        { path: '/', label: 'Dashboard' },
-      ],
-    },
     ...(hasEmployee ? [{
       key: 'mi_espacio', title: 'Mi espacio', collapsible: true, items: [
         { path: '/me/profile',     label: 'Mi perfil' },
@@ -99,6 +96,7 @@ export function buildGroups(isAdmin, hasEmployee = false, isStaff = false) {
     },
     {
       key: 'cotizaciones', title: 'Cotizaciones', collapsible: true, items: [
+        { path: '/quotations',                label: 'Historial' },
         { path: '/quotation/new/staff_aug',   label: 'Staff Augmentation' },
         { path: '/quotation/new/fixed_scope', label: 'Proyecto (fixed)' },
       ],
@@ -123,6 +121,8 @@ export function buildGroups(isAdmin, hasEmployee = false, isStaff = false) {
     {
       key: 'tiempo', title: 'Tiempo', collapsible: true, items: [
         { path: '/time/team', label: 'Equipo semanal' },
+        ...(isLeadOrAdmin ? [{ path: '/time/admin', label: 'Asignar horas' }] : []),
+        { path: '/deviations', label: 'Desviaciones' },
       ],
     },
     {
@@ -243,11 +243,12 @@ export default function Sidebar({
   isAdmin = false,
   hasEmployee = false,
   isStaff = false,
+  isLeadOrAdmin = false,
   open = false,
   onNavigate,
   onLogout,
 }) {
-  const groups = buildGroups(isAdmin, hasEmployee, isStaff);
+  const groups = buildGroups(isAdmin, hasEmployee, isStaff, isLeadOrAdmin);
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(loadCollapsed);
 

@@ -29,6 +29,7 @@ import ResourceRequests from './modules/ResourceRequests';
 import Assignments from './modules/Assignments';
 import CapacityPlanner from './modules/CapacityPlanner';
 import TimeMe from './modules/TimeMe';
+import TimeAdmin from './modules/TimeAdmin';
 import TimeTeam from './modules/TimeTeam';
 import Reports from './modules/Reports';
 import ReportsHub from './modules/reports/ReportsHub';
@@ -59,6 +60,7 @@ import IdleTime from './modules/IdleTime';
 import CountryHolidays from './modules/CountryHolidays';
 import MiPerfil from './modules/MiPerfil';
 import MisAsignaciones from './modules/MisAsignaciones';
+import Deviations from './modules/Deviations';
 import './theme.css';
 import './App.css';
 
@@ -103,7 +105,7 @@ const css = {
 
 /* ========== LAYOUT ========== */
 function Layout() {
-  const { user, doLogout, isAdmin, isStaff, hasEmployee } = useAuth();
+  const { user, doLogout, isAdmin, isStaff, hasEmployee, isLeadOrAdmin } = useAuth();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -169,6 +171,7 @@ function Layout() {
         isAdmin={isAdmin}
         isStaff={isStaff}
         hasEmployee={hasEmployee}
+        isLeadOrAdmin={isLeadOrAdmin}
         open={sidebarOpen}
         onNavigate={closeSidebar}
         onLogout={() => { doLogout(); nav('/login'); }}
@@ -188,7 +191,7 @@ function Layout() {
         />
         <ErrorBoundary>
         <Routes>
-          <Route path="/" element={isStaff ? <Navigate to="/me/profile" /> : <Dashboard />} />
+          <Route path="/" element={isStaff ? <Navigate to="/me/profile" /> : <Navigate to="/reports" />} />
           {/* Staff-accessible routes */}
           <Route path="/me/profile" element={<MiPerfil />} />
           <Route path="/me/assignments" element={<MisAsignaciones />} />
@@ -197,6 +200,7 @@ function Layout() {
           <Route path="/time" element={<TimeMe />} />
           <Route path="/wiki" element={<Wiki />} />
           {!isStaff && <>
+          <Route path="/quotations" element={<QuotationHistory />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
           <Route path="/quotation/:id" element={<QuotationRouter />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
@@ -220,6 +224,7 @@ function Layout() {
           <Route path="/assignments" element={<Assignments />} />
           <Route path="/capacity/planner" element={<CapacityPlanner />} />
           <Route path="/time/team" element={<TimeTeam />} />
+          {isLeadOrAdmin && <Route path="/time/admin" element={<TimeAdmin />} />}
           <Route path="/reports" element={<ReportsHub />} />
           <Route path="/reports/ejecutivo" element={<ExecutiveReports />} />
           <Route path="/reports/comercial" element={<ComercialReports />} />
@@ -237,6 +242,7 @@ function Layout() {
           <Route path="/idle-time"                    element={<IdleTime />} />
           {isAdmin && <Route path="/admin/budgets" element={<Budgets />} />}
           <Route path="/admin/holidays"               element={<CountryHolidays />} />
+          <Route path="/deviations"                  element={<Deviations />} />
           </>}
         </Routes>
         </ErrorBoundary>
@@ -485,14 +491,13 @@ function ExecutiveKpis() {
   );
 }
 
-function Dashboard() {
+function QuotationHistory() {
   const [quots, setQuots] = useState([]);
   const [loading, setLoading] = useState(true);
   const nav = useNavigate();
 
   useEffect(() => { api.getQuotations().then(setQuots).catch(console.error).finally(() => setLoading(false)); }, []);
 
-  const statusColor = { draft: 'var(--text-light)', sent: 'var(--orange)', approved: 'var(--success)', rejected: 'var(--danger)', expired: '#999' };
   const statusLabel = { draft: 'Borrador', sent: 'Enviada', approved: 'Aprobada', rejected: 'Rechazada', expired: 'Expirada' };
 
   const handleDuplicate = async (id) => {
@@ -502,9 +507,8 @@ function Dashboard() {
 
   return (
     <div>
-      <ExecutiveKpis />
       <div className="page-header">
-        <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ds-text)', margin: 0 }}>Cotizaciones</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ds-text)', margin: 0 }}>Historial de cotizaciones</h1>
         <div className="page-header-actions">
           <button style={css.btn('var(--teal-mid)')} onClick={() => nav('/quotation/new/staff_aug')}>+ Staff Augmentation</button>
           <button style={css.btn('var(--orange)')} onClick={() => nav('/quotation/new/fixed_scope')}>+ Proyecto Alcance Fijo</button>
@@ -579,7 +583,7 @@ function QuotationRouter() {
   useEffect(() => {
     if (isNew) { setType(newType); setLoading(false); return; }
     if (quotId) {
-      api.getQuotation(quotId).then(q => { setType(q.type); setLoading(false); }).catch(() => nav('/'));
+      api.getQuotation(quotId).then(q => { setType(q.type); setLoading(false); }).catch(() => nav('/quotations'));
     }
   }, [quotId, newType, isNew, nav]);
 
@@ -591,7 +595,7 @@ function QuotationRouter() {
       <NewQuotationPreModal
         type={newType}
         onContext={setLinkingContext}
-        onCancel={() => nav('/')}
+        onCancel={() => nav('/quotations')}
       />
     );
   }

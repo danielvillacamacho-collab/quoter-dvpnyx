@@ -25,8 +25,8 @@ describe('Sidebar', () => {
     mount();
     const sectionHeaders = document.querySelectorAll('.ds-sb-section-label, [aria-expanded]');
     const labels = Array.from(sectionHeaders).map((el) => el.textContent.trim());
-    ['Comercial', 'Cotizaciones', 'Delivery', 'Gente', 'Tiempo', 'Operaciones', 'Reportes', 'Configuración'].forEach((label) => {
-      expect(labels).toContain(label);
+    ['Comercial', 'Cotizaciones', 'Delivery', 'Gente', 'Tiempo', 'Operaciones', 'Reportes', 'Configuración'].forEach((l) => {
+      expect(labels).toContain(l);
     });
   });
 
@@ -44,10 +44,10 @@ describe('Sidebar', () => {
     expect(link.className).toMatch(/\bactive\b/);
   });
 
-  it('does NOT treat non-root routes as matching "/" (Dashboard)', () => {
+  it('does NOT treat non-root routes as matching "/quotations" (Historial)', () => {
     mount({ initial: '/clients' });
-    const dashboard = screen.getByRole('link', { name: /^Dashboard$/ });
-    expect(dashboard.className).not.toMatch(/\bactive\b/);
+    const historial = screen.getByRole('link', { name: /^Historial$/ });
+    expect(historial.className).not.toMatch(/\bactive\b/);
   });
 
   it('calls onNavigate when any nav link is clicked (mobile close)', () => {
@@ -77,10 +77,10 @@ describe('Sidebar', () => {
   });
 
   it('buildGroups returns correct group counts based on role, employee link, and staff', () => {
-    expect(buildGroups(true, true).length).toBe(11);
-    expect(buildGroups(false, true).length).toBe(10);
-    expect(buildGroups(true, false).length).toBe(10);
-    expect(buildGroups(false, false).length).toBe(9);
+    expect(buildGroups(true, true).length).toBe(10);
+    expect(buildGroups(false, true).length).toBe(9);
+    expect(buildGroups(true, false).length).toBe(9);
+    expect(buildGroups(false, false).length).toBe(8);
     expect(buildGroups(false, false, true).length).toBe(2);
   });
 
@@ -122,9 +122,8 @@ describe('Sidebar', () => {
     expect(stored.reportes).toBe(true);
   });
 
-  it('non-collapsible sections (Dashboard, help) have no toggle button', () => {
+  it('non-collapsible sections (help) have no toggle button', () => {
     mount();
-    expect(screen.queryByRole('button', { name: /Dashboard/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /Manual de usuario/i })).toBeNull();
   });
 });
