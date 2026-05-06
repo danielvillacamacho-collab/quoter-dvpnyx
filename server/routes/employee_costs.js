@@ -227,8 +227,8 @@ router.get('/employee/:employeeId/:period', async (req, res) => {
  * GET /api/employee-costs/template.csv?period=YYYYMM
  * Descarga una plantilla CSV pre-poblada con todos los empleados
  * activos del período. Si ya hay costos cargados para ese período
- * los pre-llena (modo edición masiva). Columnas extra (nombre, nivel,
- * país) son solo informativas — el parser de importación las ignora.
+ * los pre-llena (modo edición masiva). La columna `nombre` es solo
+ * informativa — el parser de importación la ignora.
  * ============================================================ */
 router.get('/template.csv', async (req, res) => {
   try {
@@ -240,7 +240,7 @@ router.get('/template.csv', async (req, res) => {
     const periodLastDay  = `(DATE '${periodFirstDay}' + INTERVAL '1 month - 1 day')::date`;
 
     const { rows: employees } = await pool.query(
-      `SELECT e.id, e.first_name, e.last_name, e.level, e.country
+      `SELECT e.id, e.first_name, e.last_name
          FROM employees e
         WHERE e.deleted_at IS NULL
           AND e.start_date <= ${periodLastDay}
@@ -256,14 +256,14 @@ router.get('/template.csv', async (req, res) => {
     );
     const costByEmp = new Map(costs.map((c) => [c.employee_id, c]));
 
-    const header = 'employee_id,nombre,nivel,pais,currency,gross_cost,notes';
+    const header = 'employee_id,nombre,currency,gross_cost,notes';
     const rows = employees.map((e) => {
       const cost = costByEmp.get(e.id);
       const nombre = `${e.first_name} ${e.last_name}`.replace(/,/g, ' ');
       const currency   = cost ? cost.currency   : '';
       const gross_cost = cost ? cost.gross_cost : '';
       const notes      = cost && cost.notes ? String(cost.notes).replace(/,/g, ' ') : '';
-      return `${e.id},${nombre},${e.level || ''},${e.country || ''},${currency},${gross_cost},${notes}`;
+      return `${e.id},${nombre},${currency},${gross_cost},${notes}`;
     });
 
     const csv = '﻿' + [header, ...rows].join('\r\n');
