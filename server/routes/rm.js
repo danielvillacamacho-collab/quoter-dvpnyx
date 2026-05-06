@@ -18,6 +18,10 @@ const { serverError, safeRollback } = require('../utils/http');
 router.use(auth);
 
 const CAPACITY_HOURS = 40;
+const MAX_BULK_EMPLOYEES = 200;
+const MAX_TARGET_WEEKS = 52;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v);
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -52,28 +56,7 @@ async function getLockedWeeks(conn, employeeId, weekDates) {
   return new Set(rows.map((r) => r.week_starting));
 }
 
-async function getExistingHoursPerWeek(conn, employeeId, weekDates) {
-  if (!weekDates.length) return {};
-  const { rows } = await conn.query(
-    `SELECT
-       date_trunc('week', a.start_date)::date AS week_start,
-       COALESCE(SUM(a.weekly_hours), 0) AS total
-     FROM assignments a
-     WHERE a.employee_id = $1
-       AND a.deleted_at IS NULL
-       AND a.status IN ('planned','active')
-       AND a.start_date <= (unnest.d + 6)
-       AND (a.end_date IS NULL OR a.end_date >= unnest.d)
-     FROM unnest($2::date[]) AS unnest(d)
-     GROUP BY unnest.d`,
-    [employeeId, weekDates],
-  );
-  const map = {};
-  rows.forEach((r) => { map[r.week_start] = Number(r.total); });
-  return map;
-}
-
-// Simpler: for each employee+week, sum overlapping assignments
+// For each employee+week, sum overlapping assignments
 async function sumHoursForWeek(conn, employeeId, weekMonday) {
   const weekEnd = new Date(weekMonday);
   weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
@@ -201,10 +184,19 @@ router.post('/assignments/bulk-extend', adminOnly, async (req, res) => {
   if (!Array.isArray(employee_ids) || !employee_ids.length) {
     return res.status(400).json({ error: 'employee_ids requerido' });
   }
-  if (!contract_id) return res.status(400).json({ error: 'contract_id requerido' });
+  if (employee_ids.length > MAX_BULK_EMPLOYEES) {
+    return res.status(400).json({ error: `Máximo ${MAX_BULK_EMPLOYEES} empleados por operación` });
+  }
+  if (!employee_ids.every(isUuid)) {
+    return res.status(400).json({ error: 'employee_ids debe ser un array de UUIDs válidos' });
+  }
+  if (!isUuid(contract_id)) return res.status(400).json({ error: 'contract_id inválido' });
   if (!source_week) return res.status(400).json({ error: 'source_week requerido' });
   if (!Array.isArray(target_weeks) || !target_weeks.length) {
     return res.status(400).json({ error: 'target_weeks requerido' });
+  }
+  if (target_weeks.length > MAX_TARGET_WEEKS) {
+    return res.status(400).json({ error: `Máximo ${MAX_TARGET_WEEKS} semanas por operación` });
   }
 
   const conn = await pool.connect();
@@ -296,17 +288,27 @@ router.post('/assignments/bulk-remove', adminOnly, async (req, res) => {
   if (!Array.isArray(employee_ids) || !employee_ids.length || !contract_id || !week_from || !week_to) {
     return res.status(400).json({ error: 'employee_ids, contract_id, week_from y week_to son requeridos' });
   }
+  if (employee_ids.length > MAX_BULK_EMPLOYEES) {
+    return res.status(400).json({ error: `Máximo ${MAX_BULK_EMPLOYEES} empleados por operación` });
+  }
+  if (!employee_ids.every(isUuid)) {
+    return res.status(400).json({ error: 'employee_ids debe ser un array de UUIDs válidos' });
+  }
+  if (!isUuid(contract_id)) {
+    return res.status(400).json({ error: 'contract_id inválido' });
+  }
 
   try {
-    // Don't remove assignments in locked weeks
-    const { rows: locks } = await pool.query(
+    // Source of truth for locks is assignment_locks. Use NOT EXISTS so an
+    // assignment is skipped when ANY of the weeks it covers in the range
+    // is locked, regardless of the (potentially stale) is_locked column.
+    const { rows: lockRows } = await pool.query(
       `SELECT employee_id, week_starting::text FROM assignment_locks
         WHERE employee_id = ANY($1::uuid[])
           AND week_starting >= $2::date AND week_starting <= $3::date
           AND unlocked_at IS NULL`,
       [employee_ids, week_from, week_to],
     );
-    const lockedSet = new Set(locks.map((l) => `${l.employee_id}|${l.week_starting}`));
 
     const { rowCount } = await pool.query(
       `UPDATE assignments
@@ -316,11 +318,18 @@ router.post('/assignments/bulk-remove', adminOnly, async (req, res) => {
          AND deleted_at IS NULL
          AND status IN ('planned','active')
          AND start_date >= $3::date AND start_date <= $4::date
-         AND is_locked = false`,
+         AND NOT EXISTS (
+           SELECT 1 FROM assignment_locks al
+            WHERE al.employee_id = assignments.employee_id
+              AND al.unlocked_at IS NULL
+              AND al.week_starting BETWEEN $3::date AND $4::date
+              AND al.week_starting <= COALESCE(assignments.end_date, '9999-12-31'::date)
+              AND (al.week_starting + 6) >= assignments.start_date
+         )`,
       [employee_ids, contract_id, week_from, week_to],
     );
 
-    res.json({ removed: rowCount, skipped_locked: locks.length });
+    res.json({ removed: rowCount, skipped_locked: lockRows.length });
   } catch (err) { serverError(res, 'POST /rm/assignments/bulk-remove', err); }
 });
 
@@ -361,8 +370,10 @@ router.post('/locks', adminOnly, async (req, res) => {
   }
   const reason = lock_reason || 'manual_lock';
 
+  const conn = await pool.connect();
   try {
-    const { rows } = await pool.query(
+    await conn.query('BEGIN');
+    const { rows } = await conn.query(
       `INSERT INTO assignment_locks (employee_id, week_starting, locked_by, lock_reason)
        VALUES ($1, $2::date, $3, $4)
        ON CONFLICT (employee_id, week_starting) DO UPDATE
@@ -371,16 +382,21 @@ router.post('/locks', adminOnly, async (req, res) => {
       [employee_id, week_starting, req.user.id, reason],
     );
 
-    // Mark matching assignments as locked
-    await pool.query(
+    await conn.query(
       `UPDATE assignments SET is_locked = true, updated_at = NOW()
         WHERE employee_id = $1 AND deleted_at IS NULL
           AND start_date <= ($2::date + 6) AND (end_date IS NULL OR end_date >= $2::date)`,
       [employee_id, week_starting],
     );
 
+    await conn.query('COMMIT');
     res.json({ id: rows[0].id, locked: true });
-  } catch (err) { serverError(res, 'POST /rm/locks', err); }
+  } catch (err) {
+    await safeRollback(conn, 'POST /rm/locks');
+    serverError(res, 'POST /rm/locks', err);
+  } finally {
+    conn.release();
+  }
 });
 
 // ── DELETE /api/rm/locks/:id ────────────────────────────────────────
@@ -389,31 +405,52 @@ router.post('/locks', adminOnly, async (req, res) => {
 router.delete('/locks/:id', adminOnly, async (req, res) => {
   const { reason } = req.body || {};
 
+  const conn = await pool.connect();
   try {
-    const { rows } = await pool.query(
+    await conn.query('BEGIN');
+    const { rows } = await conn.query(
       `UPDATE assignment_locks SET unlocked_at = NOW(), unlocked_by = $1
         WHERE id = $2 AND unlocked_at IS NULL
         RETURNING employee_id, week_starting`,
       [req.user.id, req.params.id],
     );
-    if (!rows.length) return res.status(404).json({ error: 'Lock no encontrado o ya desbloqueado' });
+    if (!rows.length) {
+      await conn.query('ROLLBACK');
+      return res.status(404).json({ error: 'Lock no encontrado o ya desbloqueado' });
+    }
 
     const { employee_id, week_starting } = rows[0];
-    await pool.query(
+    // Only clear is_locked if no OTHER active lock still covers an
+    // overlapping week — otherwise we'd unlock assignments that remain
+    // locked by a different week.
+    await conn.query(
       `UPDATE assignments SET is_locked = false, updated_at = NOW()
         WHERE employee_id = $1 AND deleted_at IS NULL
-          AND start_date <= ($2::date + 6) AND (end_date IS NULL OR end_date >= $2::date)`,
+          AND start_date <= ($2::date + 6) AND (end_date IS NULL OR end_date >= $2::date)
+          AND NOT EXISTS (
+            SELECT 1 FROM assignment_locks al
+             WHERE al.employee_id = assignments.employee_id
+               AND al.unlocked_at IS NULL
+               AND al.week_starting <= COALESCE(assignments.end_date, '9999-12-31'::date)
+               AND (al.week_starting + 6) >= assignments.start_date
+          )`,
       [employee_id, week_starting],
     );
 
-    await pool.query(
+    await conn.query(
       `INSERT INTO audit_log (user_id, action, details, ip_address)
        VALUES ($1, 'assignment_unlock', $2, $3)`,
       [req.user.id, JSON.stringify({ lock_id: req.params.id, employee_id, week_starting, reason }), req.ip],
     );
 
+    await conn.query('COMMIT');
     res.json({ unlocked: true });
-  } catch (err) { serverError(res, 'DELETE /rm/locks/:id', err); }
+  } catch (err) {
+    await safeRollback(conn, 'DELETE /rm/locks/:id');
+    serverError(res, 'DELETE /rm/locks/:id', err);
+  } finally {
+    conn.release();
+  }
 });
 
 // ── GET /api/rm/actual-hours/export ─────────────────────────────────
