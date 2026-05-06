@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiGet, apiPost, apiPut } from '../utils/apiV2';
 import CandidatesModal from './CandidatesModal';
+import BulkAssignModal from './BulkAssignModal';
 import FilterableSelect from '../shell/FilterableSelect';
 
 /**
@@ -1149,6 +1150,8 @@ export default function CapacityPlanner() {
   const [editingAssignmentId, setEditingAssignmentId] = useState(null);
   // SPEC-009: accordion state — keyed by contract_id, true = expanded
   const [expandedProjects, setExpandedProjects] = useState({});
+  // SPEC-RM-00: bulk assignment modal
+  const [showBulkModal, setShowBulkModal] = useState(false);
 
   const toggleProject = useCallback((contractId) => {
     setExpandedProjects((prev) => ({ ...prev, [contractId]: !prev[contractId] }));
@@ -1234,6 +1237,28 @@ export default function CapacityPlanner() {
       setErr(ex.message || 'Error exportando Excel');
     }
   }, [filters]);
+
+  const handleExportActualHours = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('dvpnyx_token');
+      const p = new URLSearchParams({ week_from: start, week_to: shiftIso(start, (weeks - 1) * 7 + 6) });
+      if (contractId) p.set('contract_id', contractId);
+      if (areaId) p.set('area_id', areaId);
+      const resp = await fetch(`/api/rm/actual-hours/export?${p}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error('Error al exportar');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `DVPNYX_HorasReales_${start}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (ex) {
+      setErr(ex.message || 'Error exportando horas reales');
+    }
+  }, [start, weeks, contractId, areaId]);
 
   useEffect(() => {
     // Areas are a small lookup; fetch once for the filter dropdown.
@@ -1379,6 +1404,12 @@ export default function CapacityPlanner() {
 
         <button type="button" style={{ ...s.btn, fontWeight: 600 }} onClick={handleExport} aria-label="Exportar Excel">
           Exportar Excel
+        </button>
+        <button type="button" style={{ ...s.btn, fontWeight: 600 }} onClick={handleExportActualHours} aria-label="Exportar horas reales">
+          Exportar horas reales
+        </button>
+        <button type="button" style={{ ...s.btn, fontWeight: 600, background: 'var(--ds-accent, var(--purple-dark))', color: '#fff' }} onClick={() => setShowBulkModal(true)} aria-label="Asignar en lote">
+          Asignar en lote
         </button>
 
         {view === 'employees' && (
@@ -1556,6 +1587,15 @@ export default function CapacityPlanner() {
           assignmentId={editingAssignmentId}
           onClose={() => setEditingAssignmentId(null)}
           onSaved={() => { setEditingAssignmentId(null); load(); }}
+        />
+      )}
+
+      {/* SPEC-RM-00: Bulk assign modal */}
+      {showBulkModal && (
+        <BulkAssignModal
+          onClose={() => setShowBulkModal(false)}
+          onDone={() => { setShowBulkModal(false); load(); }}
+          plannerData={data}
         />
       )}
     </div>

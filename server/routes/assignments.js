@@ -52,6 +52,20 @@ const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
 
+async function checkAssignmentLocks(conn, employeeId, startDate, endDate) {
+  const effectiveEnd = endDate || '9999-12-31';
+  const { rows } = await conn.query(
+    `SELECT week_starting FROM assignment_locks
+      WHERE employee_id = $1
+        AND unlocked_at IS NULL
+        AND week_starting >= date_trunc('week', $2::date)::date
+        AND week_starting <= $3::date
+      ORDER BY week_starting LIMIT 5`,
+    [employeeId, startDate, effectiveEnd]
+  );
+  return rows.map((r) => r.week_starting);
+}
+
 const VALID_STATUSES = ['planned', 'active', 'ended', 'cancelled'];
 const OVERBOOK_FACTOR = 1.10;
 
@@ -703,6 +717,16 @@ router.put('/:id', adminOnly, async (req, res) => {
     );
     if (!before) { conn.release(); return res.status(404).json({ error: 'Asignación no encontrada' }); }
 
+    const lockedWeeks = await checkAssignmentLocks(conn, before.employee_id, before.start_date, before.end_date);
+    if (lockedWeeks.length) {
+      conn.release();
+      return res.status(423).json({
+        error: 'La asignación tiene semanas bloqueadas y no puede modificarse.',
+        code: 'ASSIGNMENT_LOCKED',
+        locked_weeks: lockedWeeks,
+      });
+    }
+
     const body = req.body || {};
     if (body.weekly_hours != null) {
       const wh = Number(body.weekly_hours);
@@ -842,6 +866,21 @@ router.put('/:id', adminOnly, async (req, res) => {
  */
 router.delete('/:id', adminOnly, async (req, res) => {
   try {
+    const { rows: asgRows } = await pool.query(
+      `SELECT employee_id, start_date, end_date FROM assignments WHERE id=$1 AND deleted_at IS NULL`,
+      [req.params.id]
+    );
+    if (!asgRows.length) return res.status(404).json({ error: 'Asignación no encontrada' });
+
+    const lockedWeeks = await checkAssignmentLocks(pool, asgRows[0].employee_id, asgRows[0].start_date, asgRows[0].end_date);
+    if (lockedWeeks.length) {
+      return res.status(423).json({
+        error: 'La asignación tiene semanas bloqueadas y no puede eliminarse.',
+        code: 'ASSIGNMENT_LOCKED',
+        locked_weeks: lockedWeeks,
+      });
+    }
+
     const { rows: te } = await pool.query(
       `SELECT COUNT(*)::int AS count FROM time_entries WHERE assignment_id=$1`,
       [req.params.id]
