@@ -62,6 +62,7 @@ export default function QuickQuote() {
   const [toolsKey, setToolsKey] = useState('');
 
   const [clients, setClients] = useState([]);
+  const [clientsError, setClientsError] = useState(false);
   const [clientId, setClientId] = useState('');
   const [profileName, setProfileName] = useState('');
   const [savedList, setSavedList] = useState(() => loadSaved());
@@ -84,9 +85,11 @@ export default function QuickQuote() {
   }, [defaultToolsMargin, toolsMarginPct]);
 
   useEffect(() => {
+    let cancelled = false;
     apiGet('/api/clients?limit=200&active=true')
-      .then((r) => setClients(r?.data || []))
-      .catch(() => setClients([]));
+      .then((r) => { if (!cancelled) { setClients(r?.data || []); setClientsError(false); } })
+      .catch(() => { if (!cancelled) { setClients([]); setClientsError(true); } });
+    return () => { cancelled = true; };
   }, []);
 
   const calc = useMemo(() => {
@@ -125,11 +128,15 @@ export default function QuickQuote() {
       company_cost: calc.companyCost,
       price: calc.price,
     };
-    const next = [entry, ...savedList].slice(0, 100);
-    setSavedList(next);
-    persist(next);
+    // Functional update guards against rapid double-clicks: the second
+    // call sees the post-update list, not the stale closure value.
+    setSavedList((prev) => {
+      const next = [entry, ...prev].slice(0, 100);
+      persist(next);
+      return next;
+    });
     setFeedback({ type: 'success', text: 'Cotización rápida guardada' });
-  }, [clientId, profileName, calc, clients, currency, toolsKey, savedList]);
+  }, [clientId, profileName, calc, clients, currency, toolsKey]);
 
   const handleDelete = useCallback((id) => {
     const next = savedList.filter((q) => q.id !== id);
@@ -290,6 +297,11 @@ export default function QuickQuote() {
               options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
               aria-label="Cliente"
             />
+            {clientsError && (
+              <span className={cx.hint} style={{ color: 'var(--ds-danger, #dc2626)' }}>
+                No se pudo cargar la lista de clientes. Reintenta recargando la página.
+              </span>
+            )}
           </div>
           <div className={cx.field}>
             <label className={cx.label} htmlFor="qq-profile">Nombre del perfil *</label>

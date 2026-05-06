@@ -73,15 +73,22 @@ export default function BulkAssignModal({ onClose, onDone, plannerData }) {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     apiGet('/api/rm/contracts/active')
-      .then((d) => setContracts(d.data || []))
+      .then((d) => { if (!cancelled) setContracts(d.data || []); })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     apiGet('/api/employees?limit=500&status=active')
-      .then((d) => setEmployees((d.data || d || []).filter((e) => e.status === 'active' || !e.status)))
+      .then((d) => {
+        if (cancelled) return;
+        setEmployees((d.data || d || []).filter((e) => e.status === 'active' || !e.status));
+      })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   const filteredEmployees = useMemo(() => {
@@ -136,6 +143,8 @@ export default function BulkAssignModal({ onClose, onDone, plannerData }) {
   }, [selectedEmployees, contractId, requestId, weeklyHours, startDate, endDate, roleTitle]);
 
   const confirm = useCallback(async () => {
+    // Guard against rapid double-click while React reconciles `submitting`.
+    if (submitting) return;
     setSubmitting(true);
     setErr('');
     try {
@@ -156,13 +165,25 @@ export default function BulkAssignModal({ onClose, onDone, plannerData }) {
     } finally {
       setSubmitting(false);
     }
-  }, [selectedEmployees, contractId, requestId, weeklyHours, startDate, endDate, roleTitle, onDone, onClose]);
+  }, [submitting, selectedEmployees, contractId, requestId, weeklyHours, startDate, endDate, roleTitle, onDone, onClose]);
+
+  // Ask for confirmation if the user tries to close with unsaved input.
+  // We treat any non-default form state on step 2/3 as "dirty"; step 1 with
+  // only the default 40h pre-fill is not.
+  const isDirty = step >= 2 || selectedEmployees.size > 0 || (contractId && (startDate || endDate || roleTitle));
+  const requestClose = useCallback(() => {
+    if (!submitting && isDirty) {
+      // eslint-disable-next-line no-alert
+      if (!window.confirm('Cerrar la asignación en lote? Se perderán los datos ingresados.')) return;
+    }
+    onClose();
+  }, [submitting, isDirty, onClose]);
 
   const contractName = contracts.find((c) => String(c.id) === String(contractId))?.name || '';
 
   return (
     <div style={ms.overlay} role="dialog" aria-modal="true" aria-label="Asignacion en lote"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      onClick={(e) => { if (e.target === e.currentTarget) requestClose(); }}>
       <div style={ms.panel}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
@@ -173,7 +194,7 @@ export default function BulkAssignModal({ onClose, onDone, plannerData }) {
               {step === 3 && 'Paso 3: Revisa el resultado antes de confirmar.'}
             </p>
           </div>
-          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--ds-text-dim)' }} aria-label="Cerrar">&times;</button>
+          <button type="button" onClick={requestClose} style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: 'var(--ds-text-dim)' }} aria-label="Cerrar">&times;</button>
         </div>
 
         {err && <div style={ms.err}>{err}</div>}

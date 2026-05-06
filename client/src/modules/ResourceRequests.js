@@ -86,12 +86,24 @@ function ResourceRequestForm({ initial, contracts, areas, onSave, onCancel, savi
           required
           disabled={!!initial?.id}
           noResultsText="No se encontraron contratos"
-          options={contracts.map((c) => ({
-            id: c.id,
-            label: c.name,
-            hint: c.client_name || undefined,
-            searchText: c.client_name ? `${c.name} ${c.client_name}` : c.name,
-          }))}
+          options={(() => {
+            const opts = contracts.map((c) => ({
+              id: c.id,
+              label: c.name,
+              hint: c.client_name || undefined,
+              searchText: c.client_name ? `${c.name} ${c.client_name}` : c.name,
+            }));
+            // On edit, the current contract may have moved to completed/cancelled
+            // and been filtered out. Surface it so the value renders correctly.
+            if (initial?.id && form.contract_id && !opts.some((o) => o.id === form.contract_id)) {
+              opts.unshift({
+                id: form.contract_id,
+                label: initial.contract_name || '(contrato cerrado)',
+                hint: initial.client_name || undefined,
+              });
+            }
+            return opts;
+          })()}
         />
       </div>
       <div>
