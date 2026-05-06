@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import SearchableSelect from '../shell/SearchableSelect';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -74,10 +75,21 @@ function ResourceRequestForm({ initial, contracts, areas, onSave, onCancel, savi
       </h2>
       <div>
         <label style={s.label}>Contrato *</label>
-        <select style={s.input} value={form.contract_id || ''} onChange={(e) => set('contract_id', e.target.value)} aria-label="Contrato" required disabled={!!initial?.id}>
-          <option value="">— Selecciona —</option>
-          {contracts.map((c) => <option key={c.id} value={c.id}>{c.name} ({c.status})</option>)}
-        </select>
+        <SearchableSelect
+          id="form-contract"
+          aria-label="Contrato"
+          value={form.contract_id || ''}
+          onChange={(v) => set('contract_id', v)}
+          required
+          disabled={!!initial?.id}
+          noResultsText="No se encontraron contratos"
+          options={contracts.map((c) => ({
+            id: c.id,
+            label: c.name,
+            hint: c.client_name || undefined,
+            searchText: c.client_name ? `${c.name} ${c.client_name}` : c.name,
+          }))}
+        />
       </div>
       <div>
         <label style={s.label}>Role title *</label>
@@ -250,10 +262,19 @@ export default function ResourceRequests() {
           </div>
           <div style={{ minWidth: 180 }}>
             <label style={s.label}>Contrato</label>
-            <select style={s.input} value={contractFilter} onChange={(e) => setContractFilter(e.target.value)} aria-label="Filtro por contrato">
-              <option value="">Cualquiera</option>
-              {contracts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <SearchableSelect
+              aria-label="Filtro por contrato"
+              value={contractFilter}
+              onChange={(v) => setContractFilter(v)}
+              placeholder="Cualquiera"
+              noResultsText="No se encontraron contratos"
+              options={contracts.map((c) => ({
+                id: c.id,
+                label: c.name,
+                hint: c.client_name || undefined,
+                searchText: c.client_name ? `${c.name} ${c.client_name}` : c.name,
+              }))}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Estado</label>
