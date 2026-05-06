@@ -8,7 +8,7 @@
  */
 import React, { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { apiPost } from '../utils/apiV2';
+import { apiPost, apiDownload } from '../utils/apiV2';
 import { useAuth } from '../AuthContext';
 import { formatPeriod, normalizePeriod, currentPeriod, recentPeriods } from '../utils/cost';
 import FilterableSelect from '../shell/FilterableSelect';
@@ -67,6 +67,21 @@ export default function EmployeeCostsImport() {
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const [committed, setCommitted] = useState(null);
+  const [downloading, setDownloading] = useState(false);
+
+  const onDownloadTemplate = async () => {
+    setDownloading(true);
+    try {
+      await apiDownload(
+        `/api/employee-costs/template.csv?period=${period}`,
+        `costos-empleados-${period}.csv`
+      );
+    } catch (e) {
+      setErr(e.message || 'Error al descargar plantilla');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const periodOptions = useMemo(() => recentPeriods(18), []);
 
@@ -140,8 +155,17 @@ export default function EmployeeCostsImport() {
             <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Subir archivo CSV</label>
             <input type="file" accept=".csv,text/csv" onChange={onFile} />
           </div>
+          <button
+            type="button"
+            style={{ ...s.btn('var(--purple-dark)'), opacity: downloading ? 0.7 : 1 }}
+            onClick={onDownloadTemplate}
+            disabled={downloading}
+            title="Descarga un CSV con todos los empleados activos del período seleccionado y sus IDs listos para completar"
+          >
+            {downloading ? 'Descargando…' : '⬇ Descargar plantilla con empleados'}
+          </button>
           <button type="button" style={s.btnOutline} onClick={() => setCsvText(SAMPLE_CSV)}>
-            Usar plantilla de ejemplo
+            Ver ejemplo
           </button>
         </div>
 
