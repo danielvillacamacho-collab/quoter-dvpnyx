@@ -44,6 +44,7 @@ import OpportunityDetail from './modules/OpportunityDetail';
 import ContractDetail from './modules/ContractDetail';
 import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
+import QuickQuote from './modules/QuickQuote';
 import BulkImport from './modules/BulkImport';
 import Users from './modules/Users';
 import EmployeeCosts from './modules/EmployeeCosts';
@@ -201,6 +202,7 @@ function Layout() {
           <Route path="/wiki" element={<Wiki />} />
           {!isStaff && <>
           <Route path="/quotations" element={<QuotationHistory />} />
+          <Route path="/quotation/quick" element={<QuickQuote />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
           <Route path="/quotation/:id" element={<QuotationRouter />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
@@ -510,6 +512,7 @@ function QuotationHistory() {
       <div className="page-header">
         <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ds-text)', margin: 0 }}>Historial de cotizaciones</h1>
         <div className="page-header-actions">
+          <button style={css.btnOutline} onClick={() => nav('/quotation/quick')}>⚡ Cotización Rápida</button>
           <button style={css.btn('var(--teal-mid)')} onClick={() => nav('/quotation/new/staff_aug')}>+ Staff Augmentation</button>
           <button style={css.btn('var(--orange)')} onClick={() => nav('/quotation/new/fixed_scope')}>+ Proyecto Alcance Fijo</button>
         </div>
