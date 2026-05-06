@@ -4,6 +4,7 @@ import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
+import FilterableSelect from '../shell/FilterableSelect';
 
 /* ========== styles ========== */
 const s = {
@@ -116,14 +117,13 @@ function ActivityForm({ initial, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Tipo *</label>
-          <select
-            style={{ ...s.input, padding: '8px 10px' }}
+          <FilterableSelect
             value={form.activity_type}
             onChange={(e) => set('activity_type', e.target.value)}
             required
-          >
-            {ACTIVITY_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            options={ACTIVITY_TYPES.map((t) => ({ id: t.value, label: t.label }))}
+          />
         </div>
         <div>
           <label style={s.label}>Fecha</label>
@@ -146,40 +146,35 @@ function ActivityForm({ initial, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Oportunidad</label>
-          <select
-            style={{ ...s.input, padding: '8px 10px' }}
+          <FilterableSelect
             value={form.opportunity_id || ''}
             onChange={(e) => set('opportunity_id', e.target.value)}
-          >
-            <option value="">— Ninguna —</option>
-            {opportunities.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            placeholder="— Ninguna —"
+            options={opportunities.map((o) => ({ id: String(o.id), label: o.name }))}
+          />
         </div>
         <div>
           <label style={s.label}>Cliente</label>
-          <select
-            style={{ ...s.input, padding: '8px 10px' }}
+          <FilterableSelect
             value={form.client_id || ''}
             onChange={(e) => handleClientChange(e.target.value)}
-          >
-            <option value="">— Ninguno —</option>
-            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            placeholder="— Ninguno —"
+            options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+          />
         </div>
       </div>
       <div>
         <label style={s.label}>Contacto</label>
-        <select
-          style={{ ...s.input, padding: '8px 10px' }}
+        <FilterableSelect
           value={form.contact_id || ''}
           onChange={(e) => set('contact_id', e.target.value)}
           disabled={!form.client_id}
-        >
-          <option value="">— {form.client_id ? 'Ninguno' : 'Selecciona un cliente primero'} —</option>
-          {contacts.map((c) => (
-            <option key={c.id} value={c.id}>{c.first_name} {c.last_name}{c.job_title ? ` — ${c.job_title}` : ''}</option>
-          ))}
-        </select>
+          inputStyle={{ ...s.input, padding: '8px 10px' }}
+          placeholder={`— ${form.client_id ? 'Ninguno' : 'Selecciona un cliente primero'} —`}
+          options={contacts.map((c) => ({ id: String(c.id), label: `${c.first_name} ${c.last_name}${c.job_title ? ` — ${c.job_title}` : ''}` }))}
+        />
       </div>
       {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -299,15 +294,14 @@ export default function Activities() {
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Tipo</label>
-            <select
-              style={s.input}
+            <FilterableSelect
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
               aria-label="Filtro por tipo"
-            >
-              <option value="">Todos</option>
-              {ACTIVITY_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={ACTIVITY_TYPES.map((t) => ({ id: t.value, label: t.label }))}
+            />
           </div>
           {urlOpportunityId && (
             <div style={{ fontSize: 12, color: 'var(--text-light)', alignSelf: 'center', paddingTop: 16 }}>

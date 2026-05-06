@@ -22,6 +22,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPut, apiPost } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`);
 
@@ -365,26 +366,42 @@ export default function Revenue() {
         </label>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
           Moneda
-          <select value={displayCurrency} onChange={(e) => setDisplayCurrency(e.target.value)}
-                  style={{ ...s.inp, width: 90 }} aria-label="Moneda de vista">
-            <option value="USD">USD</option>
-            <option value="COP">COP</option>
-            <option value="MXN">MXN</option>
-            <option value="GTQ">GTQ</option>
-            <option value="EUR">EUR</option>
-            <option value="PEN">PEN</option>
-          </select>
+          <FilterableSelect
+            value={displayCurrency}
+            onChange={(e) => setDisplayCurrency(e.target.value)}
+            inputStyle={{ ...s.inp, width: 90 }}
+            aria-label="Moneda de vista"
+            placeholder="— Moneda —"
+            options={[
+              { id: 'USD', label: 'USD' },
+              { id: 'COP', label: 'COP' },
+              { id: 'MXN', label: 'MXN' },
+              { id: 'GTQ', label: 'GTQ' },
+              { id: 'EUR', label: 'EUR' },
+              { id: 'PEN', label: 'PEN' },
+            ]}
+          />
         </label>
-        <select value={filters.type} onChange={(e) => setFilter('type', e.target.value)} style={s.inp} aria-label="Tipo">
-          <option value="">Todos los tipos</option>
-          <option value="capacity">Capacity</option>
-          <option value="project">Proyectos</option>
-          <option value="resell">Resell</option>
-        </select>
-        <select value={filters.owner_id} onChange={(e) => setFilter('owner_id', e.target.value)} style={s.inp} aria-label="Owner">
-          <option value="">Todos los owners</option>
-          {users.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
-        </select>
+        <FilterableSelect
+          value={filters.type}
+          onChange={(e) => setFilter('type', e.target.value)}
+          inputStyle={s.inp}
+          aria-label="Tipo"
+          placeholder="Todos los tipos"
+          options={[
+            { id: 'capacity', label: 'Capacity' },
+            { id: 'project', label: 'Proyectos' },
+            { id: 'resell', label: 'Resell' },
+          ]}
+        />
+        <FilterableSelect
+          value={filters.owner_id}
+          onChange={(e) => setFilter('owner_id', e.target.value)}
+          inputStyle={s.inp}
+          aria-label="Owner"
+          placeholder="Todos los owners"
+          options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
+        />
         <input type="text" placeholder="País (CO, MX, …)" maxLength={3}
                value={filters.country} onChange={(e) => setFilter('country', e.target.value)}
                style={{ ...s.inp, width: 110 }} aria-label="País" />

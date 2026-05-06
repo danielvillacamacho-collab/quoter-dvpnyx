@@ -6,6 +6,7 @@ import StatusBadge from '../shell/StatusBadge';
 import Avatar from '../shell/Avatar';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -124,16 +125,26 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Área *</label>
-          <select style={s.input} value={form.area_id || ''} onChange={(e) => set('area_id', Number(e.target.value) || '')} aria-label="Área" required>
-            <option value="">— Selecciona —</option>
-            {areas.filter((a) => a.active).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.area_id || ''}
+            onChange={(e) => set('area_id', Number(e.target.value) || '')}
+            aria-label="Área"
+            required
+            inputStyle={s.input}
+            placeholder="— Selecciona —"
+            options={areas.filter((a) => a.active).map((a) => ({ id: String(a.id), label: a.name }))}
+          />
         </div>
         <div>
           <label style={s.label}>Level *</label>
-          <select style={s.input} value={form.level} onChange={(e) => set('level', e.target.value)} aria-label="Level" required>
-            {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.level}
+            onChange={(e) => set('level', e.target.value)}
+            aria-label="Level"
+            required
+            inputStyle={s.input}
+            options={LEVELS.map((l) => ({ id: l, label: l }))}
+          />
         </div>
         <div>
           <label style={s.label}>Seniority (texto)</label>
@@ -143,9 +154,13 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Tipo de contrato</label>
-          <select style={s.input} value={form.employment_type} onChange={(e) => set('employment_type', e.target.value)} aria-label="Tipo de contrato">
-            {EMPLOYMENT_TYPES.map((et) => <option key={et.value} value={et.value}>{et.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.employment_type}
+            onChange={(e) => set('employment_type', e.target.value)}
+            aria-label="Tipo de contrato"
+            inputStyle={s.input}
+            options={EMPLOYMENT_TYPES.map((et) => ({ id: et.value, label: et.label }))}
+          />
         </div>
         <div>
           <label style={s.label}>Horas semanales</label>
@@ -153,9 +168,13 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
         </div>
         <div>
           <label style={s.label}>Estado</label>
-          <select style={s.input} value={form.status} onChange={(e) => set('status', e.target.value)} aria-label="Estado">
-            {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.status}
+            onChange={(e) => set('status', e.target.value)}
+            aria-label="Estado"
+            inputStyle={s.input}
+            options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+          />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -352,14 +371,13 @@ function EmployeeSkillsModal({ employee, onClose }) {
                     <td style={{ ...s.td, fontWeight: 600 }}>{sk.skill_name}</td>
                     <td style={{ ...s.td, fontFamily: 'monospace', fontSize: 12 }}>{sk.skill_category || '—'}</td>
                     <td style={s.td}>
-                      <select
-                        style={{ ...s.input, padding: '4px 6px', fontSize: 12 }}
+                      <FilterableSelect
                         value={sk.proficiency}
                         onChange={(e) => updateSkill(sk, { proficiency: e.target.value })}
                         aria-label={`Proficiency ${sk.skill_name}`}
-                      >
-                        {PROFICIENCIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                      </select>
+                        inputStyle={{ ...s.input, padding: '4px 6px', fontSize: 12 }}
+                        options={PROFICIENCIES.map((p) => ({ id: p.value, label: p.label }))}
+                      />
                     </td>
                     <td style={s.td}>
                       <input
@@ -401,27 +419,25 @@ function EmployeeSkillsModal({ employee, onClose }) {
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 2fr auto', gap: 8, alignItems: 'end' }}>
             <div>
               <label style={s.label}>Skill *</label>
-              <select
-                style={s.input}
+              <FilterableSelect
                 value={addForm.skill_id}
                 onChange={(e) => setAddForm({ ...addForm, skill_id: e.target.value })}
                 aria-label="Nuevo skill"
                 required
-              >
-                <option value="">— Selecciona —</option>
-                {availableCatalog.map((c) => <option key={c.id} value={c.id}>{c.name}{c.category ? ` · ${c.category}` : ''}</option>)}
-              </select>
+                inputStyle={s.input}
+                placeholder="— Selecciona —"
+                options={availableCatalog.map((c) => ({ id: String(c.id), label: c.name + (c.category ? ' · ' + c.category : '') }))}
+              />
             </div>
             <div>
               <label style={s.label}>Proficiency</label>
-              <select
-                style={s.input}
+              <FilterableSelect
                 value={addForm.proficiency}
                 onChange={(e) => setAddForm({ ...addForm, proficiency: e.target.value })}
                 aria-label="Nueva proficiency"
-              >
-                {PROFICIENCIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
+                inputStyle={s.input}
+                options={PROFICIENCIES.map((p) => ({ id: p.value, label: p.label }))}
+              />
             </div>
             <div>
               <label style={s.label}>Años</label>
@@ -536,24 +552,36 @@ export default function Employees() {
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Área</label>
-            <select style={s.input} value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)} aria-label="Filtro por área">
-              <option value="">Cualquiera</option>
-              {areas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
+            <FilterableSelect
+              value={areaFilter}
+              onChange={(e) => setAreaFilter(e.target.value)}
+              aria-label="Filtro por área"
+              inputStyle={s.input}
+              placeholder="Cualquiera"
+              options={areas.map((a) => ({ id: String(a.id), label: a.name }))}
+            />
           </div>
           <div style={{ minWidth: 110 }}>
             <label style={s.label}>Level</label>
-            <select style={s.input} value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)} aria-label="Filtro por level">
-              <option value="">Todos</option>
-              {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-            </select>
+            <FilterableSelect
+              value={levelFilter}
+              onChange={(e) => setLevelFilter(e.target.value)}
+              aria-label="Filtro por level"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={LEVELS.map((l) => ({ id: l, label: l }))}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Estado</label>
-            <select style={s.input} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtro por estado">
-              <option value="">Todos</option>
-              {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filtro por estado"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+            />
           </div>
         </div>
 

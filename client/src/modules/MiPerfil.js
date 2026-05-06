@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPut, apiPost, apiDelete } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import cx from './MiPerfil.module.css';
 
 const PROF_LABELS = { beginner: 'Principiante', intermediate: 'Intermedio', advanced: 'Avanzado', expert: 'Experto' };
@@ -238,20 +239,25 @@ function SkillsCard({ skills, catalog, onRefresh }) {
           <div className={cx.formRow}>
             <div className={cx.field}>
               <label className={cx.label}>Skill</label>
-              <select className={cx.input} value={form.skill_id} onChange={(e) => setForm({ ...form, skill_id: e.target.value })}>
-                <option value="">Seleccionar...</option>
-                {Object.keys(grouped).sort().map((cat) => (
-                  <optgroup key={cat} label={cat}>
-                    {grouped[cat].map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </optgroup>
-                ))}
-              </select>
+              <FilterableSelect
+                value={form.skill_id}
+                onChange={(e) => setForm({ ...form, skill_id: e.target.value })}
+                inputStyle={cx.input}
+                placeholder="Seleccionar..."
+                options={Object.keys(grouped).sort().flatMap((cat) =>
+                  grouped[cat].map((s) => ({ id: String(s.id), label: `${cat} — ${s.name}` }))
+                )}
+              />
             </div>
             <div className={cx.field}>
               <label className={cx.label}>Nivel</label>
-              <select className={cx.input} value={form.proficiency} onChange={(e) => setForm({ ...form, proficiency: e.target.value })}>
-                {Object.entries(PROF_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-              </select>
+              <FilterableSelect
+                value={form.proficiency}
+                onChange={(e) => setForm({ ...form, proficiency: e.target.value })}
+                inputStyle={cx.input}
+                placeholder="— Selecciona nivel —"
+                options={Object.entries(PROF_LABELS).map(([k, v]) => ({ id: k, label: v }))}
+              />
             </div>
             <div className={cx.field}>
               <label className={cx.label}>Años experiencia</label>

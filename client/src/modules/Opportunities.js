@@ -11,6 +11,7 @@ import {
   FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
   computeBooking, validateFunding, validateLossReason,
 } from '../utils/booking';
+import FilterableSelect from '../shell/FilterableSelect';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -169,17 +170,16 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
       </h2>
       <div>
         <label style={s.label}>Cliente *</label>
-        <select
-          style={s.input}
+        <FilterableSelect
           value={form.client_id || ''}
           onChange={(e) => set('client_id', e.target.value)}
           aria-label="Cliente"
           required
           disabled={!!initial?.id}
-        >
-          <option value="">— Selecciona —</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+          inputStyle={s.input}
+          placeholder="— Selecciona —"
+          options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+        />
       </div>
       <div>
         <label style={s.label}>Nombre *</label>
@@ -196,16 +196,24 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 160 }}>
           <label style={s.label}>Tipo de deal *</label>
-          <select style={s.input} value={form.deal_type} onChange={(e) => set('deal_type', e.target.value)} aria-label="Tipo de deal">
-            {DEAL_TYPES.map((dt) => <option key={dt.value} value={dt.value}>{dt.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.deal_type}
+            onChange={(e) => set('deal_type', e.target.value)}
+            aria-label="Tipo de deal"
+            inputStyle={s.input}
+            options={DEAL_TYPES.map((dt) => ({ id: dt.value, label: dt.label }))}
+          />
         </div>
         <div style={{ flex: 1, minWidth: 160 }}>
           <label style={s.label}>Tipo de contrato</label>
-          <select style={s.input} value={form.contract_type || ''} onChange={(e) => set('contract_type', e.target.value)} aria-label="Tipo de contrato">
-            <option value="">— Sin definir —</option>
-            {CONTRACT_TYPES.map((ct) => <option key={ct.value} value={ct.value}>{ct.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.contract_type || ''}
+            onChange={(e) => set('contract_type', e.target.value)}
+            aria-label="Tipo de contrato"
+            inputStyle={s.input}
+            placeholder="— Sin definir —"
+            options={CONTRACT_TYPES.map((ct) => ({ id: ct.value, label: ct.label }))}
+          />
         </div>
         <div style={{ flex: 1, minWidth: 160 }}>
           <label style={s.label}>Fecha esperada de cierre</label>
@@ -271,14 +279,13 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
           </div>
           <div>
             <label style={s.label}>Funding source</label>
-            <select
-              style={s.input}
+            <FilterableSelect
               value={form.funding_source}
               onChange={(e) => set('funding_source', e.target.value)}
               aria-label="Funding source"
-            >
-              {FUNDING_SOURCES.map((fs) => <option key={fs.value} value={fs.value}>{fs.label}</option>)}
-            </select>
+              inputStyle={s.input}
+              options={FUNDING_SOURCES.map((fs) => ({ id: fs.value, label: fs.label }))}
+            />
           </div>
           {form.funding_source !== 'client_direct' && (
             <div>
@@ -295,10 +302,14 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
           )}
           <div>
             <label style={s.label}>Co-owner</label>
-            <select style={s.input} value={form.co_owner_id || ''} onChange={(e) => set('co_owner_id', e.target.value || '')} aria-label="Co-owner">
-              <option value="">— Sin co-owner —</option>
-              {(users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-            </select>
+            <FilterableSelect
+              value={form.co_owner_id || ''}
+              onChange={(e) => set('co_owner_id', e.target.value || '')}
+              aria-label="Co-owner"
+              inputStyle={s.input}
+              placeholder="— Sin co-owner —"
+              options={(users || []).map((u) => ({ id: String(u.id), label: u.name }))}
+            />
           </div>
           <div>
             <label style={s.label}>Drive URL</label>
@@ -425,14 +436,15 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
       {needsWinningQuot && (
         <div>
           <label style={s.label}>Cotización ganadora *</label>
-          <select style={s.input} value={winningId} onChange={(e) => setWinningId(e.target.value)} aria-label="Cotización ganadora" required>
-            <option value="">— Selecciona —</option>
-            {quotations.map((q) => (
-              <option key={q.id} value={q.id}>
-                {q.project_name} · {q.status}
-              </option>
-            ))}
-          </select>
+          <FilterableSelect
+            value={winningId}
+            onChange={(e) => setWinningId(e.target.value)}
+            aria-label="Cotización ganadora"
+            required
+            inputStyle={s.input}
+            placeholder="— Selecciona —"
+            options={quotations.map((q) => ({ id: String(q.id), label: q.project_name + ' · ' + q.status }))}
+          />
           {quotations.length === 0 && (
             <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>
               Esta oportunidad no tiene cotizaciones todavía.
@@ -444,16 +456,15 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
         <>
           <div>
             <label style={s.label}>Razón de pérdida *</label>
-            <select
-              style={s.input}
+            <FilterableSelect
               value={lossReason}
               onChange={(e) => setLossReason(e.target.value)}
               aria-label="Razón de pérdida"
               required
-            >
-              <option value="">— Selecciona —</option>
-              {LOSS_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-            </select>
+              inputStyle={s.input}
+              placeholder="— Selecciona —"
+              options={LOSS_REASONS.map((r) => ({ id: r.value, label: r.label }))}
+            />
           </div>
           <div>
             <label style={s.label}>
@@ -697,23 +708,36 @@ export default function Opportunities() {
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Cliente</label>
-            <select style={s.input} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filtro por cliente">
-              <option value="">Cualquiera</option>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <FilterableSelect
+              value={clientFilter}
+              onChange={(e) => setClientFilter(e.target.value)}
+              aria-label="Filtro por cliente"
+              inputStyle={s.input}
+              placeholder="Cualquiera"
+              options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+            />
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Estado</label>
-            <select style={s.input} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtro por estado">
-              {STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filtro por estado"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={STAGES.map((st) => ({ id: st.id, label: st.label }))}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Tipo de deal</label>
-            <select style={s.input} value={dealTypeFilter} onChange={(e) => setDealTypeFilter(e.target.value)} aria-label="Filtro por tipo de deal">
-              <option value="">Todos</option>
-              {DEAL_TYPES.map((dt) => <option key={dt.value} value={dt.value}>{dt.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={dealTypeFilter}
+              onChange={(e) => setDealTypeFilter(e.target.value)}
+              aria-label="Filtro por tipo de deal"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={DEAL_TYPES.map((dt) => ({ id: dt.value, label: dt.label }))}
+            />
           </div>
         </div>
 

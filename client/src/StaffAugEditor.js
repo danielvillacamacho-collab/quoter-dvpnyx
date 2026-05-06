@@ -4,6 +4,7 @@ import * as api from './utils/api';
 import StaffAugEditorUnified from './StaffAugEditorUnified';
 import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
 import { TABLE_CLASS } from './shell/tableStyles';
+import FilterableSelect from './shell/FilterableSelect';
 
 /**
  * Spec 3 (spec_capacity_editor.docx, Abril 2026) — por defecto renderizamos
@@ -140,13 +141,19 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
           ))}
           <div>
             <label style={css.label}>Estado</label>
-            <select style={{ ...css.select, width: '100%' }} value={data.status} onChange={e => updateField('status', e.target.value)}>
-              {['draft', 'sent', 'approved', 'rejected', 'expired'].map(st => (
-                <option key={st} value={st}>
-                  {({ draft: 'Borrador', sent: 'Enviada', approved: 'Aprobada', rejected: 'Rechazada', expired: 'Expirada' }[st])}
-                </option>
-              ))}
-            </select>
+            <FilterableSelect
+              value={data.status}
+              onChange={e => updateField('status', e.target.value)}
+              inputStyle={{ ...css.select, width: '100%' }}
+              placeholder="— Selecciona —"
+              options={[
+                { id: 'draft', label: 'Borrador' },
+                { id: 'sent', label: 'Enviada' },
+                { id: 'approved', label: 'Aprobada' },
+                { id: 'rejected', label: 'Rechazada' },
+                { id: 'expired', label: 'Expirada' },
+              ]}
+            />
           </div>
           <div>
             <label style={css.label}>Descuento (%)</label>
@@ -168,14 +175,14 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
             <tbody>{data.lines.map((line, idx) => (
               <tr key={idx}>
                 <td style={{ ...css.td, textAlign: 'center', fontWeight: 600, width: 30 }}>{idx + 1}</td>
-                <td style={css.td}><select style={{ ...css.select, width: 120, fontSize: 11 }} value={line.specialty} onChange={e => updateLine(idx, 'specialty', e.target.value)}><option value="">—</option>{SPECIALTIES.map(sp => <option key={sp}>{sp}</option>)}</select></td>
+                <td style={css.td}><FilterableSelect inputStyle={{ ...css.select, width: 120, fontSize: 11 }} value={line.specialty} onChange={e => updateLine(idx, 'specialty', e.target.value)} placeholder="—" options={SPECIALTIES.map(sp => ({ id: sp, label: sp }))} /></td>
                 <td style={css.td}><input style={{ ...css.input, width: 140, fontSize: 12, padding: 6 }} value={line.role_title || ''} onChange={e => updateLine(idx, 'role_title', e.target.value)} placeholder="Ej: Senior React Dev" /></td>
-                <td style={css.td}><select style={{ ...css.select, width: 50, fontSize: 11 }} value={line.level || ''} onChange={e => updateLine(idx, 'level', Number(e.target.value))}><option value="">—</option>{[1,2,3,4,5,6,7,8,9,10,11].map(n => <option key={n} value={n}>L{n}</option>)}</select></td>
-                <td style={css.td}><select style={{ ...css.select, width: 100, fontSize: 11 }} value={line.country} onChange={e => updateLine(idx, 'country', e.target.value)}>{countries.map(c => <option key={c}>{c}</option>)}</select></td>
+                <td style={css.td}><FilterableSelect inputStyle={{ ...css.select, width: 50, fontSize: 11 }} value={line.level || ''} onChange={e => updateLine(idx, 'level', Number(e.target.value))} placeholder="—" options={[1,2,3,4,5,6,7,8,9,10,11].map(n => ({ id: String(n), label: `L${n}` }))} /></td>
+                <td style={css.td}><FilterableSelect inputStyle={{ ...css.select, width: 100, fontSize: 11 }} value={line.country} onChange={e => updateLine(idx, 'country', e.target.value)} placeholder="—" options={countries.map(c => ({ id: c, label: c }))} /></td>
                 <td style={{ ...css.td, textAlign: 'center' }}><input type="checkbox" checked={line.bilingual || false} onChange={e => updateLine(idx, 'bilingual', e.target.checked)} /></td>
-                <td style={css.td}><select style={{ ...css.select, width: 110, fontSize: 11 }} value={line.tools} onChange={e => updateLine(idx, 'tools', e.target.value)}>{toolsOpts.map(t => <option key={t}>{t}</option>)}</select></td>
-                <td style={css.td}><select style={{ ...css.select, width: 110, fontSize: 11 }} value={line.stack} onChange={e => updateLine(idx, 'stack', e.target.value)}>{stacks.map(st => <option key={st}>{st}</option>)}</select></td>
-                <td style={css.td}><select style={{ ...css.select, width: 100, fontSize: 11 }} value={line.modality} onChange={e => updateLine(idx, 'modality', e.target.value)}>{modalities.map(m => <option key={m}>{m}</option>)}</select></td>
+                <td style={css.td}><FilterableSelect inputStyle={{ ...css.select, width: 110, fontSize: 11 }} value={line.tools} onChange={e => updateLine(idx, 'tools', e.target.value)} placeholder="—" options={toolsOpts.map(t => ({ id: t, label: t }))} /></td>
+                <td style={css.td}><FilterableSelect inputStyle={{ ...css.select, width: 110, fontSize: 11 }} value={line.stack} onChange={e => updateLine(idx, 'stack', e.target.value)} placeholder="—" options={stacks.map(st => ({ id: st, label: st }))} /></td>
+                <td style={css.td}><FilterableSelect inputStyle={{ ...css.select, width: 100, fontSize: 11 }} value={line.modality} onChange={e => updateLine(idx, 'modality', e.target.value)} placeholder="—" options={modalities.map(m => ({ id: m, label: m }))} /></td>
                 <td style={css.td}><input style={{ ...css.input, width: 45, fontSize: 12, padding: 6, textAlign: 'center' }} type="number" min={1} value={line.quantity} onChange={e => updateLine(idx, 'quantity', Number(e.target.value))} /></td>
                 <td style={css.td}><input style={{ ...css.input, width: 45, fontSize: 12, padding: 6, textAlign: 'center' }} type="number" min={1} value={line.duration_months} onChange={e => updateLine(idx, 'duration_months', Number(e.target.value))} /></td>
                 <td style={{ ...css.td, fontWeight: 600, color: 'var(--ds-text, var(--purple-dark))', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)', fontFeatureSettings: "'tnum'" }}>{formatUSD(line.rate_month)}</td>

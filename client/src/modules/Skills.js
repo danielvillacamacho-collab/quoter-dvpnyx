@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost, apiPut } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
   page:   { maxWidth: 1100, margin: '0 auto' },
@@ -60,14 +61,14 @@ function SkillForm({ initial, onSave, onCancel, saving }) {
       </div>
       <div>
         <label style={s.label}>Categoría</label>
-        <select
-          style={s.input}
+        <FilterableSelect
           value={form.category || ''}
           onChange={(e) => set('category', e.target.value)}
           aria-label="Categoría"
-        >
-          {CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c || '— Sin categoría —'}</option>)}
-        </select>
+          inputStyle={s.input}
+          placeholder="— Sin categoría —"
+          options={CATEGORY_OPTIONS.filter((c) => c).map((c) => ({ id: c, label: c }))}
+        />
       </div>
       <div>
         <label style={s.label}>Descripción</label>
@@ -164,10 +165,14 @@ export default function Skills() {
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Categoría</label>
-            <select style={s.input} value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} aria-label="Filtro por categoría">
-              <option value="">Cualquiera</option>
-              {CATEGORY_OPTIONS.filter((c) => c).map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <FilterableSelect
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              aria-label="Filtro por categoría"
+              inputStyle={s.input}
+              placeholder="Cualquiera"
+              options={CATEGORY_OPTIONS.filter((c) => c).map((c) => ({ id: c, label: c }))}
+            />
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-light)' }}>
             <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} />

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiGet, apiPost, apiPut } from '../utils/apiV2';
 import CandidatesModal from './CandidatesModal';
+import FilterableSelect from '../shell/FilterableSelect';
 
 /**
  * Capacity Planner — US-PLN-1 (timeline) + US-PLN-2 (metric cards).
@@ -437,9 +438,12 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
             </div>
             <div style={ms.row}>
               <label style={ms.label}>Estado</label>
-              <select style={ms.input} value={form.status} onChange={(e) => set('status', e.target.value)}>
-                {ASSIGNMENT_STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-              </select>
+              <FilterableSelect
+                value={form.status}
+                onChange={(e) => set('status', e.target.value)}
+                inputStyle={ms.input}
+                options={ASSIGNMENT_STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+              />
             </div>
             <div style={ms.row}>
               <label style={ms.label}>Notas</label>
@@ -473,9 +477,12 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginBottom: 6 }}>
                   <div>
                     <label style={ms.label}>Moneda</label>
-                    <select style={ms.input} value={form.client_rate_currency} onChange={(e) => set('client_rate_currency', e.target.value)}>
-                      {VALID_RATE_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-                    </select>
+                    <FilterableSelect
+                      value={form.client_rate_currency}
+                      onChange={(e) => set('client_rate_currency', e.target.value)}
+                      inputStyle={ms.input}
+                      options={VALID_RATE_CURRENCIES.map((c) => ({ id: c, label: c }))}
+                    />
                   </div>
                   <div>
                     <label style={ms.label}>Tarifa actual</label>
@@ -545,14 +552,15 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   );
 }
 
-function AssignmentBar({ a, onOpen, capacity }) {
+function AssignmentBar({ a, onOpen, capacity, weekIndex }) {
   const cap = Number(capacity) || 0;
   const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
   const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+  const actualHrs = (a.actual_hours_by_week && weekIndex != null) ? (a.actual_hours_by_week[weekIndex] || 0) : 0;
   return (
     <div
       style={{ ...s.bar(a.color), cursor: onOpen ? 'pointer' : 'default' }}
-      title={`${a.contract_name} · ${a.weekly_hours}h/sem`}
+      title={`${a.contract_name} · ${a.weekly_hours}h/sem${actualHrs > 0 ? ` · real: ${actualHrs}h` : ''}`}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
       role={onOpen ? 'button' : undefined}
       tabIndex={onOpen ? 0 : undefined}
@@ -560,6 +568,9 @@ function AssignmentBar({ a, onOpen, capacity }) {
     >
       <span style={s.barName}>{a.contract_name}</span>
       <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
+      {actualHrs > 0 && (
+        <span style={{ ...s.barMeta, fontSize: 9, opacity: 0.95, fontStyle: 'italic' }}>real: {actualHrs}h</span>
+      )}
     </div>
   );
 }
@@ -618,10 +629,15 @@ function EmployeeRow({ emp, weeks, onOpen, inactive }) {
         const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : (inactive ? 'var(--ds-bg-soft, #f9f9f9)' : '#fff');
         return (
           <div key={w.index} style={s.weekCell(cellBg)} data-testid={`cell-${emp.id}-${i}`}>
-            {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} />)}
+            {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} weekIndex={i} />)}
             <div style={s.chip(weekInfo.bucket)}>
               {weekInfo.hours > 0 ? `${weekInfo.utilization_pct}%` : '—'}
             </div>
+            {weekInfo.actual_hours > 0 && (
+              <div style={{ fontSize: 9, color: 'var(--ds-text-dim, #888)', fontStyle: 'italic', marginTop: 1, fontFamily: 'var(--font-mono, inherit)' }}>
+                real: {weekInfo.actual_hours}h
+              </div>
+            )}
           </div>
         );
       })}
@@ -1199,6 +1215,26 @@ export default function CapacityPlanner() {
 
   useEffect(() => { load(); }, [load]);
 
+  const handleExport = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('dvpnyx_token');
+      const qs = buildQuery(filters);
+      const resp = await fetch(`/api/capacity/planner/export?${qs}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error('Error al exportar');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `planner_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (ex) {
+      setErr(ex.message || 'Error exportando Excel');
+    }
+  }, [filters]);
+
   useEffect(() => {
     // Areas are a small lookup; fetch once for the filter dropdown.
     apiGet('/api/areas').then((r) => setAreas((r && r.data) || [])).catch(() => {});
@@ -1284,45 +1320,66 @@ export default function CapacityPlanner() {
         </div>
 
         {/* SPEC-006 / Spec 3: selector de rango + flechas dinámicas */}
-        <select
-          style={s.select}
-          value={weeks}
+        <FilterableSelect
+          value={String(weeks)}
           onChange={(e) => patchParams({ weeks: e.target.value })}
           aria-label="Rango de semanas"
           data-testid="weeks-range-select"
-        >
-          <option value="1">1 semana</option>
-          <option value="2">2 semanas</option>
-          <option value="4">4 semanas</option>
-          <option value="8">8 semanas</option>
-        </select>
+          inputStyle={s.select}
+          options={[
+            { id: '1', label: '1 semana' },
+            { id: '2', label: '2 semanas' },
+            { id: '4', label: '4 semanas' },
+            { id: '8', label: '8 semanas' },
+          ]}
+        />
 
         <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, -(weeks * 7)) })} aria-label={`${weeks} semanas atrás`}>←</button>
         <button type="button" style={s.btn} onClick={() => patchParams({ start: todayMondayIso() })}>Hoy</button>
         <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, weeks * 7) })} aria-label={`${weeks} semanas adelante`}>→</button>
 
-        <select style={s.select} value={contractId} onChange={(e) => patchParams({ contract_id: e.target.value })} aria-label="Filtro contrato">
-          <option value="">Todos los contratos</option>
-          {contracts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        <FilterableSelect
+          value={contractId}
+          onChange={(e) => patchParams({ contract_id: e.target.value })}
+          aria-label="Filtro contrato"
+          inputStyle={s.select}
+          placeholder="Todos los contratos"
+          options={contracts.map((c) => ({ id: String(c.id), label: c.name }))}
+        />
 
-        <select style={s.select} value={areaId} onChange={(e) => patchParams({ area_id: e.target.value })} aria-label="Filtro área">
-          <option value="">Todas las áreas</option>
-          {areas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
+        <FilterableSelect
+          value={areaId}
+          onChange={(e) => patchParams({ area_id: e.target.value })}
+          aria-label="Filtro área"
+          inputStyle={s.select}
+          placeholder="Todas las áreas"
+          options={areas.map((a) => ({ id: String(a.id), label: a.name }))}
+        />
 
-        <select style={s.select} value={levelMin} onChange={(e) => patchParams({ level_min: e.target.value })} aria-label="Nivel mínimo">
-          <option value="">Nivel min</option>
-          {['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
-        <select style={s.select} value={levelMax} onChange={(e) => patchParams({ level_max: e.target.value })} aria-label="Nivel máximo">
-          <option value="">Nivel max</option>
-          {['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
+        <FilterableSelect
+          value={levelMin}
+          onChange={(e) => patchParams({ level_min: e.target.value })}
+          aria-label="Nivel mínimo"
+          inputStyle={s.select}
+          placeholder="Nivel min"
+          options={['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => ({ id: l, label: l }))}
+        />
+        <FilterableSelect
+          value={levelMax}
+          onChange={(e) => patchParams({ level_max: e.target.value })}
+          aria-label="Nivel máximo"
+          inputStyle={s.select}
+          placeholder="Nivel max"
+          options={['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => ({ id: l, label: l }))}
+        />
 
         {(contractId || areaId || levelMin || levelMax || search || projectSearch) && (
           <button type="button" style={s.btn} onClick={() => patchParams({ contract_id: '', area_id: '', level_min: '', level_max: '', search: '', project_search: '' })}>Limpiar filtros</button>
         )}
+
+        <button type="button" style={{ ...s.btn, fontWeight: 600 }} onClick={handleExport} aria-label="Exportar Excel">
+          Exportar Excel
+        </button>
 
         {view === 'employees' && (
           <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => patchParams({ search: e.target.value })} aria-label="Buscar empleado" />

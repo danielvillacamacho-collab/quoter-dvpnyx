@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
@@ -77,14 +78,13 @@ function ClientForm({ initial, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>País</label>
-          <select
-            style={{ ...s.input, padding: '8px 10px' }}
+          <FilterableSelect
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
             value={form.country || ''}
             onChange={(e) => set('country', e.target.value)}
-          >
-            <option value="">—</option>
-            {LATAM_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
+            placeholder="—"
+            options={LATAM_COUNTRIES.map((c) => ({ id: c, label: c }))}
+          />
         </div>
         <div>
           <label style={s.label}>Industria</label>
@@ -94,9 +94,13 @@ function ClientForm({ initial, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Tier</label>
-          <select style={{ ...s.input, padding: '8px 10px' }} value={form.tier || ''} onChange={(e) => set('tier', e.target.value)}>
-            {TIERS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
+          <FilterableSelect
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            value={form.tier || ''}
+            onChange={(e) => set('tier', e.target.value)}
+            placeholder="—"
+            options={TIERS.filter((t) => t.value !== '').map((t) => ({ id: t.value, label: t.label }))}
+          />
         </div>
         <div>
           <label style={s.label}>Moneda</label>
@@ -215,21 +219,25 @@ export default function Clients() {
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>País</label>
-            <select
-              style={s.input}
+            <FilterableSelect
+              inputStyle={s.input}
               value={country}
               onChange={(e) => setCountry(e.target.value)}
               aria-label="Filtro por país"
-            >
-              <option value="">Todos</option>
-              {LATAM_COUNTRIES.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+              placeholder="Todos"
+              options={LATAM_COUNTRIES.map((c) => ({ id: c, label: c }))}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Tier</label>
-            <select style={s.input} value={tier} onChange={(e) => setTier(e.target.value)} aria-label="Filtro por tier">
-              {TIERS.map((t) => <option key={t.value} value={t.value}>{t.label || 'Todos'}</option>)}
-            </select>
+            <FilterableSelect
+              inputStyle={s.input}
+              value={tier}
+              onChange={(e) => setTier(e.target.value)}
+              aria-label="Filtro por tier"
+              placeholder="Todos"
+              options={TIERS.filter((t) => t.value !== '').map((t) => ({ id: t.value, label: t.label }))}
+            />
           </div>
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-light)' }}>
             <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} />

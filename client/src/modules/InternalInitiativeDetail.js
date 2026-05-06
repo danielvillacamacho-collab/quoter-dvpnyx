@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiDelete } from '../utils/apiV2';
 import { useAuth } from '../AuthContext';
+import FilterableSelect from '../shell/FilterableSelect';
 
 /**
  * Iniciativa Interna — vista 360 con asignaciones, métricas y acciones.
@@ -76,12 +77,17 @@ function AssignModal({ initiativeId, onClose, onSaved }) {
         <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
             <label style={ds.label}>Empleado *</label>
-            <select style={ds.input} value={form.employee_id} onChange={(e) => set('employee_id', e.target.value)} required>
-              <option value="">— seleccionar —</option>
-              {employees.map((e) => (
-                <option key={e.id} value={e.id}>{e.first_name} {e.last_name} · {e.level}</option>
-              ))}
-            </select>
+            <FilterableSelect
+              inputStyle={ds.input}
+              value={form.employee_id}
+              onChange={(e) => set('employee_id', e.target.value)}
+              required
+              placeholder="— seleccionar —"
+              options={employees.map((e) => ({
+                id: String(e.id),
+                label: `${e.first_name} ${e.last_name} · ${e.level}`,
+              }))}
+            />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>

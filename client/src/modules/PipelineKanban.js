@@ -15,6 +15,7 @@ import {
   useSensor, useSensors, useDroppable, useDraggable,
 } from '@dnd-kit/core';
 import { apiGet, apiPost } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import { STAGES, STAGE_BY_ID, computeTransitionWarnings } from '../utils/pipeline';
 
 const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -206,15 +207,13 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
             <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>
               Cotización ganadora *
             </label>
-            <select value={winningQuotation} onChange={(e) => setWinningQuotation(e.target.value)}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
-              <option value="">— Selecciona una cotización —</option>
-              {quotations.map((q) => (
-                <option key={q.id} value={q.id}>
-                  {q.project_name || q.id} · {q.status}
-                </option>
-              ))}
-            </select>
+            <FilterableSelect
+              value={winningQuotation}
+              onChange={(e) => setWinningQuotation(e.target.value)}
+              inputStyle={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}
+              placeholder="— Selecciona una cotización —"
+              options={quotations.map((q) => ({ id: String(q.id), label: `${q.project_name || q.id} · ${q.status}` }))}
+            />
             {quotations.length === 0 && (
               <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 4 }}>
                 Esta oportunidad aún no tiene cotizaciones. Crea una desde el detalle antes de marcarla como ganada.
@@ -228,17 +227,21 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
             <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>
               Razón del resultado *
             </label>
-            <select value={outcomeReason} onChange={(e) => setOutcomeReason(e.target.value)}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}
-                    aria-label="Razón del resultado">
-              <option value="">—</option>
-              <option value="price">Precio</option>
-              <option value="timing">Tiempo / fecha</option>
-              <option value="competition">Competencia</option>
-              <option value="technical_fit">Ajuste técnico</option>
-              <option value="client_internal">Decisión interna del cliente</option>
-              <option value="other">Otro</option>
-            </select>
+            <FilterableSelect
+              value={outcomeReason}
+              onChange={(e) => setOutcomeReason(e.target.value)}
+              inputStyle={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}
+              aria-label="Razón del resultado"
+              placeholder="—"
+              options={[
+                { id: 'price', label: 'Precio' },
+                { id: 'timing', label: 'Tiempo / fecha' },
+                { id: 'competition', label: 'Competencia' },
+                { id: 'technical_fit', label: 'Ajuste técnico' },
+                { id: 'client_internal', label: 'Decisión interna del cliente' },
+                { id: 'other', label: 'Otro' },
+              ]}
+            />
           </div>
         )}
 
@@ -396,10 +399,14 @@ export default function PipelineKanban() {
       </div>
 
       <div style={s.filters}>
-        <select aria-label="Filtrar por owner" value={filters.owner_id} onChange={(e) => setFilter('owner_id', e.target.value)} style={s.filterInput}>
-          <option value="">Todos los owners</option>
-          {users.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
-        </select>
+        <FilterableSelect
+          aria-label="Filtrar por owner"
+          value={filters.owner_id}
+          onChange={(e) => setFilter('owner_id', e.target.value)}
+          inputStyle={s.filterInput}
+          placeholder="Todos los owners"
+          options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
+        />
         <input
           type="number" min={0} step={1000}
           placeholder="Monto mínimo USD"

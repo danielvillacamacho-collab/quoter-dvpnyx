@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import Employees from './Employees';
 import * as apiV2 from '../utils/apiV2';
+import { changeSelect } from '../utils/testHelpers';
 
 jest.mock('../utils/apiV2');
 
@@ -66,7 +67,7 @@ describe('Employees module', () => {
     mount();
     await screen.findByText('Ana García');
     apiV2.apiGet.mockClear();
-    fireEvent.change(screen.getByLabelText('Filtro por área'), { target: { value: '1' } });
+    await changeSelect('Filtro por área', '1');
     await waitFor(() => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes('area_id=1'))).toBe(true);
@@ -77,7 +78,7 @@ describe('Employees module', () => {
     mount();
     await screen.findByText('Ana García');
     apiV2.apiGet.mockClear();
-    fireEvent.change(screen.getByLabelText('Filtro por level'), { target: { value: 'L4' } });
+    await changeSelect('Filtro por level', 'L4');
     await waitFor(() => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes('level=L4'))).toBe(true);
@@ -88,14 +89,20 @@ describe('Employees module', () => {
     apiV2.apiPost.mockResolvedValue({ id: 'e-new' });
     mount();
     await screen.findByText('Ana García');
+    // Wait for areas to load by opening the filter and checking options
+    const areaFilterInput = screen.getByLabelText('Filtro por área');
+    fireEvent.click(areaFilterInput);
     await waitFor(() => {
-      expect(screen.getByLabelText('Filtro por área').querySelector('option[value="1"]')).not.toBeNull();
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      expect(listbox.querySelector('[data-value="1"]')).not.toBeNull();
     });
+    fireEvent.keyDown(areaFilterInput, { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: /Nuevo Empleado/i }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Nombre'), { target: { value: 'Carolina' } });
     fireEvent.change(within(dialog).getByLabelText('Apellido'), { target: { value: 'Muñoz' } });
-    fireEvent.change(within(dialog).getByLabelText('Área'), { target: { value: '1' } });
+    await changeSelect('Área', '1');
     fireEvent.change(within(dialog).getByLabelText('Fecha de inicio'), { target: { value: '2026-04-01' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {
@@ -183,8 +190,8 @@ describe('Employees module', () => {
       fireEvent.click(screen.getByLabelText('Skills Ana García'));
       const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
       expect(await within(dialog).findByText('JavaScript')).toBeInTheDocument();
-      // Verify the proficiency select is set to 'advanced' for this row.
-      expect(within(dialog).getByLabelText('Proficiency JavaScript')).toHaveValue('advanced');
+      // Verify the proficiency combobox shows the label for 'advanced'
+      expect(within(dialog).getByLabelText('Proficiency JavaScript')).toHaveValue('Avanzado');
     });
 
     it('filters the add-skill dropdown to exclude already-assigned skills', async () => {
@@ -193,12 +200,18 @@ describe('Employees module', () => {
       fireEvent.click(screen.getByLabelText('Skills Ana García'));
       const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
       await within(dialog).findByText('JavaScript'); // assigned — shown in the table
-      const addSel = within(dialog).getByLabelText('Nuevo skill');
-      // JavaScript (id=1) is already assigned → excluded from add dropdown
-      expect(addSel.querySelector('option[value="1"]')).toBeNull();
-      // React (id=2) and Python (id=3) are still available
-      expect(addSel.querySelector('option[value="2"]')).not.toBeNull();
-      expect(addSel.querySelector('option[value="3"]')).not.toBeNull();
+      // Open the "Nuevo skill" dropdown to inspect available options
+      const addInput = within(dialog).getByLabelText('Nuevo skill');
+      fireEvent.click(addInput);
+      await waitFor(() => {
+        const listbox = document.querySelector('[role="listbox"]');
+        expect(listbox).not.toBeNull();
+        // JavaScript (id=1) is already assigned → excluded from add dropdown
+        expect(listbox.querySelector('[data-value="1"]')).toBeNull();
+        // React (id=2) and Python (id=3) are still available
+        expect(listbox.querySelector('[data-value="2"]')).not.toBeNull();
+        expect(listbox.querySelector('[data-value="3"]')).not.toBeNull();
+      });
     });
 
     it('POSTs the new skill with proficiency + years_experience', async () => {
@@ -209,8 +222,8 @@ describe('Employees module', () => {
       const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
       await within(dialog).findByText('JavaScript');
 
-      fireEvent.change(within(dialog).getByLabelText('Nuevo skill'), { target: { value: '2' } });
-      fireEvent.change(within(dialog).getByLabelText('Nueva proficiency'), { target: { value: 'expert' } });
+      await changeSelect('Nuevo skill', '2');
+      await changeSelect('Nueva proficiency', 'expert');
       fireEvent.change(within(dialog).getByLabelText('Nuevos años'), { target: { value: '4' } });
       fireEvent.click(within(dialog).getByRole('button', { name: /^Agregar$/ }));
 
@@ -242,7 +255,7 @@ describe('Employees module', () => {
       fireEvent.click(screen.getByLabelText('Skills Ana García'));
       const dialog = await screen.findByRole('dialog', { name: /Skills del empleado/i });
       await within(dialog).findByText('JavaScript');
-      fireEvent.change(within(dialog).getByLabelText('Proficiency JavaScript'), { target: { value: 'expert' } });
+      await changeSelect('Proficiency JavaScript', 'expert');
       await waitFor(() => {
         expect(apiV2.apiPut).toHaveBeenCalledWith('/api/employees/e1/skills/1', { proficiency: 'expert' });
       });

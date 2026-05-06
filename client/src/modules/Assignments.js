@@ -4,6 +4,7 @@ import AssignmentValidationModal from './AssignmentValidationModal';
 import AssignmentValidationInline from './AssignmentValidationInline';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import FilterableSelect from '../shell/FilterableSelect';
 import SearchableSelect from '../shell/SearchableSelect';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
@@ -328,9 +329,14 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
         </div>
         <div>
           <label style={s.label}>Estado</label>
-          <select style={s.input} value={form.status} onChange={(e) => set('status', e.target.value)} aria-label="Estado">
-            {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-          </select>
+          <FilterableSelect
+            inputStyle={s.input}
+            value={form.status}
+            onChange={(e) => set('status', e.target.value)}
+            aria-label="Estado"
+            placeholder="— Selecciona estado —"
+            options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+          />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -352,9 +358,14 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
           <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: 10 }}>
             <div>
               <label style={s.label}>Moneda</label>
-              <select style={s.input} value={form.client_rate_currency || selectedRequest?.contract_currency || 'USD'} onChange={(e) => set('client_rate_currency', e.target.value)} aria-label="Moneda tarifa">
-                {RATE_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              <FilterableSelect
+                inputStyle={s.input}
+                value={form.client_rate_currency || selectedRequest?.contract_currency || 'USD'}
+                onChange={(e) => set('client_rate_currency', e.target.value)}
+                aria-label="Moneda tarifa"
+                placeholder="— Moneda —"
+                options={RATE_CURRENCIES.map((c) => ({ id: c, label: c }))}
+              />
             </div>
             <div>
               <label style={s.label}>Tarifa mensual *</label>
@@ -598,15 +609,14 @@ export default function Assignments() {
           {/* Filtro por estado (existente) */}
           <div style={{ minWidth: 150 }}>
             <label style={s.label}>Estado</label>
-            <select
-              style={s.input}
+            <FilterableSelect
+              inputStyle={s.input}
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               aria-label="Filtro por estado"
-            >
-              <option value="">Todos</option>
-              {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-            </select>
+              placeholder="Todos"
+              options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+            />
           </div>
 
           {/* SPEC-007 Spec 1: Filtro por empleado (multi-select) */}

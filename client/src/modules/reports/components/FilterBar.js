@@ -1,4 +1,5 @@
 import React from 'react';
+import FilterableSelect from '../../../shell/FilterableSelect';
 
 const inputStyle = {
   padding: '6px 10px',
@@ -24,17 +25,14 @@ function FilterControl({ filter }) {
 
   if (type === 'select') {
     return (
-      <select
+      <FilterableSelect
         aria-label={label}
         value={value || ''}
         onChange={(e) => onChange(e.target.value)}
-        style={inputStyle}
-      >
-        <option value="">{label}</option>
-        {(options || []).map((o) => (
-          <option key={o.value} value={o.value}>{o.label}</option>
-        ))}
-      </select>
+        inputStyle={inputStyle}
+        placeholder={label}
+        options={(options || []).map((o) => ({ id: o.value, label: o.label }))}
+      />
     );
   }
 

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import ResourceRequests from './ResourceRequests';
 import * as apiV2 from '../utils/apiV2';
+import { changeSelect } from '../utils/testHelpers';
 
 jest.mock('../utils/apiV2');
 
@@ -55,19 +56,25 @@ describe('ResourceRequests module', () => {
   it('contract filter excludes completed/cancelled contracts', async () => {
     mount();
     await screen.findByText('Senior Dev');
+    // Open the contract filter dropdown and check options
     const contractFilter = screen.getByLabelText('Filtro por contrato');
-    // Active contracts are present
-    expect(contractFilter.querySelector('option[value="ct1"]')).not.toBeNull();
-    expect(contractFilter.querySelector('option[value="ct2"]')).not.toBeNull();
-    // Completed contract is filtered out
-    expect(contractFilter.querySelector('option[value="ct3"]')).toBeNull();
+    fireEvent.click(contractFilter);
+    await waitFor(() => {
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      // Active contracts are present
+      expect(listbox.querySelector('[data-value="ct1"]')).not.toBeNull();
+      expect(listbox.querySelector('[data-value="ct2"]')).not.toBeNull();
+      // Completed contract is filtered out
+      expect(listbox.querySelector('[data-value="ct3"]')).toBeNull();
+    });
   });
 
   it('status filter triggers refetch', async () => {
     mount();
     await screen.findByText('Senior Dev');
     apiV2.apiGet.mockClear();
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'open' } });
+    await changeSelect('Filtro por estado', 'open');
     await waitFor(() => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes('status=open'))).toBe(true);
@@ -78,14 +85,20 @@ describe('ResourceRequests module', () => {
     apiV2.apiPost.mockResolvedValue({ id: 'r-new' });
     mount();
     await screen.findByText('Senior Dev');
+    // Wait for contracts to load by checking the filter options
+    const contractFilterInput = screen.getByLabelText('Filtro por contrato');
+    fireEvent.click(contractFilterInput);
     await waitFor(() => {
-      expect(screen.getByLabelText('Filtro por contrato').querySelector('option[value="ct1"]')).not.toBeNull();
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      expect(listbox.querySelector('[data-value="ct1"]')).not.toBeNull();
     });
+    fireEvent.keyDown(contractFilterInput, { key: 'Escape' });
     fireEvent.click(screen.getByRole('button', { name: /Nueva Solicitud/i }));
     const dialog = await screen.findByRole('dialog');
-    fireEvent.change(within(dialog).getByLabelText('Contrato'), { target: { value: 'ct1' } });
+    await changeSelect('Contrato', 'ct1');
     fireEvent.change(within(dialog).getByLabelText('Role title'), { target: { value: 'UX Designer' } });
-    fireEvent.change(within(dialog).getByLabelText('Área'), { target: { value: '1' } });
+    await changeSelect('Área', '1');
     fireEvent.change(within(dialog).getByLabelText('Fecha de inicio'), { target: { value: '2026-08-01' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {

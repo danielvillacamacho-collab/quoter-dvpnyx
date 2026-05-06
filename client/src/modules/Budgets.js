@@ -3,6 +3,7 @@ import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
+import FilterableSelect from '../shell/FilterableSelect';
 
 /* ========== styles ========== */
 const s = {
@@ -108,20 +109,28 @@ function BudgetForm({ initial, users, onSave, onCancel, saving }) {
         </div>
         <div>
           <label style={s.label}>Trimestre</label>
-          <select style={{ ...s.input, padding: '8px 10px' }} value={form.period_quarter || ''} onChange={(e) => set('period_quarter', e.target.value)}>
-            <option value="">--</option>
-            <option value="1">Q1</option>
-            <option value="2">Q2</option>
-            <option value="3">Q3</option>
-            <option value="4">Q4</option>
-          </select>
+          <FilterableSelect
+            value={form.period_quarter ? String(form.period_quarter) : ''}
+            onChange={(e) => set('period_quarter', e.target.value)}
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            placeholder="--"
+            options={[
+              { id: '1', label: 'Q1' },
+              { id: '2', label: 'Q2' },
+              { id: '3', label: 'Q3' },
+              { id: '4', label: 'Q4' },
+            ]}
+          />
         </div>
         <div>
           <label style={s.label}>Mes</label>
-          <select style={{ ...s.input, padding: '8px 10px' }} value={form.period_month || ''} onChange={(e) => set('period_month', e.target.value)}>
-            <option value="">--</option>
-            {MONTH_NAMES.map((m, i) => <option key={i + 1} value={i + 1}>{m}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.period_month ? String(form.period_month) : ''}
+            onChange={(e) => set('period_month', e.target.value)}
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            placeholder="--"
+            options={MONTH_NAMES.map((m, i) => ({ id: String(i + 1), label: m }))}
+          />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -137,10 +146,13 @@ function BudgetForm({ initial, users, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Responsable</label>
-          <select style={{ ...s.input, padding: '8px 10px' }} value={form.owner_id || ''} onChange={(e) => set('owner_id', e.target.value)}>
-            <option value="">-- Sin asignar --</option>
-            {(users || []).map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.owner_id ? String(form.owner_id) : ''}
+            onChange={(e) => set('owner_id', e.target.value)}
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            placeholder="-- Sin asignar --"
+            options={(users || []).map((u) => ({ id: String(u.id), label: u.name || u.email }))}
+          />
         </div>
         <div>
           <label style={s.label}>Target USD *</label>
@@ -149,11 +161,16 @@ function BudgetForm({ initial, users, onSave, onCancel, saving }) {
       </div>
       <div>
         <label style={s.label}>Estado</label>
-        <select style={{ ...s.input, padding: '8px 10px' }} value={form.status} onChange={(e) => set('status', e.target.value)}>
-          <option value="draft">Borrador</option>
-          <option value="active">Activo</option>
-          <option value="closed">Cerrado</option>
-        </select>
+        <FilterableSelect
+          value={form.status}
+          onChange={(e) => set('status', e.target.value)}
+          inputStyle={{ ...s.input, padding: '8px 10px' }}
+          options={[
+            { id: 'draft', label: 'Borrador' },
+            { id: 'active', label: 'Activo' },
+            { id: 'closed', label: 'Cerrado' },
+          ]}
+        />
       </div>
       <div>
         <label style={s.label}>Notas</label>
@@ -268,17 +285,18 @@ export default function Budgets() {
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Estado</label>
-            <select
-              style={s.input}
+            <FilterableSelect
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               aria-label="Filtro por estado"
-            >
-              <option value="">Todos</option>
-              <option value="draft">Borrador</option>
-              <option value="active">Activo</option>
-              <option value="closed">Cerrado</option>
-            </select>
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={[
+                { id: 'draft', label: 'Borrador' },
+                { id: 'active', label: 'Activo' },
+                { id: 'closed', label: 'Cerrado' },
+              ]}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Pais</label>
