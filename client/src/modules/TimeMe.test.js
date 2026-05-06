@@ -132,4 +132,121 @@ describe('TimeMe', () => {
     mount();
     await waitFor(() => expect(screen.getByText(/No tienes asignaciones activas/i)).toBeInTheDocument());
   });
+
+  // ── SPEC-011: date picker para navegación directa por semana ────────────────
+
+  describe('SPEC-011: selector de semana por calendario', () => {
+    // Pin clock to a known Wednesday so startOfWeek results are deterministic
+    const FIXED_NOW = new Date('2026-04-08T12:00:00'); // Wednesday
+    const CURRENT_MONDAY = '2026-04-06';
+
+    beforeEach(() => {
+      jest.useFakeTimers({ legacyFakeTimers: false });
+      jest.setSystemTime(FIXED_NOW);
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('date range pill is rendered with the calendar icon', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      expect(screen.getByLabelText('Seleccionar semana')).toBeInTheDocument();
+      expect(screen.getByLabelText('Seleccionar semana').textContent).toContain('📅');
+    });
+
+    it('clicking the date range pill opens the date picker', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      expect(screen.queryByLabelText('Elegir fecha')).toBeNull();
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
+      expect(screen.getByLabelText('Elegir fecha')).toBeInTheDocument();
+    });
+
+    it('clicking the pill again closes the date picker', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
+      expect(screen.getByLabelText('Elegir fecha')).toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
+      expect(screen.queryByLabelText('Elegir fecha')).toBeNull();
+    });
+
+    it('pressing Escape closes the picker without changing the week', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
+      expect(screen.getByLabelText('Elegir fecha')).toBeInTheDocument();
+      fireEvent.keyDown(document, { key: 'Escape' });
+      expect(screen.queryByLabelText('Elegir fecha')).toBeNull();
+      // Week should still be the current Monday
+      expect(screen.getByLabelText('Seleccionar semana').textContent).toContain(CURRENT_MONDAY);
+    });
+
+    it('clicking outside the picker closes it without changing the week', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
+      expect(screen.getByLabelText('Elegir fecha')).toBeInTheDocument();
+      fireEvent.mouseDown(document.body);
+      expect(screen.queryByLabelText('Elegir fecha')).toBeNull();
+      expect(screen.getByLabelText('Seleccionar semana').textContent).toContain(CURRENT_MONDAY);
+    });
+
+    it('selecting a date navigates to the Monday of that week', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
+      // Pick Thursday 2026-05-07 → should navigate to Monday 2026-05-04
+      fireEvent.change(screen.getByLabelText('Elegir fecha'), { target: { value: '2026-05-07' } });
+      expect(screen.queryByLabelText('Elegir fecha')).toBeNull();
+      await waitFor(() =>
+        expect(screen.getByLabelText('Seleccionar semana').textContent).toContain('2026-05-04')
+      );
+    });
+
+    it('selecting Monday and any other day of the same week land on the same week', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+
+      // Pick Monday 2026-05-04
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
+      fireEvent.change(screen.getByLabelText('Elegir fecha'), { target: { value: '2026-05-04' } });
+      const afterMonday = screen.getByLabelText('Seleccionar semana').textContent;
+
+      // Pick Sunday 2026-05-10 (same week)
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
+      fireEvent.change(screen.getByLabelText('Elegir fecha'), { target: { value: '2026-05-10' } });
+      const afterSunday = screen.getByLabelText('Seleccionar semana').textContent;
+
+      expect(afterMonday).toBe(afterSunday);
+    });
+
+    it('chevron buttons still navigate by one week regardless of picker state', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      // Current week starts on CURRENT_MONDAY (2026-04-06)
+      fireEvent.click(screen.getByLabelText('Semana siguiente'));
+      await waitFor(() =>
+        expect(screen.getByLabelText('Seleccionar semana').textContent).toContain('2026-04-13')
+      );
+      fireEvent.click(screen.getByLabelText('Semana anterior'));
+      await waitFor(() =>
+        expect(screen.getByLabelText('Seleccionar semana').textContent).toContain(CURRENT_MONDAY)
+      );
+    });
+
+    it('Hoy button navigates back to current week when on a different week', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      // Navigate away first
+      fireEvent.click(screen.getByLabelText('Semana siguiente'));
+      const hoyBtn = await screen.findByRole('button', { name: /Hoy/i });
+      fireEvent.click(hoyBtn);
+      await waitFor(() =>
+        expect(screen.getByLabelText('Seleccionar semana').textContent).toContain(CURRENT_MONDAY)
+      );
+    });
+  });
 });
