@@ -21,7 +21,18 @@ const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError } = require('../utils/http');
+
+const SORTABLE = {
+  work_date:     'te.work_date',
+  hours:         'te.hours',
+  status:        'te.status',
+  created_at:    'te.created_at',
+  updated_at:    'te.updated_at',
+  contract_name: 'c.name',
+  role_title:    'a.role_title',
+};
 
 router.use(auth);
 
@@ -120,6 +131,9 @@ router.get('/', async (req, res) => {
     }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'work_date', defaultDir: 'desc', tieBreaker: 'te.created_at DESC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -132,7 +146,7 @@ router.get('/', async (req, res) => {
            LEFT JOIN assignments a ON a.id = te.assignment_id
            LEFT JOIN contracts   c ON c.id = a.contract_id
            ${where}
-           ORDER BY te.work_date DESC, te.created_at DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset]
       ),
@@ -142,9 +156,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /time-entries failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /time-entries', err);
   }
 });
 
@@ -217,9 +229,7 @@ router.post('/', async (req, res) => {
     });
     res.status(201).json(te);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /time-entries failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /time-entries', err);
   } finally {
     conn.release();
   }
@@ -295,9 +305,7 @@ router.put('/:id', async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /time-entries/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /time-entries/:id', err);
   } finally {
     conn.release();
   }
@@ -404,9 +412,7 @@ router.post('/copy-week', async (req, res) => {
 
     res.json({ copied: created.length, created, skipped });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /time-entries/copy-week failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /time-entries/copy-week', err);
   } finally {
     conn.release();
   }

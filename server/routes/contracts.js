@@ -22,6 +22,7 @@ const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { stringifyCsv } = require('../utils/csv');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError, safeRollback } = require('../utils/http');
 const { validateContractSubtype, ALL_SUBTYPES } = require('../utils/contract_subtype');
 
@@ -50,6 +51,19 @@ const EDITABLE_FIELDS = [
   'start_date', 'end_date', 'account_owner_id', 'delivery_manager_id',
   'capacity_manager_id', 'squad_id', 'notes', 'tags', 'metadata',
 ];
+
+// Whitelist de campos ordenables vía ?sort= y ?dir=. Mapea api-name → SQL.
+const SORTABLE = {
+  name:             'c.name',
+  type:             'c.type',
+  contract_subtype: 'c.contract_subtype',
+  status:           'c.status',
+  start_date:       'c.start_date',
+  end_date:         'c.end_date',
+  created_at:       'c.created_at',
+  updated_at:       'c.updated_at',
+  client_name:      'cl.name',
+};
 
 /* -------- LIST -------- */
 router.get('/', async (req, res) => {
@@ -82,6 +96,9 @@ router.get('/', async (req, res) => {
     }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'updated_at', defaultDir: 'desc', tieBreaker: 'c.id ASC',
+    });
     // limit/offset son enteros saneados → siempre seguros vía $N (no al template).
     const dataParams = [...filterParams, limit, offset];
     const limitIdx = filterParams.length + 1;
@@ -96,7 +113,7 @@ router.get('/', async (req, res) => {
            FROM contracts c
            LEFT JOIN clients cl ON cl.id = c.client_id
            ${where}
-           ORDER BY c.updated_at DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         dataParams
       ),
@@ -106,9 +123,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /contracts failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /contracts', err);
   }
 });
 
@@ -165,9 +180,7 @@ router.get('/export.csv', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="contratos.csv"');
     res.send(csv);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /contracts/export.csv failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /contracts/export.csv', err);
   }
 });
 
@@ -311,9 +324,7 @@ router.post('/', adminOnly, async (req, res) => {
     });
     res.status(201).json(c);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /contracts failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contracts', err);
   }
 });
 
@@ -435,9 +446,7 @@ router.post('/from-quotation/:quotation_id', adminOnly, async (req, res) => {
 
     res.status(201).json(c);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /contracts/from-quotation failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contracts/from-quotation', err);
   }
 });
 
@@ -537,9 +546,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /contracts/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /contracts/:id', err);
   }
 });
 
@@ -653,9 +660,7 @@ router.post('/:id/status', adminOnly, async (req, res) => {
     });
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('POST /contracts/:id/status failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contracts/:id/status', err);
   } finally {
     conn.release();
   }
@@ -939,9 +944,7 @@ router.post('/:id/kick-off', async (req, res) => {
     });
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('POST /contracts/:id/kick-off failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /contracts/:id/kick-off', err);
   } finally {
     conn.release();
   }

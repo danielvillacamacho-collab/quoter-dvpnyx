@@ -24,15 +24,26 @@
 
 ## Modelo de Roles
 
-V2 mantiene 5 roles base. Los permisos están **hardcodeados en código** — no hay UI para editarlos. Si hay que cambiar la matriz, se hace en código y se libera.
+V2 + SPEC-CRM-00 v1.1 mantiene **7 roles base** (`director` y `external` agregados por SPEC-CRM-00 PR 4 — `c8643d9`) más `preventa` por backward-compat (el middleware lo reescribe a `member`). Los permisos están **hardcodeados en código** — no hay UI para editarlos. Si hay que cambiar la matriz, se hace en código y se libera.
+
+La fuente de verdad operativa son las macros exportadas en [`server/middleware/auth.js`](../../../server/middleware/auth.js):
+
+```js
+const ROLES = ['superadmin', 'admin', 'director', 'lead', 'member', 'viewer', 'external'];
+const SEE_ALL_ROLES = new Set(['superadmin', 'admin', 'director']);
+const WRITE_ROLES   = new Set(['superadmin', 'admin', 'director', 'lead', 'member']);
+```
 
 | Rol | Descripción |
 |---|---|
 | **Superadmin** | Poder total. Único que puede crear admins y cambiar roles. No puede ser eliminado. |
 | **Admin** | Gestiona usuarios (excepto admins/superadmins), parámetros, áreas, skills, squads. Ve todo el sistema. |
+| **Director** *(SPEC-CRM-00)* | Nivel VP / C-suite. Ve todo el pipeline, todas las oportunidades, todos los reportes — sin permisos administrativos sobre usuarios. Read-everything con write capability sobre opportunities/contracts. |
 | **Lead** | Ve y aprueba en su squad. En V2 sin flujo de aprobación todavía, pero ve agregados de su squad. |
-| **Member** | Crea entidades según su función. Ve lo de su squad. Edita lo que le pertenece. |
+| **Member** | Crea entidades según su función. En oportunidades **ve solo las suyas** (account_owner_id o presales_lead_id). Edita lo que le pertenece. |
 | **Viewer** | Solo lectura, según su función. |
+| **External** *(SPEC-CRM-00)* | Acceso restringido — usuarios que no son DVP pero necesitan login (clientes en demo, partners). En oportunidades retorna **403**. Otras vistas según whitelist explícita. |
+| `preventa` (legacy) | El middleware lo reescribe a `member` + `function='preventa'`. No usar para usuarios nuevos. |
 
 ### Superadmin existente
 
@@ -69,45 +80,47 @@ Un usuario tiene **una función**. Si necesita más adelante tener varias, se ev
 
 ## Matriz de Permisos por Rol
 
-Las acciones se evalúan sobre el rol. La función no agrega permisos.
+Las acciones se evalúan sobre el rol. La función no agrega permisos. La columna **Director** y **External** se agregaron en SPEC-CRM-00 PR 4 (`c8643d9`).
 
-| Capacidad | Superadmin | Admin | Lead | Member | Viewer |
-|---|---|---|---|---|---|
-| Iniciar sesión | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Ver Dashboard | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Ver Wiki | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Ver cotizaciones (ámbito) | Todas | Todas | Squad | Propias + Squad (lectura) | Squad (lectura) |
-| Crear/editar cotización propia | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Editar cotización ajena | ✅ | ✅ | Solo de su squad | ❌ | ❌ |
-| Ver Clientes | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Crear/editar Cliente | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Ver Oportunidades (ámbito) | Todas | Todas | Squad | Propias + Squad | Squad |
-| Crear/editar Oportunidad | ✅ | ✅ | ✅ | ✅ (las propias) | ❌ |
-| Marcar Oportunidad como ganada/perdida | ✅ | ✅ | ✅ | ✅ (las propias) | ❌ |
-| Ver Empleados | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Crear/editar Empleado | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Eliminar Empleado | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Ver Skills, Áreas | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Editar catálogo Skills/Áreas | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Ver Contratos (ámbito) | Todos | Todos | Squad | Squad | Squad |
-| Crear/editar Contrato | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Crear/editar Solicitud de Recurso | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Crear/editar Asignación | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Eliminar Asignación | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Registrar horas propias | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Editar/borrar time entry propio (≤30 días) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Editar time entry ajeno | ✅ | ✅ | Squad | ❌ | ❌ |
-| Ver reportes | ✅ | ✅ | Squad | Limitado a su data | Squad |
-| Editar parámetros | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Crear usuarios preventa/comercial | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Crear usuarios admin | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Cambiar rol de un usuario | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Eliminar usuario (hard delete) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Activar/desactivar usuario | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Resetear contraseña | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Ver event log (audit) | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Crear/editar Squad | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Mover usuarios entre Squads | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Capacidad | Superadmin | Admin | Director | Lead | Member | Viewer | External |
+|---|---|---|---|---|---|---|---|
+| Iniciar sesión | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Ver Dashboard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | Limitado |
+| Ver Wiki | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Ver cotizaciones (ámbito) | Todas | Todas | Todas | Squad | Propias + Squad (lectura) | Squad (lectura) | ❌ |
+| Crear/editar cotización propia | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Editar cotización ajena | ✅ | ✅ | ✅ | Solo de su squad | ❌ | ❌ | ❌ |
+| Ver Clientes | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Crear/editar Cliente | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **Ver Oportunidades (ámbito)** *(scoping inline en `GET /api/opportunities` post CRM-00)* | Todas | Todas | Todas | Squad | Propias (account_owner o presales_lead) | Squad | **403** |
+| Crear/editar Oportunidad | ✅ | ✅ | ✅ | ✅ | ✅ (las propias) | ❌ | ❌ |
+| Marcar Oportunidad como ganada/perdida/postponed | ✅ | ✅ | ✅ | ✅ | ✅ (las propias) | ❌ | ❌ |
+| `POST /api/opportunities/:id/check-margin` | ✅ | ✅ | ✅ | ✅ | ✅ (propias) | ❌ | ❌ |
+| `POST /api/opportunities/check-alerts` (cron) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Ver Empleados | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Crear/editar Empleado | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Eliminar Empleado | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Ver Skills, Áreas | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Editar catálogo Skills/Áreas | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Ver Contratos (ámbito) | Todos | Todos | Todos | Squad | Squad | Squad | ❌ |
+| Crear/editar Contrato | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Crear/editar Solicitud de Recurso | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Crear/editar Asignación | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Eliminar Asignación | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Registrar horas propias | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Editar/borrar time entry propio (≤30 días) | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Editar time entry ajeno | ✅ | ✅ | ❌ | Squad | ❌ | ❌ | ❌ |
+| Ver reportes | ✅ | ✅ | ✅ (todos) | Squad | Limitado a su data | Squad | ❌ |
+| Editar parámetros | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Crear usuarios preventa/comercial | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Crear usuarios admin | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Cambiar rol de un usuario | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Eliminar usuario (hard delete) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Activar/desactivar usuario | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Resetear contraseña | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Ver event log (audit) | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Crear/editar Squad | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Mover usuarios entre Squads | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ### Reglas de protección (heredadas de V1, mantener)
 

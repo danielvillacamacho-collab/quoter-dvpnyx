@@ -20,7 +20,12 @@ export const SUBTYPES_BY_TYPE = {
     { value: 'fixed_scope', label: 'Alcance fijo / POC' },
     { value: 'hour_pool',   label: 'Bolsa de horas' },
   ],
-  resell: [],
+  resell: [
+    { value: 'aws',   label: 'AWS' },
+    { value: 'azure', label: 'Azure' },
+    { value: 'gcp',   label: 'GCP' },
+    { value: 'other', label: 'Otros' },
+  ],
 };
 
 /** Map plano valor → etiqueta (para mostrar en list/detail). */
@@ -36,7 +41,7 @@ export function formatSubtype(value, { fallback = 'Sin especificar' } = {}) {
 
 /** ¿El type elegido admite subtype? */
 export function typeRequiresSubtype(type) {
-  return type === 'capacity' || type === 'project';
+  return type === 'capacity' || type === 'project' || type === 'resell';
 }
 
 /** Lista de opciones para el dropdown según el type actual. */

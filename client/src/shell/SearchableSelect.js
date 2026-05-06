@@ -218,6 +218,7 @@ export default function SearchableSelect({
                 id={`${listId}-${i}`}
                 role="option"
                 aria-selected={isSel}
+                data-value={o.id}
                 // mousedown (no click) para que el blur del input no cierre
                 // el popover antes de que se procese la selección.
                 onMouseDown={(e) => { e.preventDefault(); commit(o.id); }}

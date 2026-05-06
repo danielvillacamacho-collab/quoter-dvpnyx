@@ -15,6 +15,7 @@ import {
   useSensor, useSensors, useDroppable, useDraggable,
 } from '@dnd-kit/core';
 import { apiGet, apiPost } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 import { STAGES, STAGE_BY_ID, computeTransitionWarnings } from '../utils/pipeline';
 
 const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -123,20 +124,31 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
   const [winningQuotation, setWinningQuotation] = useState('');
   const [outcomeReason, setOutcomeReason] = useState('');
   const [outcomeNotes, setOutcomeNotes] = useState('');
+  // SPEC-CRM-00 v1.1 — Postponed exige fecha futura de reactivación.
+  const defaultPostponedDate = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [postponedDate, setPostponedDate] = useState(defaultPostponedDate);
+  const [postponedReasonInput, setPostponedReasonInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [quotations, setQuotations] = useState([]);
   const fromS = STAGE_BY_ID[fromStage];
   const toS = STAGE_BY_ID[toStage];
-  const requiresWinning = toStage === 'won';
-  const requiresOutcomeReason = toStage === 'lost' || toStage === 'cancelled';
+  const requiresWinning = toStage === 'closed_won';
+  const requiresOutcomeReason = toStage === 'closed_lost';
+  const requiresPostponedDate = toStage === 'postponed';
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const postponedDateInvalid = requiresPostponedDate && (!postponedDate || postponedDate <= todayIso);
 
   const warnings = useMemo(
     () => computeTransitionWarnings({ fromStage, toStage, opportunity: opp }),
     [fromStage, toStage, opp],
   );
 
-  // Cargar cotizaciones de la oportunidad si vamos a 'won'
+  // Cargar cotizaciones de la oportunidad si vamos a closed_won
   useEffect(() => {
     if (!requiresWinning) return;
     apiGet(`/api/quotations?opportunity_id=${opp.id}`)
@@ -147,6 +159,7 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
   const handleConfirm = async () => {
     if (requiresWinning && !winningQuotation) { setError('Selecciona la cotización ganadora.'); return; }
     if (requiresOutcomeReason && !outcomeReason) { setError('Indica la razón del resultado.'); return; }
+    if (requiresPostponedDate && postponedDateInvalid) { setError('La fecha de reactivación debe ser futura.'); return; }
     setSubmitting(true);
     setError('');
     try {
@@ -156,6 +169,10 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
       };
       if (requiresWinning) body.winning_quotation_id = winningQuotation;
       if (requiresOutcomeReason) body.outcome_reason = outcomeReason;
+      if (requiresPostponedDate) {
+        body.postponed_until_date = postponedDate;
+        body.postponed_reason = postponedReasonInput || undefined;
+      }
       const result = await apiPost(`/api/opportunities/${opp.id}/status`, body);
       onConfirm(result);
     } catch (e) {
@@ -190,15 +207,13 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
             <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>
               Cotización ganadora *
             </label>
-            <select value={winningQuotation} onChange={(e) => setWinningQuotation(e.target.value)}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
-              <option value="">— Selecciona una cotización —</option>
-              {quotations.map((q) => (
-                <option key={q.id} value={q.id}>
-                  {q.project_name || q.id} · {q.status}
-                </option>
-              ))}
-            </select>
+            <FilterableSelect
+              value={winningQuotation}
+              onChange={(e) => setWinningQuotation(e.target.value)}
+              inputStyle={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}
+              placeholder="— Selecciona una cotización —"
+              options={quotations.map((q) => ({ id: String(q.id), label: `${q.project_name || q.id} · ${q.status}` }))}
+            />
             {quotations.length === 0 && (
               <div style={{ fontSize: 11, color: 'var(--warning)', marginTop: 4 }}>
                 Esta oportunidad aún no tiene cotizaciones. Crea una desde el detalle antes de marcarla como ganada.
@@ -212,16 +227,50 @@ function TransitionModal({ opp, fromStage, toStage, onConfirm, onCancel }) {
             <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>
               Razón del resultado *
             </label>
-            <select value={outcomeReason} onChange={(e) => setOutcomeReason(e.target.value)}
-                    style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}>
-              <option value="">—</option>
-              <option value="price">Precio</option>
-              <option value="timing">Tiempo / fecha</option>
-              <option value="competition">Competencia</option>
-              <option value="technical_fit">Ajuste técnico</option>
-              <option value="client_internal">Decisión interna del cliente</option>
-              <option value="other">Otro</option>
-            </select>
+            <FilterableSelect
+              value={outcomeReason}
+              onChange={(e) => setOutcomeReason(e.target.value)}
+              inputStyle={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}
+              aria-label="Razón del resultado"
+              placeholder="—"
+              options={[
+                { id: 'price', label: 'Precio' },
+                { id: 'timing', label: 'Tiempo / fecha' },
+                { id: 'competition', label: 'Competencia' },
+                { id: 'technical_fit', label: 'Ajuste técnico' },
+                { id: 'client_internal', label: 'Decisión interna del cliente' },
+                { id: 'other', label: 'Otro' },
+              ]}
+            />
+          </div>
+        )}
+
+        {requiresPostponedDate && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ background: '#f5f3ff', color: '#6d28d9', padding: '8px 10px', borderRadius: 6, fontSize: 12, marginBottom: 10 }}>
+              ⏸ Las oportunidades postergadas <strong>NO entran</strong> en pipeline weighted hasta que se reactiven. Recibirás recordatorio el día indicado.
+            </div>
+            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>
+              Reactivar revisión el *
+            </label>
+            <input
+              type="date"
+              value={postponedDate}
+              min={todayIso}
+              onChange={(e) => setPostponedDate(e.target.value)}
+              style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13 }}
+              aria-label="Fecha de reactivación"
+            />
+            <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginTop: 10, marginBottom: 4 }}>
+              Razón de la postergación
+            </label>
+            <textarea
+              value={postponedReasonInput}
+              onChange={(e) => setPostponedReasonInput(e.target.value)}
+              placeholder="Ej. Cliente postpuso decisión por restructura. Esperan resolver Q3."
+              style={{ width: '100%', minHeight: 60, padding: 8, border: '1px solid var(--border)', borderRadius: 6, fontSize: 12, resize: 'vertical' }}
+              aria-label="Razón de postergación"
+            />
           </div>
         )}
 
@@ -350,10 +399,14 @@ export default function PipelineKanban() {
       </div>
 
       <div style={s.filters}>
-        <select aria-label="Filtrar por owner" value={filters.owner_id} onChange={(e) => setFilter('owner_id', e.target.value)} style={s.filterInput}>
-          <option value="">Todos los owners</option>
-          {users.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
-        </select>
+        <FilterableSelect
+          aria-label="Filtrar por owner"
+          value={filters.owner_id}
+          onChange={(e) => setFilter('owner_id', e.target.value)}
+          inputStyle={s.filterInput}
+          placeholder="Todos los owners"
+          options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
+        />
         <input
           type="number" min={0} step={1000}
           placeholder="Monto mínimo USD"

@@ -4,6 +4,9 @@ import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
 import Avatar from '../shell/Avatar';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -59,11 +62,16 @@ const EMPTY = {
 function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
+  // blockingAsg: lista de asignaciones que impiden poner end_date — viene
+  // del backend (code: END_DATE_BLOCKED_BY_ASSIGNMENTS) y se renderiza
+  // expandida bajo el error para que el operador sepa qué cerrar primero.
+  const [blockingAsg, setBlockingAsg] = useState(null);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
+    setBlockingAsg(null);
     if (!form.first_name.trim()) return setErr('Nombre es requerido');
     if (!form.last_name.trim()) return setErr('Apellido es requerido');
     if (!form.country.trim()) return setErr('País es requerido');
@@ -71,7 +79,12 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
     if (!form.level) return setErr('Level es requerido');
     if (!form.start_date) return setErr('Fecha de inicio es requerida');
     try { await onSave(form); }
-    catch (ex) { setErr(ex.message || 'Error guardando'); }
+    catch (ex) {
+      setErr(ex.message || 'Error guardando');
+      if (ex.body && ex.body.code === 'END_DATE_BLOCKED_BY_ASSIGNMENTS' && Array.isArray(ex.body.blocking_assignments)) {
+        setBlockingAsg(ex.body.blocking_assignments);
+      }
+    }
   };
 
   return (
@@ -112,16 +125,26 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Área *</label>
-          <select style={s.input} value={form.area_id || ''} onChange={(e) => set('area_id', Number(e.target.value) || '')} aria-label="Área" required>
-            <option value="">— Selecciona —</option>
-            {areas.filter((a) => a.active).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.area_id || ''}
+            onChange={(e) => set('area_id', Number(e.target.value) || '')}
+            aria-label="Área"
+            required
+            inputStyle={s.input}
+            placeholder="— Selecciona —"
+            options={areas.filter((a) => a.active).map((a) => ({ id: String(a.id), label: a.name }))}
+          />
         </div>
         <div>
           <label style={s.label}>Level *</label>
-          <select style={s.input} value={form.level} onChange={(e) => set('level', e.target.value)} aria-label="Level" required>
-            {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.level}
+            onChange={(e) => set('level', e.target.value)}
+            aria-label="Level"
+            required
+            inputStyle={s.input}
+            options={LEVELS.map((l) => ({ id: l, label: l }))}
+          />
         </div>
         <div>
           <label style={s.label}>Seniority (texto)</label>
@@ -131,9 +154,13 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Tipo de contrato</label>
-          <select style={s.input} value={form.employment_type} onChange={(e) => set('employment_type', e.target.value)} aria-label="Tipo de contrato">
-            {EMPLOYMENT_TYPES.map((et) => <option key={et.value} value={et.value}>{et.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.employment_type}
+            onChange={(e) => set('employment_type', e.target.value)}
+            aria-label="Tipo de contrato"
+            inputStyle={s.input}
+            options={EMPLOYMENT_TYPES.map((et) => ({ id: et.value, label: et.label }))}
+          />
         </div>
         <div>
           <label style={s.label}>Horas semanales</label>
@@ -141,9 +168,13 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
         </div>
         <div>
           <label style={s.label}>Estado</label>
-          <select style={s.input} value={form.status} onChange={(e) => set('status', e.target.value)} aria-label="Estado">
-            {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.status}
+            onChange={(e) => set('status', e.target.value)}
+            aria-label="Estado"
+            inputStyle={s.input}
+            options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+          />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -153,7 +184,49 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
         </div>
         <div>
           <label style={s.label}>Fecha de fin</label>
-          <input style={s.input} type="date" value={form.end_date ? String(form.end_date).slice(0, 10) : ''} onChange={(e) => set('end_date', e.target.value || null)} aria-label="Fecha de fin" />
+          {/* Indefinida = NULL en BD = "proyectada al futuro" para todos los
+              cálculos internos del quoter (capacity, planner, idle time).
+              Solo se pone fecha si hay contrato a término fijo o si renunció
+              /se despidió. Sin esta opción explícita, los comerciales tendían
+              a poner una fecha cualquiera y el empleado quedaba como inactivo
+              al pasar esa fecha (ver fix 36a8b37). */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', gap: 12, fontSize: 13 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="end_date_mode"
+                  checked={!form.end_date}
+                  onChange={() => set('end_date', null)}
+                  aria-label="Fecha de fin indefinida"
+                />
+                Indefinida
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input
+                  type="radio"
+                  name="end_date_mode"
+                  checked={!!form.end_date}
+                  onChange={() => set('end_date', new Date().toISOString().slice(0, 10))}
+                  aria-label="Fecha de fin específica"
+                />
+                Hasta una fecha
+              </label>
+            </div>
+            {form.end_date ? (
+              <input
+                style={s.input}
+                type="date"
+                value={String(form.end_date).slice(0, 10)}
+                onChange={(e) => set('end_date', e.target.value || null)}
+                aria-label="Fecha de fin"
+              />
+            ) : (
+              <div style={{ fontSize: 11, color: 'var(--text-light)', lineHeight: 1.4 }}>
+                Indefinida — se proyecta al futuro. Solo pon fecha si tienes contrato a término fijo o si renunció/se despidió.
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <div>
@@ -161,6 +234,28 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
         <textarea style={{ ...s.input, minHeight: 60, resize: 'vertical' }} value={form.notes || ''} onChange={(e) => set('notes', e.target.value)} />
       </div>
       {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+      {blockingAsg && blockingAsg.length > 0 && (
+        <div style={{
+          background: '#fff5f5', border: '1px solid var(--danger)', borderRadius: 8,
+          padding: 12, fontSize: 12, color: 'var(--text)',
+        }} role="alert">
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>
+            Asignaciones que bloquean la fecha de fin:
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
+            {blockingAsg.map((a) => (
+              <li key={a.id}>
+                <strong>{a.client_name || '—'} · {a.contract_name}</strong>
+                {a.role_title ? ` · ${a.role_title}` : ''}
+                {' '}({a.start_date} → {a.end_date || 'abierta'}, {a.weekly_hours}h/sem)
+              </li>
+            ))}
+          </ul>
+          <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-light)' }}>
+            Cierra o ajusta esas asignaciones primero, luego vuelve a intentar.
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
         <button type="submit" style={s.btn()} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>
@@ -276,14 +371,13 @@ function EmployeeSkillsModal({ employee, onClose }) {
                     <td style={{ ...s.td, fontWeight: 600 }}>{sk.skill_name}</td>
                     <td style={{ ...s.td, fontFamily: 'monospace', fontSize: 12 }}>{sk.skill_category || '—'}</td>
                     <td style={s.td}>
-                      <select
-                        style={{ ...s.input, padding: '4px 6px', fontSize: 12 }}
+                      <FilterableSelect
                         value={sk.proficiency}
                         onChange={(e) => updateSkill(sk, { proficiency: e.target.value })}
                         aria-label={`Proficiency ${sk.skill_name}`}
-                      >
-                        {PROFICIENCIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                      </select>
+                        inputStyle={{ ...s.input, padding: '4px 6px', fontSize: 12 }}
+                        options={PROFICIENCIES.map((p) => ({ id: p.value, label: p.label }))}
+                      />
                     </td>
                     <td style={s.td}>
                       <input
@@ -325,27 +419,25 @@ function EmployeeSkillsModal({ employee, onClose }) {
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr 2fr auto', gap: 8, alignItems: 'end' }}>
             <div>
               <label style={s.label}>Skill *</label>
-              <select
-                style={s.input}
+              <FilterableSelect
                 value={addForm.skill_id}
                 onChange={(e) => setAddForm({ ...addForm, skill_id: e.target.value })}
                 aria-label="Nuevo skill"
                 required
-              >
-                <option value="">— Selecciona —</option>
-                {availableCatalog.map((c) => <option key={c.id} value={c.id}>{c.name}{c.category ? ` · ${c.category}` : ''}</option>)}
-              </select>
+                inputStyle={s.input}
+                placeholder="— Selecciona —"
+                options={availableCatalog.map((c) => ({ id: String(c.id), label: c.name + (c.category ? ' · ' + c.category : '') }))}
+              />
             </div>
             <div>
               <label style={s.label}>Proficiency</label>
-              <select
-                style={s.input}
+              <FilterableSelect
                 value={addForm.proficiency}
                 onChange={(e) => setAddForm({ ...addForm, proficiency: e.target.value })}
                 aria-label="Nueva proficiency"
-              >
-                {PROFICIENCIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-              </select>
+                inputStyle={s.input}
+                options={PROFICIENCIES.map((p) => ({ id: p.value, label: p.label }))}
+              />
             </div>
             <div>
               <label style={s.label}>Años</label>
@@ -385,6 +477,7 @@ export default function Employees() {
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [skillsFor, setSkillsFor] = useState(null); // employee row for which the skills modal is open
+  const sort = useSort({ field: 'last_name', dir: 'asc' });
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -395,6 +488,7 @@ export default function Employees() {
     if (areaFilter) qs.set('area_id', areaFilter);
     if (levelFilter) qs.set('level', levelFilter);
     if (statusFilter) qs.set('status', statusFilter);
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/employees?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -403,7 +497,7 @@ export default function Employees() {
       // eslint-disable-next-line no-alert
       alert('Error cargando empleados: ' + e.message);
     }
-  }, [search, areaFilter, levelFilter, statusFilter]);
+  }, [search, areaFilter, levelFilter, statusFilter, sort.field, sort.dir]);
 
   const loadAreas = useCallback(async () => {
     try {
@@ -458,24 +552,36 @@ export default function Employees() {
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Área</label>
-            <select style={s.input} value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)} aria-label="Filtro por área">
-              <option value="">Cualquiera</option>
-              {areas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
+            <FilterableSelect
+              value={areaFilter}
+              onChange={(e) => setAreaFilter(e.target.value)}
+              aria-label="Filtro por área"
+              inputStyle={s.input}
+              placeholder="Cualquiera"
+              options={areas.map((a) => ({ id: String(a.id), label: a.name }))}
+            />
           </div>
           <div style={{ minWidth: 110 }}>
             <label style={s.label}>Level</label>
-            <select style={s.input} value={levelFilter} onChange={(e) => setLevelFilter(e.target.value)} aria-label="Filtro por level">
-              <option value="">Todos</option>
-              {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-            </select>
+            <FilterableSelect
+              value={levelFilter}
+              onChange={(e) => setLevelFilter(e.target.value)}
+              aria-label="Filtro por level"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={LEVELS.map((l) => ({ id: l, label: l }))}
+            />
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Estado</label>
-            <select style={s.input} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtro por estado">
-              <option value="">Todos</option>
-              {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filtro por estado"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+            />
           </div>
         </div>
 
@@ -483,9 +589,15 @@ export default function Employees() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
-                {['Nombre', 'Área', 'Level', 'País', 'Capacidad', 'Skills', 'Estado', 'Inicio', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="last_name" style={s.th}>Nombre</SortableTh>
+                <SortableTh sort={sort} field="area_name" style={s.th}>Área</SortableTh>
+                <SortableTh sort={sort} field="level" style={s.th}>Level</SortableTh>
+                <SortableTh sort={sort} field="country" style={s.th}>País</SortableTh>
+                <SortableTh sort={sort} field="weekly_capacity_hours" style={s.th}>Capacidad</SortableTh>
+                <SortableTh sort={sort} field="skills_count" style={s.th}>Skills</SortableTh>
+                <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <SortableTh sort={sort} field="start_date" style={s.th}>Inicio</SortableTh>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>

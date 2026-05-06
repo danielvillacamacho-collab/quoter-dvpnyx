@@ -8,6 +8,7 @@
     "migrate:v2-data": "node database/migrate_v2_data.js",
     "validate:v2": "node database/validate_v2_migration.js",
     "seed": "node database/seed.js",
+    "seed:synthetic": "node database/seed_synthetic.js",
     "test": "jest --passWithNoTests",
     "test:coverage": "jest --coverage --passWithNoTests",
     "test:ci": "jest --ci --runInBand --passWithNoTests"
@@ -23,7 +24,11 @@
       "!database/seed.js"
     ],
     "coverageDirectory": "coverage",
-    "coverageReporters": ["text-summary", "lcov", "html"],
+    "coverageReporters": [
+      "text-summary",
+      "lcov",
+      "html"
+    ],
     "coverageThreshold": {
       "global": {
         "statements": 75,
@@ -34,21 +39,20 @@
     }
   },
   "dependencies": {
-    "express": "^4.18.2",
+    "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
-    "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2",
-    "pg": "^8.11.3",
-    "helmet": "^7.1.0",
-    "express-rate-limit": "^7.1.4",
-    "express-validator": "^7.0.1",
-    "uuid": "^9.0.0",
     "exceljs": "^4.4.0",
-    "pdfkit": "^0.15.0"
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.4",
+    "google-auth-library": "^10.6.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pdfkit": "^0.15.0",
+    "pg": "^8.11.3"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2",
-    "jest": "^29.7.0"
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2"
   }
 }

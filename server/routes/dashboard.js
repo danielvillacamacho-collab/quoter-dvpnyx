@@ -12,6 +12,7 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
+const { serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -161,8 +162,7 @@ router.get('/overview', async (_req, res) => {
       quotations,
     });
   } catch (err) {
-    console.error('GET /api/dashboard/overview failed:', err);
-    res.status(500).json({ error: 'No se pudo cargar el dashboard ejecutivo.' });
+    serverError(res, 'GET /dashboard/overview', err);
   }
 });
 

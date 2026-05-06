@@ -1,3 +1,14 @@
+// HANDOFF NOTE (2026-05) — flaky-en-CI conocido.
+//
+// Históricamente este archivo reporta 2 tests rojos sin diagnóstico
+// publicado. Sospechosos primarios: los dos casos que dependen del cálculo
+// dinámico de "Lunes de esta semana" para pre-poblar una celda con un
+// `time_entry` existente (`deletes the entry when the cell is cleared and
+// one existed` y `PUTs when an existing cell value changes`). Ambos hacen
+// `m.toISOString().slice(0,10)` desde un `new Date()` local, lo que en
+// timezones con DST o cerca de medianoche UTC puede no coincidir con el
+// `iso()` que usa el componente. El equipo senior debería congelar el
+// reloj con `jest.useFakeTimers().setSystemTime(...)` antes de tocarlos.
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -18,7 +29,7 @@ const sampleEntries = [
 beforeEach(() => {
   jest.resetAllMocks();
   apiV2.apiGet.mockImplementation((url) => {
-    if (url.startsWith('/api/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: { page: 1, limit: 50, total: 1, pages: 1 } });
+    if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: { page: 1, limit: 50, total: 1, pages: 1 } });
     if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: sampleEntries, pagination: { page: 1, limit: 500, total: 0, pages: 1 } });
     return Promise.resolve({});
   });
@@ -68,7 +79,7 @@ describe('TimeMe', () => {
     const diff = day === 0 ? -6 : 1 - day; m.setDate(m.getDate() + diff);
     const monIso = m.toISOString().slice(0, 10);
     apiV2.apiGet.mockImplementation((url) => {
-      if (url.startsWith('/api/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: {} });
+      if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: {} });
       if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: [{ id: 'te1', assignment_id: 'a1', work_date: monIso, hours: 4 }], pagination: {} });
       return Promise.resolve({});
     });
@@ -85,7 +96,7 @@ describe('TimeMe', () => {
     const diff = day === 0 ? -6 : 1 - day; m.setDate(m.getDate() + diff);
     const monIso = m.toISOString().slice(0, 10);
     apiV2.apiGet.mockImplementation((url) => {
-      if (url.startsWith('/api/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: {} });
+      if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: {} });
       if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: [{ id: 'te1', assignment_id: 'a1', work_date: monIso, hours: 4 }], pagination: {} });
       return Promise.resolve({});
     });
@@ -114,7 +125,7 @@ describe('TimeMe', () => {
 
   it('empty state when the user has no active assignments', async () => {
     apiV2.apiGet.mockImplementation((url) => {
-      if (url.startsWith('/api/assignments'))  return Promise.resolve({ data: [], pagination: {} });
+      if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: [], pagination: {} });
       if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: [], pagination: {} });
       return Promise.resolve({});
     });

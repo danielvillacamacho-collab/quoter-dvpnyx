@@ -51,9 +51,7 @@ router.get('/', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /skills failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /skills', err);
   }
 });
 
@@ -100,9 +98,7 @@ router.post('/', adminOnly, async (req, res) => {
     });
     res.status(201).json(skill);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /skills failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /skills', err);
   }
 });
 
@@ -143,9 +139,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /skills/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /skills/:id', err);
   }
 });
 

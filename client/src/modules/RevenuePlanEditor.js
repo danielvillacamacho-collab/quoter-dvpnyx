@@ -13,6 +13,7 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPut } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const fmtUSD = (n) => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n)));
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(2)}%`);
@@ -144,20 +145,43 @@ export default function RevenuePlanEditor() {
     setEntries((prev) => ({ ...prev, [yyyymm]: { ...(prev[yyyymm] || {}), [field]: value } }));
   };
 
-  // Live totals
-  const totals = useMemo(() => {
-    let pct = 0; let usd = 0;
-    months.forEach((m) => {
-      const e = entries[m] || {};
-      if (isProject) {
-        const p = Number(e.pct || 0);
-        if (!isNaN(p)) { pct += p / 100; usd += (p / 100) * totalValueUsd; }
-      } else {
-        const u = Number(e.usd || 0);
+  // Live totals + per-month delta USD (proyectos = avance acumulado).
+  // En modelo acumulado, el USD de cada mes es (pct_mes − pct_mes_anterior) × total.
+  // El "total final" ya no es la suma de pct (sumar acumulados no tiene sentido):
+  // es el avance final (último mes con dato) y el USD total es la suma de deltas
+  // (que coincide con avance_final × total).
+  const { totals, monthDeltas, monotonicError } = useMemo(() => {
+    if (!isProject) {
+      let usd = 0;
+      months.forEach((m) => {
+        const u = Number((entries[m] || {}).usd || 0);
         if (!isNaN(u)) usd += u;
+      });
+      return { totals: { pct: 0, usd }, monthDeltas: {}, monotonicError: null };
+    }
+    let prevPct = 0;
+    let lastPct = 0;
+    let totalUsd = 0;
+    let monoErr = null;
+    const deltas = {};
+    for (const m of months) {
+      const raw = (entries[m] || {}).pct;
+      if (raw === '' || raw == null) {
+        deltas[m] = null;
+        continue;
       }
-    });
-    return { pct, usd };
+      const pct = Number(raw) / 100;
+      if (isNaN(pct)) { deltas[m] = null; continue; }
+      if (pct + 1e-6 < prevPct && monoErr == null) {
+        monoErr = `${monthLabel(m)}: ${(pct * 100).toFixed(2)}% es menor que el mes anterior (${(prevPct * 100).toFixed(2)}%). El avance acumulado no puede retroceder.`;
+      }
+      const deltaUsd = (pct - prevPct) * totalValueUsd;
+      deltas[m] = deltaUsd;
+      totalUsd += deltaUsd;
+      prevPct = pct;
+      lastPct = pct;
+    }
+    return { totals: { pct: lastPct, usd: totalUsd }, monthDeltas: deltas, monotonicError: monoErr };
   }, [entries, months, isProject, totalValueUsd]);
 
   const submit = async () => {
@@ -184,16 +208,20 @@ export default function RevenuePlanEditor() {
         return { yyyymm: m, projected_usd: u == null ? 0 : u };
       }),
     };
-    // Validación cliente: rango razonable.
+    // Validación cliente: rango + monotonía.
+    // Modelo de avance ACUMULADO: cada pct ≤ 100% y la secuencia no decrece.
     if (isProject) {
+      let prev = 0;
       for (const ent of payload.entries) {
-        if (ent.pct < 0 || ent.pct > 1) { setError(`% fuera de rango en ${monthLabel(ent.yyyymm)} (${(ent.pct * 100).toFixed(1)}%). Cada mes debe estar entre 0 y 100.`); return; }
-      }
-      // Bloqueo duro: la suma acumulada NO puede exceder 100%.
-      const sumPct = payload.entries.reduce((acc, ent) => acc + (Number(ent.pct) || 0), 0);
-      if (sumPct > 1.0001) {
-        setError(`La suma de % declarados es ${(sumPct * 100).toFixed(2)}%. No puede exceder 100%. Ajusta la curva antes de guardar.`);
-        return;
+        if (ent.pct < 0 || ent.pct > 1) {
+          setError(`% fuera de rango en ${monthLabel(ent.yyyymm)} (${(ent.pct * 100).toFixed(1)}%). Cada mes debe estar entre 0 y 100% (avance acumulado a fin de mes).`);
+          return;
+        }
+        if (ent.pct + 1e-6 < prev) {
+          setError(`${monthLabel(ent.yyyymm)}: avance acumulado ${(ent.pct * 100).toFixed(2)}% es menor que el mes anterior (${(prev * 100).toFixed(2)}%). El avance no puede retroceder.`);
+          return;
+        }
+        prev = ent.pct;
       }
     }
     setSaving(true); setError(''); setSuccess('');
@@ -236,14 +264,20 @@ export default function RevenuePlanEditor() {
               style={{ ...s.inp, width: 160, textAlign: 'right' }}
               aria-label="Valor del contrato"
             />
-            <select value={contractCurrency} onChange={(e) => setContractCurrency(e.target.value)}
-                    style={{ ...s.inp, width: 80 }} aria-label="Moneda">
-              <option value="USD">USD</option>
-              <option value="COP">COP</option>
-              <option value="MXN">MXN</option>
-              <option value="GTQ">GTQ</option>
-              <option value="EUR">EUR</option>
-            </select>
+            <FilterableSelect
+              value={contractCurrency}
+              onChange={(e) => setContractCurrency(e.target.value)}
+              inputStyle={{ ...s.inp, width: 80 }}
+              aria-label="Moneda"
+              placeholder="— Moneda —"
+              options={[
+                { id: 'USD', label: 'USD' },
+                { id: 'COP', label: 'COP' },
+                { id: 'MXN', label: 'MXN' },
+                { id: 'GTQ', label: 'GTQ' },
+                { id: 'EUR', label: 'EUR' },
+              ]}
+            />
             <span style={{ fontSize: 11, color: 'var(--text-light)' }}>
               ≈ {fmtUSD(liveTotalValueUsd)}
             </span>
@@ -289,9 +323,15 @@ export default function RevenuePlanEditor() {
       </div>
 
       <div style={s.card}>
-        <h3 style={{ margin: '0 0 12px', fontSize: 14, color: 'var(--purple-dark)' }}>
-          {isProject ? 'Curva de avance (% por mes)' : 'Reconocimiento mensual (USD)'}
+        <h3 style={{ margin: '0 0 4px', fontSize: 14, color: 'var(--purple-dark)' }}>
+          {isProject ? 'Avance acumulado (% a fin de mes)' : 'Reconocimiento mensual (USD)'}
         </h3>
+        {isProject && (
+          <div style={{ fontSize: 11, color: 'var(--text-light)', marginBottom: 12 }}>
+            Captura el avance acumulado del proyecto a fin de cada mes (no el avance del mes).
+            El USD del mes se calcula como (% de este mes − % del mes anterior) × valor del contrato.
+          </div>
+        )}
 
         {error && <div style={s.errBox}>{error}</div>}
         {success && <div style={s.okBox}>{success}</div>}
@@ -302,8 +342,8 @@ export default function RevenuePlanEditor() {
               <th style={s.th}>Mes</th>
               {isProject
                 ? <>
-                  <th style={{ ...s.th, textAlign: 'right' }}>% del contrato</th>
-                  <th style={{ ...s.th, textAlign: 'right' }}>USD derivado</th>
+                  <th style={{ ...s.th, textAlign: 'right' }}>% acumulado</th>
+                  <th style={{ ...s.th, textAlign: 'right' }}>USD del mes</th>
                 </>
                 : <th style={{ ...s.th, textAlign: 'right' }}>USD</th>
               }
@@ -312,7 +352,8 @@ export default function RevenuePlanEditor() {
           <tbody>
             {months.map((m) => {
               const e = entries[m] || {};
-              const pctVal = e.pct === '' || e.pct == null ? null : Number(e.pct);
+              const deltaUsd = isProject ? monthDeltas[m] : null;
+              const isNegativeDelta = isProject && deltaUsd != null && deltaUsd < -1e-6;
               return (
                 <tr key={m}>
                   <td style={s.td}>{monthLabel(m)}</td>
@@ -325,11 +366,11 @@ export default function RevenuePlanEditor() {
                           onChange={(ev) => setEntryField(m, 'pct', ev.target.value)}
                           placeholder="0.0"
                           style={s.rowInput}
-                          aria-label={`% ${m}`}
+                          aria-label={`% acumulado ${m}`}
                         />
                       </td>
-                      <td style={{ ...s.td, textAlign: 'right', color: 'var(--text-light)' }}>
-                        {pctVal != null ? fmtUSD((pctVal / 100) * totalValueUsd) : '—'}
+                      <td style={{ ...s.td, textAlign: 'right', color: isNegativeDelta ? 'var(--danger)' : 'var(--text-light)' }}>
+                        {deltaUsd != null ? fmtUSD(deltaUsd) : '—'}
                       </td>
                     </>
                   ) : (
@@ -350,7 +391,7 @@ export default function RevenuePlanEditor() {
           </tbody>
           <tfoot>
             <tr style={s.totalRow}>
-              <td style={s.td}>TOTAL</td>
+              <td style={s.td}>{isProject ? 'AVANCE FINAL' : 'TOTAL'}</td>
               {isProject ? (
                 <>
                   <td style={{ ...s.td, textAlign: 'right' }}>
@@ -365,18 +406,24 @@ export default function RevenuePlanEditor() {
             </tr>
           </tfoot>
         </table>
+        {monotonicError && (
+          <div style={{ ...s.errBox, marginTop: 8 }}>{monotonicError}</div>
+        )}
 
         <div style={s.buttons}>
           <button type="button" onClick={() => nav('/revenue')} style={{ ...s.btn, ...s.btnGhost }}>Cancelar</button>
           {(() => {
             const overCap = isProject && totals.pct > 1.0001;
-            const blocked = saving || overCap;
+            const blocked = saving || overCap || !!monotonicError;
+            const tooltip = overCap
+              ? `El avance final excede 100% (${(totals.pct * 100).toFixed(2)}%). Ajusta la curva.`
+              : (monotonicError || undefined);
             return (
               <button
                 type="button"
                 onClick={submit}
                 disabled={blocked}
-                title={overCap ? `La suma de % excede 100% (${(totals.pct * 100).toFixed(2)}%). Ajusta la curva.` : undefined}
+                title={tooltip}
                 style={{ ...s.btn, ...s.btnPrimary, opacity: blocked ? 0.5 : 1, cursor: blocked ? 'not-allowed' : 'pointer' }}
               >
                 {saving ? 'Guardando…' : 'Guardar plan'}

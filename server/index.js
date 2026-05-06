@@ -5,12 +5,32 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 
+const crypto = require('crypto');
+const { serverError } = require('./utils/http');
+
 const app = express();
 // Detrás de Traefik (1 hop). Necesario para que req.ip sea el IP real del
 // cliente y el rate-limit no agrupe todo el tráfico bajo el IP del proxy.
 // Más seguro que 'true' porque sólo confía en un único hop.
 app.set('trust proxy', 1);
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      'script-src':  ["'self'", 'https://accounts.google.com/gsi/client'],
+      'frame-src':   ["'self'", 'https://accounts.google.com/gsi/'],
+      'connect-src': ["'self'", 'https://accounts.google.com/gsi/'],
+      'style-src':   ["'self'", "'unsafe-inline'", 'https://accounts.google.com/gsi/style'],
+      'img-src':     ["'self'", 'data:', 'https://*.googleusercontent.com', 'https://lh3.googleusercontent.com'],
+    },
+  },
+}));
+
+// ── Request ID — every request gets a unique ID for log correlation ──
+app.use((req, _res, next) => {
+  req.requestId = crypto.randomBytes(6).toString('hex');
+  next();
+});
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:3000', credentials: true }));
 app.use(express.json({ limit: '5mb' }));
 
@@ -102,6 +122,10 @@ app.use('/api/bulk-import',       require('./routes/bulk_import'));  // ✅ Spri
 app.use('/api/squads',            _stubs.squads);
 app.use('/api/events',            _stubs.events);
 app.use('/api/notifications',     require('./routes/notifications')); // ✅ In-app notifications
+// SPEC-CRM-01 — Contacts, Activities, Budgets (CRM enrichment)
+app.use('/api/contacts',          require('./routes/contacts'));
+app.use('/api/activities',        require('./routes/activities'));
+app.use('/api/budgets',           require('./routes/budgets'));
 app.use('/api/ai-interactions',   require('./routes/ai_interactions')); // ✅ AI agent log + decision feedback
 app.use('/api/employee-costs',    require('./routes/employee_costs')); // ✅ Employee Costs (admin-only PII)
 // SPEC-II-00 — Internal Initiatives, Novelties & Idle Time (Abril 2026)
@@ -109,6 +133,9 @@ app.use('/api/internal-initiatives', require('./routes/internal_initiatives'));
 app.use('/api/novelties',         require('./routes/novelties'));
 app.use('/api/holidays',          require('./routes/holidays'));
 app.use('/api/idle-time',         require('./routes/idle_time'));
+app.use('/api/me',                require('./routes/me'));           // SPEC-EMP-00 self-service
+app.use('/api/reports/v2',        require('./routes/reports_v2'));    // Reports v2 — aggregate endpoints for charts
+app.use('/api/rm',                require('./routes/rm'));            // SPEC-RM-00 Resource Management
 
 if (process.env.NODE_ENV === 'production') {
   // Hashed static assets (JS, CSS, media) — safe to cache long-term.
@@ -123,7 +150,10 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Error interno del servidor' }); });
+// Global error handler — safety net for unhandled errors in routes
+app.use((err, req, res, _next) => {
+  serverError(res, `UNHANDLED ${req.method} ${req.originalUrl}`, err);
+});
 
 // Only start the HTTP listener when executed directly (EC2 / local dev).
 // When required by lambda.js for API Gateway, we just export the app.

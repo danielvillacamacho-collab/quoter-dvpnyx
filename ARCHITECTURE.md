@@ -2,7 +2,7 @@
 
 Vista técnica del sistema. Pensado para que un ingeniero nuevo entienda **cómo fluye una request** desde el browser hasta la DB, **por qué** el código está organizado así, y **dónde** tocar para agregar algo nuevo sin romper el resto.
 
-> **Última revisión:** Mayo 2026. Refleja la rama `chore/ai-readiness-foundations` mergeada en develop.
+> **Última revisión:** 2026-05-01 (housekeeping pase). Refleja main al día con: AI-readiness, sortable tables (Phase 17), endpoints `/lookup` para selectores, defense-in-depth con SAVEPOINT en helpers de side-effects (`notify`, `emitEvent`), optimizaciones PERF-001/002/003. Ver `docs/INCIDENTS.md` para los aprendizajes operativos detrás de varios de estos cambios.
 
 ---
 
@@ -244,6 +244,35 @@ Agregada mayo 2026. Aditiva, sin romper nada existente. Ver [`docs/AI_INTEGRATIO
 **Materialized view:**
 - `mv_plan_vs_real_weekly` — pre-calcula plan-vs-real (refresh CONCURRENTLY).
 - Function `refresh_delivery_facts(p_from, p_to)` — idempotente, lista para cron job.
+
+---
+
+## 6.1 Sistema de alertas CRM (SPEC-CRM-00 v1.1)
+
+Agregada mayo 2026 — capa de detección + dedup sobre la infraestructura de notificaciones existente. Ver [`server/utils/alerts.js`](server/utils/alerts.js) (205 LOC, autocontenido) + [`CHANGELOG.md`](CHANGELOG.md) para detalle por PR.
+
+**Definiciones (`ALERT_DEFS` en `alerts.js`):**
+
+| Código | Disparador | Severidad | Acción |
+|---|---|---|---|
+| `A1_STALE` | Oportunidad sin transición de estado por >30 días | Medium | Notificación al account_owner + lead |
+| `A2_NEXT_STEP` | `next_step_date` vencida | High | Notificación al account_owner |
+| `A3_MEDDPICC` | Avanza a `solution_design+` sin Champion o sin Economic Buyer | Medium | Notificación al account_owner; badge ⚠ A3 inline en `OpportunityDetail` |
+| `A4_MARGIN_LOW` | `margin_pct < 20%` (constante `MARGIN_LOW_THRESHOLD` en `booking.js`) | High | Warning en transiciones a `proposal_validated/negotiation/verbal_commit/closed_won`; emite evento `opportunity.margin_low` |
+| `A5_CLOSE_SOON` | `expected_close_date` dentro de 7 días sin estar cerrada | Medium | Notificación al account_owner + lead |
+
+**Helpers:**
+- `createAlertNotification(pool, alertCode, opportunityId, userId, payload)` — INSERT con dedup 24h (`WHERE NOT EXISTS` matching alertCode + opportunityId + userId en últimas 24h).
+- `runAlertScan({ pool, scopeUserId, scopeRole })` — scanner con scoping por rol (`SEE_ALL_ROLES` ven todo, `lead` ve squad, `member` ve sus opps).
+- `checkA3({ status, championIdentified, economicBuyerIdentified })` — utility pura para el inline check.
+
+**Endpoint:**
+- `POST /api/opportunities/check-alerts` — invoca `runAlertScan` para el caller. Diseñado para cron diario o ejecución manual.
+
+**Pattern:**
+- A3 dispara fire-and-forget en `POST /:id/status` (al avanzar) y `PUT /:id` (al cambiar champion/EB flags) — no bloquea la transición.
+- A4 dispara en `POST /:id/check-margin` y como warning en `POST /:id/status`.
+- A1, A2, A5 son scheduled (vía endpoint cron) — no dependen de un event runtime.
 
 ---
 

@@ -2,6 +2,9 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
+import FilterableSelect from '../shell/FilterableSelect';
 import SearchableSelect from '../shell/SearchableSelect';
 
 const s = {
@@ -98,16 +101,26 @@ function ResourceRequestForm({ initial, contracts, areas, onSave, onCancel, savi
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
         <div>
           <label style={s.label}>Área *</label>
-          <select style={s.input} value={form.area_id || ''} onChange={(e) => set('area_id', Number(e.target.value) || '')} aria-label="Área" required>
-            <option value="">— Selecciona —</option>
-            {areas.filter((a) => a.active).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.area_id ? String(form.area_id) : ''}
+            onChange={(e) => set('area_id', Number(e.target.value) || '')}
+            aria-label="Área"
+            required
+            inputStyle={s.input}
+            placeholder="— Selecciona —"
+            options={areas.filter((a) => a.active).map((a) => ({ id: String(a.id), label: a.name }))}
+          />
         </div>
         <div>
           <label style={s.label}>Level *</label>
-          <select style={s.input} value={form.level} onChange={(e) => set('level', e.target.value)} aria-label="Level" required>
-            {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.level}
+            onChange={(e) => set('level', e.target.value)}
+            aria-label="Level"
+            required
+            inputStyle={s.input}
+            options={LEVELS.map((l) => ({ id: l, label: l }))}
+          />
         </div>
         <div>
           <label style={s.label}>País</label>
@@ -125,9 +138,13 @@ function ResourceRequestForm({ initial, contracts, areas, onSave, onCancel, savi
         </div>
         <div>
           <label style={s.label}>Prioridad</label>
-          <select style={s.input} value={form.priority} onChange={(e) => set('priority', e.target.value)} aria-label="Prioridad">
-            {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-          </select>
+          <FilterableSelect
+            value={form.priority}
+            onChange={(e) => set('priority', e.target.value)}
+            aria-label="Prioridad"
+            inputStyle={s.input}
+            options={PRIORITIES.map((p) => ({ id: p.value, label: p.label }))}
+          />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -164,6 +181,7 @@ export default function ResourceRequests() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
+  const sort = useSort({ field: 'priority', dir: 'asc' });
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -174,6 +192,7 @@ export default function ResourceRequests() {
     if (contractFilter) qs.set('contract_id', contractFilter);
     if (statusFilter) qs.set('status', statusFilter);
     if (priorityFilter) qs.set('priority', priorityFilter);
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/resource-requests?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -182,7 +201,7 @@ export default function ResourceRequests() {
       // eslint-disable-next-line no-alert
       alert('Error cargando solicitudes: ' + e.message);
     }
-  }, [search, contractFilter, statusFilter, priorityFilter]);
+  }, [search, contractFilter, statusFilter, priorityFilter, sort.field, sort.dir]);
 
   const loadFilters = useCallback(async () => {
     try {
@@ -278,17 +297,25 @@ export default function ResourceRequests() {
           </div>
           <div style={{ minWidth: 140 }}>
             <label style={s.label}>Estado</label>
-            <select style={s.input} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtro por estado">
-              <option value="">Todos</option>
-              {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filtro por estado"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+            />
           </div>
           <div style={{ minWidth: 130 }}>
             <label style={s.label}>Prioridad</label>
-            <select style={s.input} value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Filtro por prioridad">
-              <option value="">Todas</option>
-              {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value)}
+              aria-label="Filtro por prioridad"
+              inputStyle={s.input}
+              placeholder="Todas"
+              options={PRIORITIES.map((p) => ({ id: p.value, label: p.label }))}
+            />
           </div>
         </div>
 
@@ -296,9 +323,16 @@ export default function ResourceRequests() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
-                {['Role', 'Contrato', 'Área', 'Level', 'Cantidad', 'Asignaciones', 'Prioridad', 'Estado', 'Inicio', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="role_title" style={s.th}>Role</SortableTh>
+                <th style={s.th}>Contrato</th>
+                <SortableTh sort={sort} field="area_name" style={s.th}>Área</SortableTh>
+                <SortableTh sort={sort} field="level" style={s.th}>Level</SortableTh>
+                <SortableTh sort={sort} field="quantity" style={s.th}>Cantidad</SortableTh>
+                <th style={s.th}>Asignaciones</th>
+                <SortableTh sort={sort} field="priority" style={s.th}>Prioridad</SortableTh>
+                <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <SortableTh sort={sort} field="start_date" style={s.th}>Inicio</SortableTh>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>

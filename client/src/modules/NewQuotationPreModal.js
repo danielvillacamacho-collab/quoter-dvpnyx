@@ -14,6 +14,7 @@
  */
 import React, { useEffect, useState } from 'react';
 import { apiGet, apiPost } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
   bg: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 300 },
@@ -97,15 +98,14 @@ export default function NewQuotationPreModal({ type, onContext, onCancel }) {
 
         <div style={{ marginBottom: 16 }}>
           <label style={s.label}>Cliente *</label>
-          <select
-            style={s.input}
+          <FilterableSelect
+            inputStyle={s.input}
             value={clientId}
             onChange={(e) => setClientId(e.target.value)}
             aria-label="Cliente"
-          >
-            <option value="">— Selecciona un cliente —</option>
-            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+            placeholder="— Selecciona un cliente —"
+            options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+          />
           {clients.length === 0 && (
             <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
               No hay clientes activos. <a href="/clients" style={{ color: 'var(--teal-mid)' }}>Crea uno en /clients</a> y vuelve.
@@ -115,18 +115,15 @@ export default function NewQuotationPreModal({ type, onContext, onCancel }) {
 
         <div style={{ marginBottom: 16 }}>
           <label style={s.label}>Oportunidad *</label>
-          <select
-            style={s.input}
+          <FilterableSelect
+            inputStyle={s.input}
             value={opportunityId}
             onChange={(e) => setOpportunityId(e.target.value)}
             aria-label="Oportunidad"
             disabled={!clientId}
-          >
-            <option value="">
-              {clientId ? '— Selecciona una oportunidad —' : '— Primero selecciona un cliente —'}
-            </option>
-            {opportunities.map((o) => <option key={o.id} value={o.id}>{o.name} ({o.status})</option>)}
-          </select>
+            placeholder={clientId ? '— Selecciona una oportunidad —' : '— Primero selecciona un cliente —'}
+            options={opportunities.map((o) => ({ id: String(o.id), label: `${o.name} (${o.status})` }))}
+          />
           {clientId && opportunities.length === 0 && !showNewOpp && (
             <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 4 }}>
               Este cliente no tiene oportunidades abiertas.

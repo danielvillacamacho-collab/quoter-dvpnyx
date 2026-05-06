@@ -17,7 +17,7 @@ export const useAuth = () => useContext(AuthCtx);
  * drives `--ds-row-h`, `data-scheme="dark"` flips the dark palette).
  *
  * Called on mount with the hydrated user, and again every time the user
- * changes preferences via the Preferencias page — no reload needed.
+ * changes preferences — no reload needed.
  */
 function applyPreferences(prefs) {
   if (typeof document === 'undefined') return;
@@ -49,6 +49,13 @@ export function AuthProvider({ children }) {
 
   const doLogin = async (email, pw) => {
     const { token, user: u } = await api.login(email, pw);
+    localStorage.setItem('dvpnyx_token', token);
+    const p = await api.getParams();
+    return { user: u, params: p };
+  };
+
+  const doGoogleLogin = async (credential) => {
+    const { token, user: u } = await api.googleLogin(credential);
     localStorage.setItem('dvpnyx_token', token);
     const p = await api.getParams();
     return { user: u, params: p };
@@ -91,9 +98,9 @@ export function AuthProvider({ children }) {
 
   const isAdmin       = user && ['admin', 'superadmin'].includes(user.role);
   const isLead        = user && user.role === 'lead';
-  // Cualquier líder o admin puede ver dashboards de equipo (ej. plan-vs-real,
-  // /time/team con picker de su equipo).
   const isLeadOrAdmin = isAdmin || isLead;
+  const isStaff       = !!(user && user.role === 'staff');
+  const hasEmployee   = !!(user && user.has_employee);
 
   if (loading) {
     return (
@@ -104,7 +111,7 @@ export function AuthProvider({ children }) {
   }
 
   return (
-    <AuthCtx.Provider value={{ user, params, doLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin }}>
+    <AuthCtx.Provider value={{ user, params, doLogin, doGoogleLogin, commitLogin, doLogout, refreshParams, updatePreferences, isAdmin, isLead, isLeadOrAdmin, isStaff, hasEmployee }}>
       {children}
     </AuthCtx.Provider>
   );

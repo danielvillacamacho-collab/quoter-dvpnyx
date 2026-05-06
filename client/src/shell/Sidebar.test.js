@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import Sidebar, { buildGroups } from './Sidebar';
 
@@ -13,6 +13,8 @@ const mount = (props = {}) =>
   );
 
 describe('Sidebar', () => {
+  beforeEach(() => { localStorage.clear(); });
+
   it('renders brand header with version', () => {
     mount();
     expect(screen.getByText('DVPNYX')).toBeInTheDocument();
@@ -21,10 +23,10 @@ describe('Sidebar', () => {
 
   it('renders all section labels for an admin user', () => {
     mount();
-    // The top "/ Dashboard" and "Reportes/Wiki" groups intentionally
-    // have no section header — only the 5 labeled groups do.
-    ['Comercial', 'Delivery', 'Gente', 'Time Tracking', 'Configuración'].forEach((label) => {
-      expect(screen.getByText(label)).toBeInTheDocument();
+    const sectionHeaders = document.querySelectorAll('.ds-sb-section-label, [aria-expanded]');
+    const labels = Array.from(sectionHeaders).map((el) => el.textContent.trim());
+    ['Comercial', 'Cotizaciones', 'Delivery', 'Gente', 'Tiempo', 'Operaciones', 'Reportes', 'Configuración'].forEach((l) => {
+      expect(labels).toContain(l);
     });
   });
 
@@ -33,7 +35,6 @@ describe('Sidebar', () => {
     expect(screen.queryByText('Configuración')).toBeNull();
     expect(screen.queryByRole('link', { name: /^Áreas$/ })).toBeNull();
     expect(screen.queryByRole('link', { name: /^Skills$/ })).toBeNull();
-    // Non-admin still sees core sections.
     expect(screen.getByRole('link', { name: /^Empleados$/ })).toBeInTheDocument();
   });
 
@@ -43,13 +44,10 @@ describe('Sidebar', () => {
     expect(link.className).toMatch(/\bactive\b/);
   });
 
-  it('does NOT treat non-root routes as matching "/" (Dashboard)', () => {
-    // NavLink `end` prop on Dashboard — when we're under /clients, the
-    // Dashboard link should NOT also get `.active`, otherwise every page
-    // would light up the Dashboard row.
+  it('does NOT treat non-root routes as matching "/quotations" (Historial)', () => {
     mount({ initial: '/clients' });
-    const dashboard = screen.getByRole('link', { name: /^Dashboard$/ });
-    expect(dashboard.className).not.toMatch(/\bactive\b/);
+    const historial = screen.getByRole('link', { name: /^Historial$/ });
+    expect(historial.className).not.toMatch(/\bactive\b/);
   });
 
   it('calls onNavigate when any nav link is clicked (mobile close)', () => {
@@ -78,10 +76,54 @@ describe('Sidebar', () => {
     expect(container.querySelector('.sidebar')).not.toHaveClass('open');
   });
 
-  it('buildGroups returns 9 groups for admins and 8 for non-admins (+ Iniciativas internas group from SPEC-II-00)', () => {
-    // Sanity on the pure model helper so it stays useful for consumers
-    // (Command Palette quick actions list, for example).
-    expect(buildGroups(true).length).toBe(9);
-    expect(buildGroups(false).length).toBe(8);
+  it('buildGroups returns correct group counts based on role, employee link, and staff', () => {
+    expect(buildGroups(true, true).length).toBe(10);
+    expect(buildGroups(false, true).length).toBe(9);
+    expect(buildGroups(true, false).length).toBe(9);
+    expect(buildGroups(false, false).length).toBe(8);
+    expect(buildGroups(false, false, true).length).toBe(2);
+  });
+
+  // ── Accordion behavior ──
+
+  it('collapsible sections have aria-expanded buttons', () => {
+    mount();
+    const buttons = document.querySelectorAll('[aria-expanded]');
+    expect(buttons.length).toBeGreaterThanOrEqual(8);
+    buttons.forEach((btn) => {
+      expect(btn.getAttribute('aria-expanded')).toBe('true');
+    });
+  });
+
+  it('clicking a section header collapses its items', () => {
+    mount();
+    const comercialBtn = screen.getByRole('button', { name: /Comercial/i });
+    expect(comercialBtn.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('link', { name: /^Clientes$/ })).toBeInTheDocument();
+
+    fireEvent.click(comercialBtn);
+    expect(comercialBtn.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('clicking again re-expands the section', () => {
+    mount();
+    const btn = screen.getByRole('button', { name: /Delivery/i });
+    fireEvent.click(btn);
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(btn);
+    expect(btn.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('persists collapsed state to localStorage', () => {
+    mount();
+    const btn = screen.getByRole('button', { name: /Reportes/i });
+    fireEvent.click(btn);
+    const stored = JSON.parse(localStorage.getItem('dvpnyx-sidebar-collapsed'));
+    expect(stored.reportes).toBe(true);
+  });
+
+  it('non-collapsible sections (help) have no toggle button', () => {
+    mount();
+    expect(screen.queryByRole('button', { name: /Manual de usuario/i })).toBeNull();
   });
 });

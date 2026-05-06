@@ -22,6 +22,7 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
+const { serverError } = require('../utils/http');
 
 router.use(auth);
 
@@ -182,8 +183,7 @@ router.get('/', async (req, res) => {
     const results = [...clients, ...opps, ...contracts, ...employees, ...quotations, ...requests];
     res.json({ query: q, total: results.length, results });
   } catch (err) {
-    console.error('GET /api/search failed:', err);
-    res.status(500).json({ error: 'No se pudo ejecutar la búsqueda.' });
+    serverError(res, 'GET /search', err);
   }
 });
 

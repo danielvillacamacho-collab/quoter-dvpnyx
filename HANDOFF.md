@@ -5,13 +5,13 @@
 **Rama base:** `develop` (al día con `main`).
 **Repo:** `git@github.com:danielvillacamacho-collab/quoter-dvpnyx.git`
 
-Este es el **punto de entrada**. Léelo completo (15 min) antes de abrir cualquier otro archivo. Todo lo demás está linkeado desde aquí.
+Este es el **punto de entrada técnico**. Para la **carta de aterrizaje** del día 1 (decisiones abiertas, recomendaciones, "no tocar", día 1-7-30) leer primero [`STATE_OF_THE_UNION.md`](STATE_OF_THE_UNION.md) en raíz. Después seguís acá para la guía técnica. Todo lo demás está linkeado desde aquí.
 
 ---
 
 ## 1. ¿Qué es esto?
 
-SaaS interno de **DVP (Double V Partners)** que integra en un solo producto el ciclo **quote → contract → staff → bill**:
+SaaS interno de **DVP (Double V Partners)** que integra en un solo producto el ciclo **quote → contract → staff → time tracking** (la facturación queda en Holded; ver §5):
 
 - **Comercial**: clientes → oportunidades → cotizaciones (staff augmentation y proyecto de alcance fijo).
 - **Delivery**: contratos → solicitudes de recursos → asignaciones → time tracking.

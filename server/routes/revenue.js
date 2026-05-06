@@ -30,11 +30,28 @@
 const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
-const { safeRollback } = require('../utils/http');
+const { safeRollback, serverError } = require('../utils/http');
 
 router.use(auth);
 
 const YYYYMM_RE = /^[0-9]{6}$/;
+
+/**
+ * Find the applicable rate for a given date from a sorted history array.
+ * Returns the rate whose effective_date is <= date (latest one).
+ * @param {Array<{effective: Date, rate: number}>} history - sorted ASC by effective
+ * @param {Date} date
+ * @returns {number|null}
+ */
+function rateForDate(history, date) {
+  if (!history || !history.length) return null;
+  let applicable = null;
+  for (const h of history) {
+    if (h.effective <= date) applicable = h.rate;
+    else break;
+  }
+  return applicable;
+}
 
 function expandMonths(from, to) {
   if (!YYYYMM_RE.test(from) || !YYYYMM_RE.test(to)) return [];
@@ -109,6 +126,101 @@ router.get('/', async (req, res) => {
       });
     }
 
+    // ── Capacity auto-REAL: sum prorated client_rate per month ──
+    // For capacity contracts, the REAL revenue is derived automatically
+    // from actual assignments and their rate history. The manually
+    // declared plan stays as the Projected/Plan value.
+    // When rate history exists, it uses the applicable rate per day based
+    // on effective_date. Falls back to assignment.client_rate if no history.
+    const capacityIds = contracts.filter((c) => c.type === 'capacity').map((c) => c.id);
+    const capacityReals = new Map(); // contract_id → { yyyymm → amount }
+    if (capacityIds.length) {
+      const { rows: capAsg } = await pool.query(
+        `SELECT a.id, a.contract_id, a.start_date, a.end_date, a.client_rate,
+                a.client_rate_currency
+           FROM assignments a
+          WHERE a.contract_id = ANY($1::uuid[])
+            AND a.deleted_at IS NULL
+            AND a.status NOT IN ('cancelled')
+            AND a.client_rate IS NOT NULL`,
+        [capacityIds],
+      );
+      // Load rate history for all these assignments in one query.
+      const asgIds = capAsg.map((a) => a.id);
+      let rateHistoryByAsg = new Map();
+      if (asgIds.length) {
+        const { rows: rateRows } = await pool.query(
+          `SELECT assignment_id, effective_date, client_rate, client_rate_currency
+             FROM assignment_rate_history
+            WHERE assignment_id = ANY($1::uuid[])
+            ORDER BY assignment_id, effective_date ASC`,
+          [asgIds],
+        );
+        for (const r of rateRows) {
+          if (!rateHistoryByAsg.has(r.assignment_id)) rateHistoryByAsg.set(r.assignment_id, []);
+          rateHistoryByAsg.get(r.assignment_id).push({
+            effective: new Date(r.effective_date),
+            rate: Number(r.client_rate),
+          });
+        }
+      }
+
+      // Build month-by-month proration for each capacity assignment.
+      for (const a of capAsg) {
+        const fallbackRate = Number(a.client_rate);
+        if (!fallbackRate) continue;
+        const history = rateHistoryByAsg.get(a.id);
+        const hasHistory = history && history.length > 0;
+        const aStart = new Date(a.start_date);
+        const aEnd = a.end_date ? new Date(a.end_date) : null;
+
+        for (const m of months) {
+          const year = Number(m.slice(0, 4));
+          const month = Number(m.slice(4)); // 1-indexed
+          const dim = new Date(year, month, 0).getDate();
+          const monthStart = new Date(year, month - 1, 1);
+          const monthEnd = new Date(year, month - 1, dim);
+          // Overlap check
+          if (aStart > monthEnd) continue;
+          if (aEnd && aEnd < monthStart) continue;
+          const activeStart = aStart > monthStart ? aStart : monthStart;
+          const activeEnd = aEnd && aEnd < monthEnd ? aEnd : monthEnd;
+
+          let monthAmount = 0;
+          if (hasHistory && history.length > 1) {
+            // Day-by-day calculation when multiple rates exist.
+            // Group consecutive days with same rate for efficiency.
+            let curDay = new Date(activeStart);
+            while (curDay <= activeEnd) {
+              const dayRate = rateForDate(history, curDay) || fallbackRate;
+              // Find how many consecutive days have this same rate.
+              let streak = 1;
+              const nextDay = new Date(curDay);
+              nextDay.setDate(nextDay.getDate() + 1);
+              while (nextDay <= activeEnd) {
+                const nr = rateForDate(history, nextDay) || fallbackRate;
+                if (nr !== dayRate) break;
+                streak++;
+                nextDay.setDate(nextDay.getDate() + 1);
+              }
+              monthAmount += dayRate * streak / dim;
+              curDay.setDate(curDay.getDate() + streak);
+            }
+          } else {
+            // Single rate (or no history) — simple proration.
+            const rate = hasHistory ? history[0].rate : fallbackRate;
+            const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
+            monthAmount = rate * daysActive / dim;
+          }
+
+          const prorated = parseFloat(monthAmount.toFixed(4));
+          if (!capacityReals.has(a.contract_id)) capacityReals.set(a.contract_id, {});
+          const byMonth = capacityReals.get(a.contract_id);
+          byMonth[m] = (byMonth[m] || 0) + prorated;
+        }
+      }
+    }
+
     // Cargar TODOS los rates relevantes — todas las monedas que aparecen
     // en los contratos + display_currency. Carga una sola query y el
     // helper buildRatesMap maneja fallback al rate más reciente disponible.
@@ -133,13 +245,27 @@ router.get('/', async (req, res) => {
     const rowsOut = contracts.map((c) => {
       const cells = {};
       const ccyOrig = String(c.original_currency || 'USD').toUpperCase();
+      const isCapacity = c.type === 'capacity';
+      const capReal = isCapacity ? (capacityReals.get(c.id) || {}) : null;
       let row_proj_disp = 0; let row_real_disp = 0;
       let row_proj_orig = 0; let row_real_orig = 0;
       months.forEach((m) => {
         const cell = (periodsByContract.get(c.id) || {})[m] || null;
-        if (!cell) { cells[m] = null; return; }
-        const projOrig = Number(cell.projected_usd || 0);
-        const realOrig = cell.real_usd != null ? Number(cell.real_usd) : null;
+
+        // Projected: always from the manually declared plan (revenue_periods).
+        const projOrig = Number(cell?.projected_usd || 0);
+
+        // Real: for capacity → auto-computed from assignments+rates.
+        //       for others   → manually entered (cell.real_usd).
+        const autoRealOrig = isCapacity ? (capReal[m] || 0) : 0;
+        const realOrig = isCapacity
+          ? (autoRealOrig > 0 ? autoRealOrig : null)
+          : (cell?.real_usd != null ? Number(cell.real_usd) : null);
+
+        // Skip empty cells (no plan AND no real).
+        if (!cell && !isCapacity) { cells[m] = null; return; }
+        if (!cell && isCapacity && autoRealOrig === 0) { cells[m] = null; return; }
+
         const projConv = fxUtils.convert(projOrig, ccyOrig, displayCurrency, m, rates);
         const realConv = realOrig == null
           ? { amount: null, rateUsed: null }
@@ -152,28 +278,28 @@ router.get('/', async (req, res) => {
           row_real_orig += realOrig;
           row_real_disp += realConv.amount != null ? realConv.amount : 0;
         }
+
         cells[m] = {
           projected_amount_original: projOrig,
           projected_amount_display:  projConv.amount,
-          projected_pct: cell.projected_pct != null ? Number(cell.projected_pct) : null,
+          projected_pct: cell?.projected_pct != null ? Number(cell.projected_pct) : null,
           real_amount_original: realOrig,
           real_amount_display:  realConv.amount,
-          real_pct: cell.real_pct != null ? Number(cell.real_pct) : null,
-          // Aliases legacy (mantienen el nombre `_usd` aunque el contenido
-          // sea moneda original — eng team va a renombrar).
+          real_pct: cell?.real_pct != null ? Number(cell.real_pct) : null,
+          auto_real: isCapacity, // flag: real is auto-computed from assignments
           projected_usd: projOrig,
           real_usd: realOrig,
           fx_missing: (projOrig > 0 && projConv.amount == null) || (realOrig != null && realConv.amount == null),
-          status: cell.status,
-          notes: cell.notes,
-          closed_at: cell.closed_at,
-          closed_by: cell.closed_by,
-          updated_at: cell.updated_at,
-          updated_by: cell.updated_by,
+          status: cell?.status || 'open',
+          notes: cell?.notes || null,
+          closed_at: cell?.closed_at || null,
+          closed_by: cell?.closed_by || null,
+          updated_at: cell?.updated_at || null,
+          updated_by: cell?.updated_by || null,
         };
       });
       return {
-        contract: c,
+        contract: { ...c, auto_real: isCapacity },
         cells,
         row_total: {
           projected_amount_display: row_proj_disp,
@@ -181,7 +307,6 @@ router.get('/', async (req, res) => {
           projected_amount_original: row_proj_orig,
           real_amount_original:      row_real_orig,
           original_currency:         ccyOrig,
-          // Legacy aliases:
           projected_usd: row_proj_orig,
           real_usd:      row_real_orig,
         },
@@ -225,9 +350,7 @@ router.get('/', async (req, res) => {
       },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /revenue failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /revenue', err);
   }
 });
 
@@ -274,9 +397,7 @@ router.get('/:contract_id/plan', async (req, res) => {
 
     res.json({ contract: cRows[0], periods });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /revenue/:contract_id/plan failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /revenue/:contract_id/plan', err);
   }
 });
 
@@ -328,6 +449,7 @@ router.put('/:contract_id/plan', async (req, res) => {
     const contract = cRows[0];
     const isProject = contract.type === 'project';
 
+    // Validación per-entry: rango y formato.
     for (const e of entries) {
       if (isProject) {
         if (e.pct == null || isNaN(Number(e.pct))) {
@@ -337,7 +459,7 @@ router.put('/:contract_id/plan', async (req, res) => {
         const pct = Number(e.pct);
         if (pct < 0 || pct > 1) {
           await conn.query('ROLLBACK');
-          return res.status(400).json({ error: `Entry ${e.yyyymm}: pct debe estar entre 0 y 1` });
+          return res.status(400).json({ error: `Entry ${e.yyyymm}: pct debe estar entre 0 y 1 (avance acumulado a fin de mes)` });
         }
       } else {
         if (e.projected_usd == null || isNaN(Number(e.projected_usd))) {
@@ -348,41 +470,80 @@ router.put('/:contract_id/plan', async (req, res) => {
     }
 
     let warnings = [];
-    if (isProject) {
-      const sumPct = entries.reduce((s, e) => s + Number(e.pct || 0), 0);
-      // RR-MVP-00.4: la suma >100% ahora es bloqueo duro, no warning. Un
-      // proyecto no puede tener avance acumulado mayor al 100% del contrato.
-      if (sumPct > 1.0001) {
-        await conn.query('ROLLBACK');
-        return res.status(400).json({
-          error: `La suma de % declarados es ${(sumPct * 100).toFixed(2)}%. No puede exceder 100%.`,
-          code: 'pct_sum_exceeds_1',
-          sum_pct: sumPct,
-        });
-      }
-    }
-
     const upserted = [];
-    for (const e of entries) {
-      const yyyymm = String(e.yyyymm);
-      const projectedPct = isProject ? Number(e.pct) : null;
-      const projectedUsd = isProject
-        ? Number(e.pct) * totalValue
-        : Number(e.projected_usd);
 
-      const { rows } = await conn.query(
-        `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, projected_pct,
-                                      created_by, updated_by)
-           VALUES ($1, $2, $3::numeric, $4::numeric, $5, $5)
-         ON CONFLICT (contract_id, yyyymm) DO UPDATE SET
-           projected_usd = EXCLUDED.projected_usd,
-           projected_pct = EXCLUDED.projected_pct,
-           updated_by    = EXCLUDED.updated_by,
-           updated_at    = NOW()
-         RETURNING contract_id, yyyymm, projected_usd, projected_pct, real_usd, status`,
-        [contract_id, yyyymm, projectedUsd, projectedPct, req.user.id],
+    if (isProject) {
+      // Modelo de avance ACUMULADO: pct[mes] = avance total a fin de ese mes.
+      // projected_usd[mes] = (pct[mes] - pct[mes_anterior]) × total_value_usd.
+      //
+      // Al guardar, recalculamos TODO el plan del contrato (no solo las
+      // entries enviadas), porque cambiar un mes afecta el delta del mes
+      // siguiente. Esto es lo único que mantiene la consistencia cuando
+      // el editor hace saves parciales o ediciones de meses intermedios.
+      const { rows: existingRows } = await conn.query(
+        `SELECT yyyymm, projected_pct FROM revenue_periods WHERE contract_id=$1`,
+        [contract_id],
       );
-      upserted.push(rows[0]);
+      const merged = new Map(); // yyyymm → projected_pct
+      for (const row of existingRows) {
+        if (row.projected_pct != null) merged.set(String(row.yyyymm), Number(row.projected_pct));
+      }
+      for (const e of entries) merged.set(String(e.yyyymm), Number(e.pct));
+
+      const sorted = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+      // Validar secuencia no decreciente: el avance acumulado nunca retrocede.
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i][1] < sorted[i - 1][1] - 1e-6) {
+          await conn.query('ROLLBACK');
+          return res.status(400).json({
+            error: `Mes ${sorted[i][0]}: avance acumulado ${(sorted[i][1] * 100).toFixed(2)}% no puede ser menor que el de ${sorted[i - 1][0]} (${(sorted[i - 1][1] * 100).toFixed(2)}%).`,
+            code: 'pct_not_monotonic',
+          });
+        }
+      }
+
+      // Calcular y persistir projected_usd como delta entre meses.
+      let prevPct = 0;
+      const enteredYyyymms = new Set(entries.map((e) => String(e.yyyymm)));
+      for (const [yyyymm, pct] of sorted) {
+        const projectedUsd = (pct - prevPct) * totalValue;
+        const { rows } = await conn.query(
+          `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, projected_pct,
+                                        created_by, updated_by)
+             VALUES ($1, $2, $3::numeric, $4::numeric, $5, $5)
+           ON CONFLICT (contract_id, yyyymm) DO UPDATE SET
+             projected_usd = EXCLUDED.projected_usd,
+             projected_pct = EXCLUDED.projected_pct,
+             updated_by    = EXCLUDED.updated_by,
+             updated_at    = NOW()
+           RETURNING contract_id, yyyymm, projected_usd, projected_pct, real_usd, status`,
+          [contract_id, yyyymm, projectedUsd, pct, req.user.id],
+        );
+        // Solo devolver los meses tocados explícitamente por el caller en el
+        // payload — los recalculados por delta son side-effect interno.
+        if (enteredYyyymms.has(yyyymm)) upserted.push(rows[0]);
+        prevPct = pct;
+      }
+    } else {
+      // No-project: projected_usd directo, sin recalculos.
+      for (const e of entries) {
+        const yyyymm = String(e.yyyymm);
+        const projectedUsd = Number(e.projected_usd);
+        const { rows } = await conn.query(
+          `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, projected_pct,
+                                        created_by, updated_by)
+             VALUES ($1, $2, $3::numeric, NULL, $4, $4)
+           ON CONFLICT (contract_id, yyyymm) DO UPDATE SET
+             projected_usd = EXCLUDED.projected_usd,
+             projected_pct = NULL,
+             updated_by    = EXCLUDED.updated_by,
+             updated_at    = NOW()
+           RETURNING contract_id, yyyymm, projected_usd, projected_pct, real_usd, status`,
+          [contract_id, yyyymm, projectedUsd, req.user.id],
+        );
+        upserted.push(rows[0]);
+      }
     }
 
     await conn.query(
@@ -398,9 +559,7 @@ router.put('/:contract_id/plan', async (req, res) => {
     res.json({ entries: upserted, warnings, contract: { id: contract_id, type: contract.type, total_value_usd: totalValue, original_currency: originalCurrency } });
   } catch (err) {
     await safeRollback(conn, 'revenue');
-    // eslint-disable-next-line no-console
-    console.error('PUT /revenue/:contract_id/plan failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /revenue/:contract_id/plan', err);
   } finally {
     conn.release();
   }
@@ -434,10 +593,21 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
     const contract = cRows[0];
     const isProject = contract.type === 'project';
 
-    const { rows: existing } = await conn.query(
+    let { rows: existing } = await conn.query(
       `SELECT * FROM revenue_periods WHERE contract_id=$1 AND yyyymm=$2 FOR UPDATE`,
       [contract_id, yyyymm],
     );
+    // For capacity contracts, auto-create the row if it doesn't exist
+    // (projected is computed from assignments, so no manual plan needed).
+    if (!existing.length && contract.type === 'capacity') {
+      const { rows: created } = await conn.query(
+        `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, created_by, updated_by)
+           VALUES ($1, $2, 0, $3, $3)
+         RETURNING *`,
+        [contract_id, yyyymm, req.user.id],
+      );
+      existing = created;
+    }
     if (!existing.length) {
       await conn.query('ROLLBACK');
       return res.status(409).json({ error: 'Aún no hay plan declarado para este mes. Usa "Editar plan" antes de capturar reales.' });
@@ -449,40 +619,69 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
     let finalRealUsd = existing[0].real_usd != null ? Number(existing[0].real_usd) : null;
 
     if (isProject) {
+      // Modelo de avance ACUMULADO: real_pct = avance total real a fin del mes.
+      // real_usd = (real_pct[mes] - real_pct[mes_anterior]) × total_value_usd.
+      // El "mes anterior" es el período cronológicamente menor con real_pct
+      // declarado (no necesariamente yyyymm−1, porque puede haber huecos).
       const realPctProvided = Object.prototype.hasOwnProperty.call(body, 'real_pct');
       const realUsdProvidedFallback = Object.prototype.hasOwnProperty.call(body, 'real_usd');
       if (realPctProvided) {
         const v = body.real_pct == null ? null : Number(body.real_pct);
         if (v != null && (isNaN(v) || v < 0 || v > 1)) {
           await conn.query('ROLLBACK');
-          return res.status(400).json({ error: 'real_pct debe estar entre 0 y 1' });
+          return res.status(400).json({ error: 'real_pct debe estar entre 0 y 1 (avance acumulado a fin de mes)' });
         }
         finalRealPct = v;
-        const totalValue = Number(contract.total_value_usd || 0);
-        finalRealUsd = v == null ? null : v * totalValue;
+        // real_usd se calcula al final junto con el recálculo de meses afectados.
+        finalRealUsd = null; // placeholder, se asigna abajo
       } else if (realUsdProvidedFallback) {
         // Fallback legacy: si llega real_usd directo, lo guardamos sin
         // tocar real_pct. No lo recomendamos para project pero no rompemos.
         finalRealUsd = body.real_usd == null ? null : Number(body.real_usd);
       }
-      // Validación cumulative: la suma de real_pct (incluyendo el nuevo) no
-      // puede exceder 100% de avance del proyecto.
+      // Validar secuencia no decreciente: el real_pct de este mes no puede
+      // ser menor que el del mes anterior con datos, ni mayor que el del
+      // siguiente con datos. Y recalcular real_usd de este mes y los
+      // posteriores cuyos deltas cambian al cambiar este pct.
       if (finalRealPct != null) {
-        const { rows: sumRows } = await conn.query(
-          `SELECT COALESCE(SUM(real_pct), 0)::numeric AS sum_pct
-             FROM revenue_periods
-            WHERE contract_id=$1 AND yyyymm <> $2 AND real_pct IS NOT NULL`,
+        const { rows: otherRows } = await conn.query(
+          `SELECT yyyymm, real_pct FROM revenue_periods
+            WHERE contract_id=$1 AND yyyymm <> $2 AND real_pct IS NOT NULL
+            ORDER BY yyyymm ASC`,
           [contract_id, yyyymm],
         );
-        const otherSum = Number(sumRows[0].sum_pct);
-        const newSum = otherSum + finalRealPct;
-        if (newSum > 1.0001) {
-          await conn.query('ROLLBACK');
-          return res.status(400).json({
-            error: `La suma de % real declarados sería ${(newSum * 100).toFixed(2)}%. No puede exceder 100%.`,
-            code: 'real_pct_sum_exceeds_1',
-            sum_pct: newSum,
-          });
+        const merged = new Map(otherRows.map((r) => [String(r.yyyymm), Number(r.real_pct)]));
+        merged.set(yyyymm, finalRealPct);
+        const sorted = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+        for (let i = 1; i < sorted.length; i++) {
+          if (sorted[i][1] < sorted[i - 1][1] - 1e-6) {
+            await conn.query('ROLLBACK');
+            return res.status(400).json({
+              error: `Mes ${sorted[i][0]}: real acumulado ${(sorted[i][1] * 100).toFixed(2)}% no puede ser menor que el de ${sorted[i - 1][0]} (${(sorted[i - 1][1] * 100).toFixed(2)}%).`,
+              code: 'real_pct_not_monotonic',
+            });
+          }
+        }
+        // Persistir real_usd recalculado para este mes y los meses cuyos deltas
+        // cambiaron por el nuevo valor (cualquier mes posterior con real_pct).
+        const totalValue = Number(contract.total_value_usd || 0);
+        let prevPct = 0;
+        for (const [m, pct] of sorted) {
+          const realUsd = (pct - prevPct) * totalValue;
+          if (m === yyyymm) {
+            finalRealUsd = realUsd;
+          } else {
+            // Solo updatear los que cambiaron; los demás meses permanecen.
+            await conn.query(
+              `UPDATE revenue_periods
+                  SET real_usd = $3::numeric,
+                      updated_by = $4,
+                      updated_at = NOW()
+                WHERE contract_id=$1 AND yyyymm=$2`,
+              [contract_id, m, realUsd, req.user.id],
+            );
+          }
+          prevPct = pct;
         }
       }
     } else {
@@ -521,9 +720,7 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
     res.json(row);
   } catch (err) {
     await safeRollback(conn, 'revenue');
-    // eslint-disable-next-line no-console
-    console.error('PUT /revenue/:contract_id/:yyyymm failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /revenue/:contract_id/:yyyymm', err);
   } finally {
     conn.release();
   }
@@ -550,10 +747,19 @@ router.post('/:contract_id/:yyyymm/close', async (req, res) => {
     const isProject = cRows[0].type === 'project';
     const totalValue = Number(cRows[0].total_value_usd || 0);
 
-    const { rows: existing } = await conn.query(
+    let { rows: existing } = await conn.query(
       `SELECT * FROM revenue_periods WHERE contract_id=$1 AND yyyymm=$2 FOR UPDATE`,
       [contract_id, yyyymm],
     );
+    if (!existing.length && cRows[0].type === 'capacity') {
+      const { rows: created } = await conn.query(
+        `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, created_by, updated_by)
+           VALUES ($1, $2, 0, $3, $3)
+         RETURNING *`,
+        [contract_id, yyyymm, req.user.id],
+      );
+      existing = created;
+    }
     if (!existing.length) {
       await conn.query('ROLLBACK');
       return res.status(404).json({ error: 'Período no existe — agrega proyección antes de cerrar' });
@@ -608,11 +814,194 @@ router.post('/:contract_id/:yyyymm/close', async (req, res) => {
     res.json(rows[0]);
   } catch (err) {
     await safeRollback(conn, 'revenue');
-    // eslint-disable-next-line no-console
-    console.error('POST /revenue/:contract_id/:yyyymm/close failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /revenue/:contract_id/:yyyymm/close', err);
   } finally {
     conn.release();
+  }
+});
+
+
+/* -------- GET /capacity-projection --------
+ * Proyección mensual de ingresos para un contrato de capacidad,
+ * calculada a partir de las tarifas de cada asignación activa.
+ */
+const MONTH_LABELS_ES = [
+  'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+  'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+];
+
+function daysInMonth(year, month) {
+  // month is 1-indexed
+  return new Date(year, month, 0).getDate();
+}
+
+function toYYYYMM(year, month) {
+  return `${year}${String(month).padStart(2, '0')}`;
+}
+
+function monthLabel(year, month) {
+  return `${MONTH_LABELS_ES[month - 1]} ${year}`;
+}
+
+router.get('/capacity-projection', async (req, res) => {
+  const { contract_id } = req.query;
+  if (!contract_id) return res.status(400).json({ error: 'contract_id es requerido' });
+
+  try {
+    // 1. Verify contract exists and is type='capacity'
+    const { rows: cRows } = await pool.query(
+      `SELECT id, name, type FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
+      [contract_id]
+    );
+    if (!cRows.length) return res.status(404).json({ error: 'Contrato no encontrado' });
+    const contract = cRows[0];
+    if (contract.type !== 'capacity') {
+      return res.status(400).json({ error: `El contrato no es de tipo capacity (es '${contract.type}')` });
+    }
+
+    // 2. Fetch active assignments with a client_rate
+    const { rows: asgRows } = await pool.query(
+      `SELECT a.id, a.start_date, a.end_date, a.client_rate, a.client_rate_currency,
+              e.first_name || ' ' || e.last_name AS employee_name
+         FROM assignments a
+         LEFT JOIN employees e ON e.id = a.employee_id
+        WHERE a.contract_id = $1
+          AND a.deleted_at IS NULL
+          AND a.status NOT IN ('cancelled')
+          AND a.client_rate IS NOT NULL`,
+      [contract_id]
+    );
+
+    if (!asgRows.length) {
+      return res.json({
+        contract_id,
+        contract_name: contract.name,
+        contract_type: 'capacity',
+        months: [],
+        grand_total: 0,
+        currency_note: 'Todos los montos en la moneda de cada asignación. Conversión a USD no implementada.',
+      });
+    }
+
+    // 2b. Load rate history for all assignments.
+    const asgIds = asgRows.map((a) => a.id);
+    const rateHistoryByAsg = new Map();
+    if (asgIds.length) {
+      const { rows: rateRows } = await pool.query(
+        `SELECT assignment_id, effective_date, client_rate
+           FROM assignment_rate_history
+          WHERE assignment_id = ANY($1::uuid[])
+          ORDER BY assignment_id, effective_date ASC`,
+        [asgIds],
+      );
+      for (const r of rateRows) {
+        if (!rateHistoryByAsg.has(r.assignment_id)) rateHistoryByAsg.set(r.assignment_id, []);
+        rateHistoryByAsg.get(r.assignment_id).push({
+          effective: new Date(r.effective_date),
+          rate: Number(r.client_rate),
+        });
+      }
+    }
+    // 3. Determine date range: earliest start → latest end (or today+12m if null)
+    const today = new Date();
+    const horizonEnd = new Date(today.getFullYear(), today.getMonth() + 12, 0);
+
+    let rangeStart = null;
+    let rangeEnd   = null;
+    for (const a of asgRows) {
+      const s = new Date(a.start_date);
+      const e = a.end_date ? new Date(a.end_date) : horizonEnd;
+      if (!rangeStart || s < rangeStart) rangeStart = s;
+      if (!rangeEnd   || e > rangeEnd)   rangeEnd   = e;
+    }
+
+    // 4. Build month-by-month projection (rate-history aware)
+    const monthsMap = new Map();
+
+    let cur = new Date(rangeStart.getFullYear(), rangeStart.getMonth(), 1);
+    const endMonth = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), 1);
+
+    while (cur <= endMonth) {
+      const year  = cur.getFullYear();
+      const month = cur.getMonth() + 1;
+      const yyyymm = toYYYYMM(year, month);
+      const dim = daysInMonth(year, month);
+      const monthStart = new Date(year, month - 1, 1);
+      const monthEndDay = new Date(year, month, 0);
+
+      const assignmentRows = [];
+      for (const a of asgRows) {
+        const aStart = new Date(a.start_date);
+        const aEnd   = a.end_date ? new Date(a.end_date) : horizonEnd;
+        if (aStart > monthEndDay || aEnd < monthStart) continue;
+
+        const activeStart = aStart > monthStart ? aStart : monthStart;
+        const activeEnd   = aEnd   < monthEndDay ? aEnd   : monthEndDay;
+        const history = rateHistoryByAsg.get(a.id);
+        const hasHistory = history && history.length > 0;
+        const fallbackRate = Number(a.client_rate);
+        let amount = 0;
+
+        if (hasHistory && history.length > 1) {
+          // Day-by-day with rate changes.
+          let curDay = new Date(activeStart);
+          while (curDay <= activeEnd) {
+            const dayRate = rateForDate(history, curDay) || fallbackRate;
+            let streak = 1;
+            const nextDay = new Date(curDay);
+            nextDay.setDate(nextDay.getDate() + 1);
+            while (nextDay <= activeEnd) {
+              if ((rateForDate(history, nextDay) || fallbackRate) !== dayRate) break;
+              streak++;
+              nextDay.setDate(nextDay.getDate() + 1);
+            }
+            amount += dayRate * streak / dim;
+            curDay.setDate(curDay.getDate() + streak);
+          }
+        } else {
+          const rate = hasHistory ? history[0].rate : fallbackRate;
+          const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
+          amount = rate * daysActive / dim;
+        }
+
+        assignmentRows.push({
+          assignment_id:        a.id,
+          employee_name:        a.employee_name,
+          client_rate:          hasHistory ? (rateForDate(history, monthStart) || fallbackRate) : fallbackRate,
+          client_rate_currency: a.client_rate_currency || 'USD',
+          days_active:          Math.round((activeEnd - activeStart) / 86400000) + 1,
+          days_in_month:        dim,
+          prorated_amount:      parseFloat(amount.toFixed(4)),
+          has_rate_changes:     hasHistory && history.length > 1,
+        });
+      }
+
+      if (assignmentRows.length > 0) {
+        const total = parseFloat(assignmentRows.reduce((s, r) => s + r.prorated_amount, 0).toFixed(4));
+        monthsMap.set(yyyymm, {
+          yyyymm,
+          label: monthLabel(year, month),
+          assignments: assignmentRows,
+          total,
+        });
+      }
+
+      cur = new Date(year, month, 1);
+    }
+
+    const months = Array.from(monthsMap.values()).sort((a, b) => a.yyyymm.localeCompare(b.yyyymm));
+    const grand_total = parseFloat(months.reduce((s, m) => s + m.total, 0).toFixed(4));
+
+    res.json({
+      contract_id,
+      contract_name: contract.name,
+      contract_type: 'capacity',
+      months,
+      grand_total,
+      currency_note: 'Montos en moneda de cada asignación. Se usa historial de tarifas cuando hay cambios.',
+    });
+  } catch (err) {
+    serverError(res, 'GET /revenue/capacity-projection', err);
   }
 });
 

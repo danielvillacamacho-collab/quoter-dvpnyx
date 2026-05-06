@@ -1,90 +1,108 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
+import React, { useState, useCallback } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import Avatar from './Avatar';
 import {
   Home, UserPlus, FileText, Building2, Briefcase, FileCheck2,
-  ClipboardList, CalendarDays, LayoutGrid, Users, Layers, Tag,
-  Clock, TrendingUp, BarChart3, BookOpen, Settings, UserCog, Upload,
-  Palette, LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
+  ClipboardList, CalendarDays, Users, Tag,
+  Clock, BarChart3, BookOpen, Settings, UserCog, Upload,
+  LogOut, DollarSign, Rocket, CalendarOff, Activity, Globe,
+  Contact, MessageSquare, Target, ChevronRight,
+  Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
+  GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
+  UserCircle, ClipboardCheck,
 } from 'lucide-react';
-
-/**
- * App Shell — Sidebar.
- *
- * Visual direction comes from the DVPNYX design handoff (see
- * `UI de claude design/design_handoff_dvpnyx_ui`): soft neutral
- * background, hair-thin border, 232×100vh grid column, 52px brand
- * header matching the Topbar, sectioned nav with uppercase micro
- * labels, and a user footer with logout action.
- *
- * Visibility rules:
- *   - The "Gente → Áreas / Skills" and the entire "Configuración"
- *     block are admin-only, mirroring the previous inline markup in
- *     App.js. Non-admin users simply don't see them.
- *
- * Accessibility:
- *   - <nav aria-label="Navegación principal"> so screen readers can
- *     jump to it. Each item uses <NavLink>, which applies the
- *     .active class when the current pathname matches — no manual
- *     comparison needed, which also makes detail-route matching
- *     consistent (e.g. /clients/:id keeps Clientes highlighted).
- *   - Icons are aria-hidden so the accessible name is just the label.
- *
- * The outer wrapper keeps the legacy `.sidebar` class (+ `.ds-sidebar`
- * for the new styles) because App.test.js and the mobile hamburger
- * overlay query-select on `.sidebar`.
- */
+import cx from './Sidebar.module.css';
 
 const ICONS = {
-  '/':                        Home,
-  '/quotation/new/staff_aug': UserPlus,
+  '/quotations':                Home,
+  '/quotation/new/staff_aug':   UserPlus,
   '/quotation/new/fixed_scope': FileText,
-  '/clients':                 Building2,
-  '/opportunities':           Briefcase,
-  '/pipeline':                LayoutGrid,
-  '/revenue':                 BarChart3,
-  '/contracts':               FileCheck2,
-  '/resource-requests':       ClipboardList,
-  '/assignments':             CalendarDays,
-  '/capacity/planner':        LayoutGrid,
-  '/employees':               Users,
-  '/admin/areas':             Layers,
-  '/admin/skills':            Tag,
-  '/time/me':                 Clock,
-  '/time/team':               TrendingUp,
-  '/reports':                 BarChart3,
-  '/wiki':                    BookOpen,
-  '/admin/params':            Settings,
-  '/admin/exchange-rates':    BarChart3,
-  '/admin/employee-costs':    DollarSign,
-  '/admin/users':             UserCog,
-  '/admin/bulk-import':       Upload,
-  '/admin/holidays':          Globe,
-  '/internal-initiatives':    Rocket,
-  '/novelties':               CalendarOff,
-  '/idle-time':               Activity,
-  '/preferencias':            Palette,
+  '/clients':                   Building2,
+  '/opportunities':             Briefcase,
+  '/pipeline':                  Kanban,
+  '/contacts':                  Contact,
+  '/activities':                MessageSquare,
+  '/contracts':                 FileCheck2,
+  '/resource-requests':         ClipboardList,
+  '/assignments':               CalendarDays,
+  '/capacity/planner':          GanttChart,
+  '/employees':                 Users,
+  '/admin/areas':               FolderKanban,
+  '/admin/skills':              Tag,
+  '/time/me':                   Clock,
+  '/time/team':                 Timer,
+  '/internal-initiatives':      Rocket,
+  '/novelties':                 Sparkles,
+  '/idle-time':                 Coffee,
+  '/revenue':                   Wallet,
+  '/reports':                   PieChart,
+  '/reports/ejecutivo':         LayoutDashboard,
+  '/reports/comercial':         Briefcase,
+  '/reports/delivery':          FileCheck2,
+  '/reports/gente':             Users,
+  '/reports/finanzas':          LineChart,
+  '/wiki':                      BookOpen,
+  '/admin/params':              Settings,
+  '/admin/exchange-rates':      Landmark,
+  '/admin/employee-costs':      DollarSign,
+  '/admin/users':               UserCog,
+  '/admin/bulk-import':         Upload,
+  '/admin/holidays':            Globe,
+  '/admin/budgets':             Target,
+  '/me/profile':                UserCircle,
+  '/me/assignments':            ClipboardCheck,
+  '/dashboard/me':              LayoutDashboard,
+  '/time/admin':                ClipboardCheck,
+  '/deviations':                Activity,
 };
 
-/** Build the grouped nav model; admin-only sections are filtered here. */
-export function buildGroups(isAdmin) {
+/** Build the grouped nav model. */
+export function buildGroups(isAdmin, hasEmployee = false, isStaff = false, isLeadOrAdmin = false) {
+  if (isStaff) {
+    return [
+      {
+        key: 'mi_espacio', title: 'Mi espacio', collapsible: false, items: [
+          { path: '/me/profile',     label: 'Mi perfil' },
+          { path: '/me/assignments', label: 'Mis asignaciones' },
+          { path: '/dashboard/me',   label: 'Mi dashboard' },
+          { path: '/time/me',        label: 'Mis horas' },
+        ],
+      },
+      {
+        key: 'ayuda', title: null, collapsible: false, items: [
+          { path: '/wiki', label: 'Wiki' },
+        ],
+      },
+    ];
+  }
+
   const groups = [
-    {
-      title: null, items: [
-        { path: '/', label: 'Dashboard' },
+    ...(hasEmployee ? [{
+      key: 'mi_espacio', title: 'Mi espacio', collapsible: true, items: [
+        { path: '/me/profile',     label: 'Mi perfil' },
+        { path: '/me/assignments', label: 'Mis asignaciones' },
+        { path: '/dashboard/me',   label: 'Mi dashboard' },
+        { path: '/time/me',        label: 'Mis horas' },
       ],
-    },
+    }] : []),
     {
-      title: 'Comercial', items: [
-        { path: '/quotation/new/staff_aug',  label: 'Nueva Staff Aug' },
-        { path: '/quotation/new/fixed_scope', label: 'Nuevo Proyecto' },
+      key: 'comercial', title: 'Comercial', collapsible: true, items: [
         { path: '/clients',                  label: 'Clientes' },
+        { path: '/contacts',                 label: 'Contactos' },
         { path: '/opportunities',            label: 'Oportunidades' },
+        { path: '/activities',               label: 'Actividades' },
         { path: '/pipeline',                 label: 'Pipeline' },
       ],
     },
     {
-      title: 'Delivery', items: [
+      key: 'cotizaciones', title: 'Cotizaciones', collapsible: true, items: [
+        { path: '/quotations',                label: 'Historial' },
+        { path: '/quotation/new/staff_aug',   label: 'Staff Augmentation' },
+        { path: '/quotation/new/fixed_scope', label: 'Proyecto (fixed)' },
+      ],
+    },
+    {
+      key: 'delivery', title: 'Delivery', collapsible: true, items: [
         { path: '/contracts',         label: 'Contratos' },
         { path: '/resource-requests', label: 'Solicitudes' },
         { path: '/assignments',       label: 'Asignaciones' },
@@ -92,7 +110,7 @@ export function buildGroups(isAdmin) {
       ],
     },
     {
-      title: 'Gente', items: [
+      key: 'gente', title: 'Gente', collapsible: true, items: [
         { path: '/employees', label: 'Empleados' },
         ...(isAdmin ? [
           { path: '/admin/areas',  label: 'Áreas'  },
@@ -101,37 +119,43 @@ export function buildGroups(isAdmin) {
       ],
     },
     {
-      title: 'Time Tracking', items: [
-        { path: '/time/me',   label: 'Mis horas' },
-        { path: '/time/team', label: 'Tiempo semanal' },
+      key: 'tiempo', title: 'Tiempo', collapsible: true, items: [
+        { path: '/time/team', label: 'Equipo semanal' },
+        ...(isLeadOrAdmin ? [{ path: '/time/admin', label: 'Asignar horas' }] : []),
+        { path: '/deviations', label: 'Desviaciones' },
       ],
     },
     {
-      title: 'Iniciativas internas', items: [
+      key: 'operaciones', title: 'Operaciones', collapsible: true, items: [
         { path: '/internal-initiatives', label: 'Iniciativas' },
         { path: '/novelties',            label: 'Novedades' },
-        { path: '/idle-time',            label: 'Capacidad y bench' },
+        { path: '/idle-time',            label: 'Bench & capacidad' },
+        { path: '/revenue',              label: 'Revenue' },
       ],
     },
     {
-      title: 'Finanzas', items: [
-        { path: '/revenue', label: 'Reconocimiento' },
+      key: 'reportes', title: 'Reportes', collapsible: true, items: [
+        { path: '/reports',           label: 'Hub' },
+        { path: '/reports/ejecutivo', label: 'Ejecutivo' },
+        { path: '/reports/comercial', label: 'Comercial' },
+        { path: '/reports/delivery',  label: 'Delivery' },
+        { path: '/reports/gente',     label: 'Gente' },
+        { path: '/reports/finanzas',  label: 'Finanzas' },
       ],
     },
     {
-      title: null, items: [
-        { path: '/reports',      label: 'Reportes' },
+      key: 'ayuda', title: null, collapsible: false, items: [
         { path: '/wiki',         label: 'Wiki' },
-        { path: '/preferencias', label: 'Preferencias' },
       ],
     },
   ];
   if (isAdmin) {
     groups.push({
-      title: 'Configuración', items: [
+      key: 'config', title: 'Configuración', collapsible: true, items: [
         { path: '/admin/params',          label: 'Parámetros'      },
         { path: '/admin/exchange-rates',  label: 'Tasas de cambio' },
         { path: '/admin/employee-costs',  label: 'Costos del equipo' },
+        { path: '/admin/budgets',         label: 'Presupuestos'    },
         { path: '/admin/holidays',        label: 'Festivos'        },
         { path: '/admin/users',           label: 'Usuarios'        },
         { path: '/admin/bulk-import',     label: 'Carga masiva'    },
@@ -141,7 +165,6 @@ export function buildGroups(isAdmin) {
   return groups;
 }
 
-/** Safe initials for the avatar (never blanks out even on missing name). */
 function initials(name) {
   if (!name) return 'DV';
   const parts = String(name).trim().split(/\s+/).slice(0, 2);
@@ -149,17 +172,94 @@ function initials(name) {
   return letters.toUpperCase() || 'DV';
 }
 
+const STORAGE_KEY = 'dvpnyx-sidebar-collapsed';
+
+function loadCollapsed() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {};
+  } catch { return {}; }
+}
+
+function SidebarSection({ group, collapsed, onToggle, itemClass, onNavigate, pathname }) {
+  const isOpen = !collapsed;
+
+  if (!group.collapsible) {
+    return (
+      <div className="ds-sb-section">
+        {group.title && <div className="ds-sb-section-label">{group.title}</div>}
+        {group.items.map((it) => {
+          const Icon = ICONS[it.path];
+          return (
+            <NavLink key={it.path} to={it.path} end={it.path === '/'} className={itemClass} onClick={onNavigate}>
+              {Icon ? <Icon className="ds-sb-ico" aria-hidden="true" /> : null}
+              <span>{it.label}</span>
+            </NavLink>
+          );
+        })}
+      </div>
+    );
+  }
+
+  const hasActiveChild = group.items.some((it) =>
+    it.path === '/' ? pathname === '/' : pathname.startsWith(it.path)
+  );
+
+  return (
+    <div className="ds-sb-section">
+      <button
+        type="button"
+        className={cx.sectionHeader}
+        onClick={() => onToggle(group.key)}
+        aria-expanded={isOpen}
+      >
+        <ChevronRight
+          className={`${cx.chevron} ${isOpen ? cx.chevronOpen : ''}`}
+          aria-hidden="true"
+        />
+        <span>{group.title}</span>
+        {!isOpen && hasActiveChild && (
+          <span className="ds-dot-inline" style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--ds-accent)', marginLeft: 'auto', flexShrink: 0 }} />
+        )}
+      </button>
+      <div className={`${cx.sectionBody} ${!isOpen ? cx.sectionBodyClosed : ''}`}>
+        <div className={cx.sectionInner}>
+          {group.items.map((it) => {
+            const Icon = ICONS[it.path];
+            return (
+              <NavLink key={it.path} to={it.path} end={it.path === '/'} className={itemClass} onClick={onNavigate}>
+                {Icon ? <Icon className="ds-sb-ico" aria-hidden="true" /> : null}
+                <span>{it.label}</span>
+              </NavLink>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Sidebar({
   user,
   isAdmin = false,
+  hasEmployee = false,
+  isStaff = false,
+  isLeadOrAdmin = false,
   open = false,
   onNavigate,
   onLogout,
 }) {
-  const groups = buildGroups(isAdmin);
+  const groups = buildGroups(isAdmin, hasEmployee, isStaff, isLeadOrAdmin);
+  const location = useLocation();
+  const [collapsed, setCollapsed] = useState(loadCollapsed);
 
-  // NavLink gives us `isActive` → feeds our own class to preserve the
-  // existing visual contract (".active" → accent-soft + accent-text).
+  const toggleSection = useCallback((key) => {
+    setCollapsed((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+
   const itemClass = ({ isActive }) => (isActive ? 'ds-sb-item active' : 'ds-sb-item');
 
   return (
@@ -174,28 +274,16 @@ export default function Sidebar({
       </div>
 
       <nav className="ds-sb-scroll" aria-label="Secciones">
-        {groups.map((g, gi) => (
-          <div className="ds-sb-section" key={gi}>
-            {g.title && <div className="ds-sb-section-label">{g.title}</div>}
-            {g.items.map((it) => {
-              const Icon = ICONS[it.path];
-              // Dashboard has to match exactly `/` — NavLink's `end`
-              // prop prevents it from being active on every deeper path.
-              const end = it.path === '/';
-              return (
-                <NavLink
-                  key={it.path}
-                  to={it.path}
-                  end={end}
-                  className={itemClass}
-                  onClick={onNavigate}
-                >
-                  {Icon ? <Icon className="ds-sb-ico" aria-hidden="true" /> : null}
-                  <span>{it.label}</span>
-                </NavLink>
-              );
-            })}
-          </div>
+        {groups.map((g) => (
+          <SidebarSection
+            key={g.key}
+            group={g}
+            collapsed={!!collapsed[g.key]}
+            onToggle={toggleSection}
+            itemClass={itemClass}
+            onNavigate={onNavigate}
+            pathname={location.pathname}
+          />
         ))}
       </nav>
 

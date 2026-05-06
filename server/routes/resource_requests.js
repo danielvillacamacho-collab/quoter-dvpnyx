@@ -26,7 +26,25 @@ const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
 const { serverError } = require('../utils/http');
+
+const SORTABLE = {
+  role_title:    'rr.role_title',
+  level:         'rr.level',
+  country:       'rr.country',
+  weekly_hours:  'rr.weekly_hours',
+  start_date:    'rr.start_date',
+  end_date:      'rr.end_date',
+  quantity:      'rr.quantity',
+  // priority sorted by business order (critical → low) cuando se ordena ASC
+  priority:      "CASE rr.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END",
+  status:        'rr.status',
+  created_at:    'rr.created_at',
+  updated_at:    'rr.updated_at',
+  contract_name: 'c.name',
+  area_name:     'a.name',
+};
 const { rankCandidates } = require('../utils/candidate_matcher');
 
 router.use(auth);
@@ -74,7 +92,8 @@ router.get('/lookup', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT rr.id, rr.role_title, rr.level, rr.weekly_hours,
               rr.start_date, rr.end_date, rr.status, rr.priority,
-              rr.contract_id, c.name AS contract_name,
+              rr.contract_id, c.name AS contract_name, c.type AS contract_type,
+              c.original_currency AS contract_currency,
               rr.area_id, a.name AS area_name
          FROM resource_requests rr
          LEFT JOIN contracts c ON c.id = rr.contract_id
@@ -87,9 +106,7 @@ router.get('/lookup', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /resource-requests/lookup failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /resource-requests/lookup', err);
   }
 });
 
@@ -113,6 +130,12 @@ router.get('/', async (req, res) => {
     }
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    // Default: priority crítica primero, luego más recientes. Si el caller
+    // pide otro orden, lo respetamos pero priority sigue siendo el primer
+    // criterio cuando explícitamente se ordena por ella.
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'priority', defaultDir: 'asc', tieBreaker: 'rr.created_at DESC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -126,9 +149,7 @@ router.get('/', async (req, res) => {
            LEFT JOIN contracts c ON c.id = rr.contract_id
            LEFT JOIN areas     a ON a.id = rr.area_id
            ${where}
-           ORDER BY
-             CASE rr.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
-             rr.created_at DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset]
       ),
@@ -143,9 +164,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /resource-requests failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /resource-requests', err);
   }
 });
 
@@ -293,9 +312,7 @@ router.get('/:id/candidates', async (req, res) => {
       },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /api/resource-requests/:id/candidates failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /api/resource-requests/:id/candidates', err);
   }
 });
 
@@ -356,9 +373,7 @@ router.post('/', adminOnly, async (req, res) => {
     });
     res.status(201).json(rr);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /resource-requests failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /resource-requests', err);
   }
 });
 
@@ -425,9 +440,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     });
     res.json(after);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /resource-requests/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /resource-requests/:id', err);
   }
 });
 

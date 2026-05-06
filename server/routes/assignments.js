@@ -35,16 +35,43 @@ const { notify, notifyMany } = require('../utils/notifications');
 const { runAllChecks } = require('../utils/assignment_validation');
 const { stringifyCsv } = require('../utils/csv');
 const { parsePagination, isValidISODate } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
+
+const SORTABLE = {
+  start_date:    'a.start_date',
+  end_date:      'a.end_date',
+  weekly_hours:  'a.weekly_hours',
+  status:        'a.status',
+  role_title:    'a.role_title',
+  created_at:    'a.created_at',
+  updated_at:    'a.updated_at',
+  employee_name: "(e.first_name || ' ' || e.last_name)",
+  contract_name: 'c.name',
+};
 const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
+
+async function checkAssignmentLocks(conn, employeeId, startDate, endDate) {
+  const effectiveEnd = endDate || '9999-12-31';
+  const { rows } = await conn.query(
+    `SELECT week_starting FROM assignment_locks
+      WHERE employee_id = $1
+        AND unlocked_at IS NULL
+        AND week_starting >= date_trunc('week', $2::date)::date
+        AND week_starting <= $3::date
+      ORDER BY week_starting LIMIT 5`,
+    [employeeId, startDate, effectiveEnd]
+  );
+  return rows.map((r) => r.week_starting);
+}
 
 const VALID_STATUSES = ['planned', 'active', 'ended', 'cancelled'];
 const OVERBOOK_FACTOR = 1.10;
 
 const EDITABLE_FIELDS = [
   'weekly_hours', 'start_date', 'end_date', 'role_title', 'notes',
-  'approval_required',
+  'approval_required', 'client_rate', 'client_rate_currency',
 ];
 
 /**
@@ -283,9 +310,7 @@ router.get('/validate', async (req, res) => {
       },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /assignments/validate failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /assignments/validate', err);
   }
 });
 
@@ -297,6 +322,9 @@ router.get('/', async (req, res) => {
     if (error) return res.status(400).json({ error });
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'start_date', defaultDir: 'desc', tieBreaker: 'a.id ASC',
+    });
     const limitIdx = params.length + 1;
     const offsetIdx = params.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -311,7 +339,7 @@ router.get('/', async (req, res) => {
            LEFT JOIN contracts         c  ON c.id = a.contract_id
            LEFT JOIN resource_requests rr ON rr.id = a.resource_request_id
            ${where}
-           ORDER BY a.start_date DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...params, limit, offset]
       ),
@@ -369,9 +397,7 @@ router.get('/export.csv', async (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="asignaciones.csv"');
     res.send(csv);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /assignments/export.csv failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /assignments/export.csv', err);
   }
 });
 
@@ -383,6 +409,7 @@ router.get('/:id', async (req, res) => {
          e.first_name AS employee_first_name, e.last_name AS employee_last_name,
          e.weekly_capacity_hours AS employee_capacity,
          c.name AS contract_name, c.client_id AS contract_client_id,
+         c.type AS contract_type, c.original_currency AS contract_currency,
          rr.role_title AS request_role_title,
          (SELECT COUNT(*)::int FROM time_entries WHERE assignment_id=a.id) AS time_entries_count
          FROM assignments a
@@ -417,6 +444,7 @@ router.post('/', adminOnly, async (req, res) => {
   const {
     resource_request_id, employee_id, contract_id, weekly_hours,
     start_date, end_date, role_title, notes, override_reason,
+    client_rate, client_rate_currency,
   } = body;
 
   if (!resource_request_id) return res.status(400).json({ error: 'resource_request_id es requerido' });
@@ -464,7 +492,7 @@ router.post('/', adminOnly, async (req, res) => {
 
     const { rows: eRows } = await conn.query(
       `SELECT e.id, e.weekly_capacity_hours, e.status, e.first_name, e.last_name,
-              e.level, e.area_id, a.name AS area_name
+              e.level, e.area_id, e.end_date, a.name AS area_name
          FROM employees e
          LEFT JOIN areas a ON a.id = e.area_id
         WHERE e.id=$1 AND e.deleted_at IS NULL`,
@@ -479,6 +507,35 @@ router.post('/', adminOnly, async (req, res) => {
       return res.status(400).json({ error: 'El empleado está terminado y no puede recibir asignaciones nuevas.' });
     }
     if (emp.status === 'bench') warnings.push(`El empleado está en "bench" — priorízalo si buscas ocupación.`);
+
+    // Invariante: una asignación no puede extenderse más allá del end_date
+    // del empleado. Si el empleado tiene fecha de fin (no indefinida), la
+    // asignación debe cerrarse en o antes de esa fecha. Esto fuerza al
+    // operador a mantener consistencia entre fecha de salida y trabajo
+    // proyectado (sin esto, el planner mostraba barras "fantasma" después
+    // de que la persona ya no estaba en la empresa).
+    if (emp.end_date) {
+      const empEndIso = emp.end_date instanceof Date
+        ? emp.end_date.toISOString().slice(0, 10)
+        : String(emp.end_date).slice(0, 10);
+      if (!end_date) {
+        conn.release();
+        return res.status(409).json({
+          error: `El empleado tiene fecha de fin ${empEndIso}. La asignación necesita una fecha de fin (no puede ser abierta).`,
+          code: 'ASSIGNMENT_OPEN_BUT_EMPLOYEE_HAS_END_DATE',
+          employee_end_date: empEndIso,
+        });
+      }
+      if (end_date > empEndIso) {
+        conn.release();
+        return res.status(409).json({
+          error: `La asignación termina ${end_date}, pero el empleado tiene fecha de fin ${empEndIso}. Ajusta la fecha o quita el end_date del empleado.`,
+          code: 'ASSIGNMENT_AFTER_EMPLOYEE_END_DATE',
+          employee_end_date: empEndIso,
+          assignment_end_date: end_date,
+        });
+      }
+    }
 
     // --- Engine validation (US-BK-2 / US-VAL-4) --------------------------
     const committed = await sumOverlappingHours(conn, employee_id, start_date, end_date || null);
@@ -528,16 +585,18 @@ router.post('/', adminOnly, async (req, res) => {
     const { rows } = await conn.query(
       `INSERT INTO assignments
          (resource_request_id, employee_id, contract_id, weekly_hours,
-          start_date, end_date, status, role_title, notes,
+          start_date, end_date, status, role_title, notes, client_rate, client_rate_currency,
           approval_required, created_by,
           override_reason, override_checks, override_author_id, override_at)
-        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'planned'),$8,$9,COALESCE($10,false),$11,
-                $12,$13,$14,$15)
+        VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7,'planned'),$8,$9,$10,COALESCE($11,'USD'),COALESCE($12,false),$13,
+                $14,$15,$16,$17)
         RETURNING *`,
       [
         resource_request_id, employee_id, contract_id, wh,
         start_date, end_date || null, body.status || null,
         role_title || null, notes || null,
+        client_rate != null ? Number(client_rate) : null,
+        client_rate_currency || null,
         body.approval_required != null ? !!body.approval_required : null,
         req.user.id,
         isOverride ? reasonTrimmed : null,
@@ -547,6 +606,16 @@ router.post('/', adminOnly, async (req, res) => {
       ]
     );
     const asg = rows[0];
+
+    // Auto-create initial rate history entry when client_rate is provided.
+    if (client_rate != null && Number(client_rate) > 0) {
+      await conn.query(
+        `INSERT INTO assignment_rate_history
+           (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
+         VALUES ($1, $2, $3, $4, 'Tarifa inicial', $5)`,
+        [asg.id, start_date, Number(client_rate), client_rate_currency || 'USD', req.user.id],
+      );
+    }
 
     await emitEvent(conn, {
       event_type: 'assignment.created', entity_type: 'assignment', entity_id: asg.id,
@@ -633,9 +702,7 @@ router.post('/', adminOnly, async (req, res) => {
     }
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('POST /assignments failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /assignments', err);
   } finally {
     conn.release();
   }
@@ -649,6 +716,16 @@ router.put('/:id', adminOnly, async (req, res) => {
       `SELECT * FROM assignments WHERE id=$1 AND deleted_at IS NULL`, [req.params.id]
     );
     if (!before) { conn.release(); return res.status(404).json({ error: 'Asignación no encontrada' }); }
+
+    const lockedWeeks = await checkAssignmentLocks(conn, before.employee_id, before.start_date, before.end_date);
+    if (lockedWeeks.length) {
+      conn.release();
+      return res.status(423).json({
+        error: 'La asignación tiene semanas bloqueadas y no puede modificarse.',
+        code: 'ASSIGNMENT_LOCKED',
+        locked_weeks: lockedWeeks,
+      });
+    }
 
     const body = req.body || {};
     if (body.weekly_hours != null) {
@@ -670,10 +747,40 @@ router.put('/:id', adminOnly, async (req, res) => {
 
     if (hoursOrWindowChanged) {
       const { rows: eRows } = await conn.query(
-        `SELECT weekly_capacity_hours, first_name, last_name FROM employees WHERE id=$1`,
+        `SELECT weekly_capacity_hours, first_name, last_name, end_date FROM employees WHERE id=$1`,
         [before.employee_id]
       );
       const capacity = Number(eRows[0]?.weekly_capacity_hours || 40);
+
+      // Mismo invariante que en POST: la asignación no puede extenderse
+      // más allá del end_date del empleado. Aplica solo cuando se mueve
+      // la ventana (start/end). Si solo cambia weekly_hours, se omite.
+      if (eRows[0]?.end_date && (body.start_date || body.end_date !== undefined)) {
+        const empEndIso = eRows[0].end_date instanceof Date
+          ? eRows[0].end_date.toISOString().slice(0, 10)
+          : String(eRows[0].end_date).slice(0, 10);
+        const nextEndIso = nextEnd
+          ? (nextEnd instanceof Date ? nextEnd.toISOString().slice(0, 10) : String(nextEnd).slice(0, 10))
+          : null;
+        if (!nextEndIso) {
+          conn.release();
+          return res.status(409).json({
+            error: `El empleado tiene fecha de fin ${empEndIso}. La asignación necesita fecha de fin (no puede ser abierta).`,
+            code: 'ASSIGNMENT_OPEN_BUT_EMPLOYEE_HAS_END_DATE',
+            employee_end_date: empEndIso,
+          });
+        }
+        if (nextEndIso > empEndIso) {
+          conn.release();
+          return res.status(409).json({
+            error: `La asignación terminaría ${nextEndIso}, pero el empleado tiene fecha de fin ${empEndIso}. Ajusta la fecha o quita el end_date del empleado.`,
+            code: 'ASSIGNMENT_AFTER_EMPLOYEE_END_DATE',
+            employee_end_date: empEndIso,
+            assignment_end_date: nextEndIso,
+          });
+        }
+      }
+
       const existing = await sumOverlappingHours(conn, before.employee_id, nextStart, nextEnd, before.id);
       const proposed = existing + nextHours;
       const threshold = capacity * OVERBOOK_FACTOR;
@@ -691,15 +798,17 @@ router.put('/:id', adminOnly, async (req, res) => {
     await conn.query('BEGIN');
     const { rows } = await conn.query(
       `UPDATE assignments SET
-          weekly_hours      = COALESCE($1, weekly_hours),
-          start_date        = COALESCE($2, start_date),
-          end_date          = COALESCE($3, end_date),
-          status            = COALESCE($4, status),
-          role_title        = COALESCE($5, role_title),
-          notes             = COALESCE($6, notes),
-          approval_required = COALESCE($7, approval_required),
-          updated_at        = NOW()
-        WHERE id=$8 AND deleted_at IS NULL
+          weekly_hours         = COALESCE($1, weekly_hours),
+          start_date           = COALESCE($2, start_date),
+          end_date             = COALESCE($3, end_date),
+          status               = COALESCE($4, status),
+          role_title           = COALESCE($5, role_title),
+          notes                = COALESCE($6, notes),
+          approval_required    = COALESCE($7, approval_required),
+          client_rate          = COALESCE($8, client_rate),
+          client_rate_currency = COALESCE($9, client_rate_currency),
+          updated_at           = NOW()
+        WHERE id=$10 AND deleted_at IS NULL
         RETURNING *`,
       [
         body.weekly_hours != null ? Number(body.weekly_hours) : null,
@@ -709,10 +818,32 @@ router.put('/:id', adminOnly, async (req, res) => {
         body.role_title ?? null,
         body.notes ?? null,
         body.approval_required != null ? !!body.approval_required : null,
+        body.client_rate != null ? Number(body.client_rate) : null,
+        body.client_rate_currency ?? null,
         req.params.id,
       ]
     );
     const after = rows[0];
+
+    // If client_rate changed, add a rate history entry.
+    const rateChanged = body.client_rate != null &&
+      Number(body.client_rate) !== Number(before.client_rate || 0);
+    if (rateChanged && Number(body.client_rate) > 0) {
+      // effective_date: use body.rate_effective_date if provided, else today.
+      const effectiveDate = body.rate_effective_date || new Date().toISOString().slice(0, 10);
+      await conn.query(
+        `INSERT INTO assignment_rate_history
+           (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          after.id, effectiveDate, Number(body.client_rate),
+          body.client_rate_currency || after.client_rate_currency || 'USD',
+          body.rate_reason || 'Cambio de tarifa',
+          req.user.id,
+        ],
+      );
+    }
+
     await emitEvent(conn, {
       event_type: 'assignment.updated', entity_type: 'assignment', entity_id: after.id,
       actor_user_id: req.user.id,
@@ -723,9 +854,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     res.json(after);
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('PUT /assignments/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /assignments/:id', err);
   } finally {
     conn.release();
   }
@@ -737,6 +866,21 @@ router.put('/:id', adminOnly, async (req, res) => {
  */
 router.delete('/:id', adminOnly, async (req, res) => {
   try {
+    const { rows: asgRows } = await pool.query(
+      `SELECT employee_id, start_date, end_date FROM assignments WHERE id=$1 AND deleted_at IS NULL`,
+      [req.params.id]
+    );
+    if (!asgRows.length) return res.status(404).json({ error: 'Asignación no encontrada' });
+
+    const lockedWeeks = await checkAssignmentLocks(pool, asgRows[0].employee_id, asgRows[0].start_date, asgRows[0].end_date);
+    if (lockedWeeks.length) {
+      return res.status(423).json({
+        error: 'La asignación tiene semanas bloqueadas y no puede eliminarse.',
+        code: 'ASSIGNMENT_LOCKED',
+        locked_weeks: lockedWeeks,
+      });
+    }
+
     const { rows: te } = await pool.query(
       `SELECT COUNT(*)::int AS count FROM time_entries WHERE assignment_id=$1`,
       [req.params.id]
@@ -772,9 +916,95 @@ router.delete('/:id', adminOnly, async (req, res) => {
       preserved_time_entries: te[0].count,
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('DELETE /assignments/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'DELETE /assignments/:id', err);
+  }
+});
+
+/* ======================================================================
+ * Rate History — historial de tarifas por asignación.
+ * Permite registrar cambios de tarifa (ascensos, incrementos anuales,
+ * renegociaciones) con fecha efectiva. La proyección de revenue usa
+ * la tarifa vigente para cada mes según effective_date.
+ * ====================================================================== */
+
+/* GET /assignments/:id/rate-history */
+router.get('/:id/rate-history', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT h.id, h.effective_date, h.client_rate, h.client_rate_currency,
+              h.reason, h.created_by, h.created_at, u.name AS created_by_name
+         FROM assignment_rate_history h
+         LEFT JOIN users u ON u.id = h.created_by
+        WHERE h.assignment_id = $1
+        ORDER BY h.effective_date ASC, h.created_at ASC`,
+      [req.params.id],
+    );
+    res.json(rows);
+  } catch (err) {
+    serverError(res, 'GET /assignments/:id/rate-history', err);
+  }
+});
+
+/* POST /assignments/:id/rate-history — agregar nueva tarifa */
+router.post('/:id/rate-history', adminOnly, async (req, res) => {
+  const { effective_date, client_rate, client_rate_currency, reason } = req.body || {};
+  if (!effective_date) return res.status(400).json({ error: 'effective_date es requerido' });
+  if (client_rate == null || Number(client_rate) <= 0) return res.status(400).json({ error: 'client_rate debe ser mayor a 0' });
+
+  try {
+    const { rows: asg } = await pool.query(
+      `SELECT id, client_rate_currency FROM assignments WHERE id=$1 AND deleted_at IS NULL`,
+      [req.params.id],
+    );
+    if (!asg.length) return res.status(404).json({ error: 'Asignación no encontrada' });
+
+    const ccy = client_rate_currency || asg[0].client_rate_currency || 'USD';
+    const { rows } = await pool.query(
+      `INSERT INTO assignment_rate_history
+         (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING *`,
+      [req.params.id, effective_date, Number(client_rate), ccy, reason || null, req.user.id],
+    );
+
+    // Update the assignment's current client_rate to the latest entry.
+    await pool.query(
+      `UPDATE assignments SET client_rate = $2, client_rate_currency = $3, updated_at = NOW()
+        WHERE id = $1`,
+      [req.params.id, Number(client_rate), ccy],
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    serverError(res, 'POST /assignments/:id/rate-history', err);
+  }
+});
+
+/* DELETE /assignments/:id/rate-history/:rate_id — eliminar una entrada */
+router.delete('/:id/rate-history/:rate_id', adminOnly, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `DELETE FROM assignment_rate_history WHERE id=$1 AND assignment_id=$2 RETURNING *`,
+      [req.params.rate_id, req.params.id],
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Entrada no encontrada' });
+
+    // Update assignment's client_rate to the latest remaining entry.
+    const { rows: latest } = await pool.query(
+      `SELECT client_rate, client_rate_currency FROM assignment_rate_history
+        WHERE assignment_id=$1 ORDER BY effective_date DESC, created_at DESC LIMIT 1`,
+      [req.params.id],
+    );
+    if (latest.length) {
+      await pool.query(
+        `UPDATE assignments SET client_rate = $2, client_rate_currency = $3, updated_at = NOW() WHERE id = $1`,
+        [req.params.id, latest[0].client_rate, latest[0].client_rate_currency],
+      );
+    }
+
+    res.json({ message: 'Entrada eliminada' });
+  } catch (err) {
+    serverError(res, 'DELETE /assignments/:id/rate-history/:rate_id', err);
   }
 });
 

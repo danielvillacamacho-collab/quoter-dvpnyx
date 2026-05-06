@@ -20,6 +20,23 @@ const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { emitEvent, buildUpdatePayload } = require('../utils/events');
 const { parsePagination } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
+
+const SORTABLE = {
+  first_name:            'e.first_name',
+  last_name:             'e.last_name',
+  level:                 'e.level',
+  country:               'e.country',
+  status:                'e.status',
+  employment_type:       'e.employment_type',
+  weekly_capacity_hours: 'e.weekly_capacity_hours',
+  start_date:            'e.start_date',
+  end_date:              'e.end_date',
+  created_at:            'e.created_at',
+  updated_at:            'e.updated_at',
+  area_name:             'a.name',
+  skills_count:          '(SELECT COUNT(*)::int FROM employee_skills WHERE employee_id=e.id)',
+};
 const { serverError, safeRollback } = require('../utils/http');
 
 router.use(auth);
@@ -83,9 +100,7 @@ router.get('/lookup', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /employees/lookup failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /employees/lookup', err);
   }
 });
 
@@ -109,6 +124,9 @@ router.get('/', async (req, res) => {
     if (req.query.country)     wheres.push(`e.country = ${add(req.query.country)}`);
 
     const where = `WHERE ${wheres.join(' AND ')}`;
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'last_name', defaultDir: 'asc', tieBreaker: 'e.first_name ASC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
     const [countRes, rowsRes] = await Promise.all([
@@ -120,7 +138,7 @@ router.get('/', async (req, res) => {
            FROM employees e
            LEFT JOIN areas a ON a.id = e.area_id
            ${where}
-           ORDER BY e.last_name, e.first_name
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset]
       ),
@@ -130,9 +148,7 @@ router.get('/', async (req, res) => {
       pagination: { page, limit, total: countRes.rows[0].total, pages: Math.ceil(countRes.rows[0].total / limit) || 1 },
     });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /employees failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /employees', err);
   }
 });
 
@@ -237,9 +253,7 @@ router.post('/', adminOnly, async (req, res) => {
     });
     res.status(201).json(emp);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('POST /employees failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /employees', err);
   }
 });
 
@@ -274,8 +288,56 @@ router.put('/:id', adminOnly, async (req, res) => {
       if (dup.rows.length) { conn.release(); return res.status(409).json({ error: 'Ya existe un empleado con ese corporate_email' }); }
     }
 
+    // Invariante: si se está poniendo end_date a una fecha concreta,
+    // rechazar si hay asignaciones activas que la violen (terminan después
+    // o son abiertas). Esto evita que el empleado quede "inactivo" mientras
+    // tiene barras fantasma futuras en el planner. La validación se omite
+    // cuando se está pasando a NULL (volviendo a indefinido) o cuando no
+    // se toca el campo. body.end_date === undefined  → no se toca el campo.
+    // body.end_date === null       → quitar (volver a indefinido).
+    // body.end_date === 'YYYY-MM-DD' → setear o cambiar.
+    const endDateChanging = Object.prototype.hasOwnProperty.call(body, 'end_date');
+    const newEndDate = endDateChanging ? body.end_date : undefined;
+    if (endDateChanging && newEndDate) {
+      const newEndIso = String(newEndDate).slice(0, 10);
+      const { rows: blockingAsg } = await conn.query(
+        `SELECT a.id, a.start_date, a.end_date, a.weekly_hours, a.role_title,
+                c.name AS contract_name, cl.name AS client_name
+           FROM assignments a
+           JOIN contracts c ON c.id = a.contract_id
+           LEFT JOIN clients cl ON cl.id = c.client_id
+          WHERE a.employee_id = $1
+            AND a.deleted_at IS NULL
+            AND a.status NOT IN ('cancelled')
+            AND (a.end_date IS NULL OR a.end_date > $2::date)`,
+        [req.params.id, newEndIso],
+      );
+      if (blockingAsg.length > 0) {
+        conn.release();
+        return res.status(409).json({
+          error: `No se puede poner fecha de fin ${newEndIso}: el empleado tiene ${blockingAsg.length} asignación(es) que terminan después o son abiertas. Cierra o ajusta esas asignaciones primero.`,
+          code: 'END_DATE_BLOCKED_BY_ASSIGNMENTS',
+          new_end_date: newEndIso,
+          blocking_assignments: blockingAsg.map((a) => ({
+            id: a.id,
+            contract_name: a.contract_name,
+            client_name: a.client_name,
+            role_title: a.role_title,
+            start_date: a.start_date instanceof Date ? a.start_date.toISOString().slice(0, 10) : String(a.start_date).slice(0, 10),
+            end_date: a.end_date ? (a.end_date instanceof Date ? a.end_date.toISOString().slice(0, 10) : String(a.end_date).slice(0, 10)) : null,
+            weekly_hours: Number(a.weekly_hours),
+          })),
+        });
+      }
+    }
+
     await conn.query('BEGIN');
 
+    // end_date usa CASE en lugar de COALESCE para distinguir "no se mandó"
+    // (no toques) de "se mandó null" (poner indefinido). Sin esto, mandar
+    // {end_date: null} desde la UI no quitaba la fecha existente — un bug
+    // pre-existente que rompía el feature de "Indefinida" del PR #126 al
+    // editar empleados que ya tenían fecha.
     const { rows } = await conn.query(
       `UPDATE employees SET
           user_id               = COALESCE($1, user_id),
@@ -292,7 +354,7 @@ router.put('/:id', adminOnly, async (req, res) => {
           weekly_capacity_hours = COALESCE($12, weekly_capacity_hours),
           languages             = COALESCE($13::jsonb, languages),
           start_date            = COALESCE($14, start_date),
-          end_date              = COALESCE($15, end_date),
+          end_date              = CASE WHEN $22::boolean THEN $15::date ELSE end_date END,
           status                = COALESCE($16, status),
           squad_id              = COALESCE($17, squad_id),
           manager_user_id       = COALESCE($18, manager_user_id),
@@ -316,13 +378,14 @@ router.put('/:id', adminOnly, async (req, res) => {
         body.weekly_capacity_hours != null ? Number(body.weekly_capacity_hours) : null,
         body.languages ? JSON.stringify(body.languages) : null,
         body.start_date ?? null,
-        body.end_date ?? null,
+        endDateChanging ? (newEndDate || null) : null,
         body.status ?? null,
         body.squad_id ?? null,
         body.manager_user_id ?? null,
         body.notes ?? null,
         body.tags ?? null,
         req.params.id,
+        endDateChanging,
       ]
     );
     const after = rows[0];
@@ -389,9 +452,7 @@ router.put('/:id', adminOnly, async (req, res) => {
     res.json({ ...after, cancelled_assignments: cancelledAssignments.length });
   } catch (err) {
     await safeRollback(conn, 'transaction');
-    // eslint-disable-next-line no-console
-    console.error('PUT /employees/:id failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /employees/:id', err);
   } finally {
     conn.release();
   }
@@ -457,9 +518,7 @@ router.get('/:id/skills', async (req, res) => {
     );
     res.json({ data: rows });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('GET /employees/:id/skills failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'GET /employees/:id/skills', err);
   }
 });
 
@@ -510,9 +569,7 @@ router.post('/:id/skills', adminOnly, async (req, res) => {
     if (err && err.code === '23505') {
       return res.status(409).json({ error: 'Este empleado ya tiene ese skill asignado' });
     }
-    // eslint-disable-next-line no-console
-    console.error('POST /employees/:id/skills failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'POST /employees/:id/skills', err);
   }
 });
 
@@ -549,9 +606,7 @@ router.put('/:id/skills/:skillId', adminOnly, async (req, res) => {
     });
     res.json(rows[0]);
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('PUT /employees/:id/skills/:skillId failed:', err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'PUT /employees/:id/skills/:skillId', err);
   }
 });
 

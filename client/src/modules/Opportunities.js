@@ -3,6 +3,15 @@ import { useNavigate, Link } from 'react-router-dom';
 import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
+import { STAGES, STAGE_BY_ID, TRANSITIONS as PIPELINE_TRANSITIONS } from '../utils/pipeline';
+// SPEC-CRM-00 v1.1 PR2 — modelo de revenue + loss reasons formales.
+import {
+  FUNDING_SOURCES, LOSS_REASONS, LOSS_REASON_DETAIL_MIN,
+  computeBooking, validateFunding, validateLossReason,
+} from '../utils/booking';
+import FilterableSelect from '../shell/FilterableSelect';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -24,37 +33,17 @@ const s = {
   modal:  { background: '#fff', borderRadius: 12, padding: 24, width: 560, maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' },
 };
 
+// SPEC-CRM-00 v1.1 — los stages, labels, colors y transiciones vienen
+// del SSOT en utils/pipeline.js (importado arriba) para evitar drift
+// entre frontend y backend. Cualquier cambio del modelo se propaga aquí
+// automáticamente.
 const STATUS_OPTIONS = [
-  { value: '',            label: 'Todos' },
-  { value: 'open',        label: 'Abierta' },
-  { value: 'qualified',   label: 'Calificada' },
-  { value: 'proposal',    label: 'Propuesta' },
-  { value: 'negotiation', label: 'Negociación' },
-  { value: 'won',         label: 'Ganada' },
-  { value: 'lost',        label: 'Perdida' },
-  { value: 'cancelled',   label: 'Cancelada' },
+  { value: '', label: 'Todos' },
+  ...STAGES.map((st) => ({ value: st.id, label: st.label })),
 ];
-const STATUS_LABEL = Object.fromEntries(STATUS_OPTIONS.map((o) => [o.value, o.label]));
-
-const STATUS_COLORS = {
-  open:        'var(--purple-dark)',
-  qualified:   'var(--teal-mid)',
-  proposal:    'var(--teal-mid)',
-  negotiation: 'var(--orange)',
-  won:         'var(--success)',
-  lost:        'var(--danger)',
-  cancelled:   'var(--text-light)',
-};
-
-const TRANSITIONS = {
-  open:        ['qualified', 'cancelled'],
-  qualified:   ['proposal',  'cancelled'],
-  proposal:    ['negotiation', 'won', 'lost', 'cancelled'],
-  negotiation: ['won', 'lost', 'cancelled'],
-  won:         [],
-  lost:        [],
-  cancelled:   [],
-};
+const STATUS_LABEL = Object.fromEntries(STAGES.map((st) => [st.id, st.label]));
+const STATUS_COLORS = Object.fromEntries(STAGES.map((st) => [st.id, st.color]));
+const TRANSITIONS = PIPELINE_TRANSITIONS;
 
 const OUTCOME_REASONS = [
   { value: 'price',           label: 'Precio' },
@@ -65,23 +54,110 @@ const OUTCOME_REASONS = [
   { value: 'other',           label: 'Otro' },
 ];
 
+const DEAL_TYPES = [
+  { value: 'new_business',      label: 'Venta nueva' },
+  { value: 'upsell_cross_sell', label: 'Upsell / Cross-sell' },
+  { value: 'renewal',           label: 'Renovación' },
+];
+
+const CONTRACT_TYPES = [
+  { value: 'project',  label: 'Proyecto' },
+  { value: 'capacity', label: 'Capacidad' },
+  { value: 'resell',   label: 'Reventa' },
+];
+
 const EMPTY = {
   client_id: '', name: '', description: '',
   expected_close_date: '', tags: [],
+  // SPEC-CRM-00 v1.1 PR2 — defaults para revenue model + funding + flags.
+  revenue_type: 'one_time',
+  one_time_amount_usd: '', mrr_usd: '', contract_length_months: '',
+  champion_identified: false, economic_buyer_identified: false,
+  funding_source: 'client_direct', funding_amount_usd: '',
+  drive_url: '',
+  // SPEC-CRM-01 — deal enrichment
+  deal_type: 'new_business', co_owner_id: '',
+  // Tipo de contrato (Proyecto, Capacidad, Reventa)
+  contract_type: '',
+  // Brief de la oportunidad — insumo estructurado para preventa
+  context_client: '', context_scope: '', context_pains: '',
+  context_requirements: '', context_politics: '',
 };
 
-function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
+// Cada bloque del Brief tiene: clave, etiqueta, hint corto y placeholder
+// con un ejemplo real (caso BBVA Colombia que la country manager compartió
+// por chat) para que el comercial vea la calidad de input que se espera.
+const BRIEF_SECTIONS = [
+  {
+    key: 'context_client',
+    label: '1. Contexto del cliente',
+    hint: 'Quién decide, dónde se decide, área del cliente.',
+    placeholder:
+      'Ej. BBVA Colombia, área de banca corporativa. La decisión se toma en Colombia, no escala a España (punto a favor). Decisor: BBVA Colombia.',
+  },
+  {
+    key: 'context_scope',
+    label: '2. Alcance del servicio',
+    hint: 'Qué producto/funcionalidad busca, usuarios finales, integraciones.',
+    placeholder:
+      'Ej. Producto de factoring y confirming dirigido a miles de clientes (pymes y corporativos). Front: carga/descarga de facturas multibanco (subastadas en Klym y Mente). Back: control de cupos, descuentos, contabilidad y autorizaciones.',
+  },
+  {
+    key: 'context_pains',
+    label: '3. Pain points y razón del cambio',
+    hint: 'Por qué cambian de proveedor, qué les duele hoy.',
+    placeholder:
+      'Ej. Proveedor actual (10+ años) propuso modelo no escalable. Cada desarrollo se paga muy caro (incluso cambios de color/tamaño). Dolor con integración a Klym/Mente. Onboarding de proveedores lento. La contabilidad seguirá con el proveedor actual.',
+  },
+  {
+    key: 'context_requirements',
+    label: '4. Requisitos del nuevo proveedor',
+    hint: 'Qué buscan, modelo comercial, alcance esperado.',
+    placeholder:
+      'Ej. Nuevo proveedor debe manejar 100% del servicio (o explorar split front/back). Buscan activamente varios proveedores. Abiertos a fee de facturación o business case. Quieren solución con agentes. Confirmar fecha de vencimiento del contrato actual.',
+  },
+  {
+    key: 'context_politics',
+    label: '5. Política y siguientes pasos',
+    hint: 'Influenciadores con nombre, próximos pasos, timeline de decisión.',
+    placeholder:
+      'Ej. Hay que convencer a Guillermo (le habla al oído al CEO). Jorge Antorveza trabaja para Guillermo. Próximo paso: reunión con dueños de producto y Gerente Comercial Corporativo. Preparar speech sobre costo multiplataforma y spreads. Decisión en 2026 — proyecto de largo aliento.',
+  },
+];
+
+const fmtUsd = (n) => `USD ${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
+
+function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  // Booking = monto estimado (one_time behind the scenes for backward compat).
+  const bookingPreview = computeBooking({
+    revenue_type: 'one_time',
+    one_time_amount_usd: form.one_time_amount_usd,
+  });
 
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
     if (!form.client_id) return setErr('Cliente es requerido');
     if (!form.name.trim()) return setErr('El nombre es requerido');
+    // Normalize: revenue_type is always 'one_time' now (hidden from UI).
+    // The booking_amount_usd is derived from one_time_amount_usd.
+    const normalized = {
+      ...form,
+      revenue_type: 'one_time',
+      one_time_amount_usd: (form.one_time_amount_usd === '' || form.one_time_amount_usd == null)
+        ? 0
+        : form.one_time_amount_usd,
+      contract_type: form.contract_type || null,
+    };
+    const fundingErr = validateFunding(normalized);
+    if (fundingErr) return setErr(fundingErr);
     try {
-      await onSave(form);
+      await onSave(normalized);
     } catch (ex) {
       setErr(ex.message || 'Error guardando');
     }
@@ -94,17 +170,16 @@ function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
       </h2>
       <div>
         <label style={s.label}>Cliente *</label>
-        <select
-          style={s.input}
+        <FilterableSelect
           value={form.client_id || ''}
           onChange={(e) => set('client_id', e.target.value)}
           aria-label="Cliente"
           required
           disabled={!!initial?.id}
-        >
-          <option value="">— Selecciona —</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+          inputStyle={s.input}
+          placeholder="— Selecciona —"
+          options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+        />
       </div>
       <div>
         <label style={s.label}>Nombre *</label>
@@ -118,16 +193,168 @@ function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
           onChange={(e) => set('description', e.target.value)}
         />
       </div>
-      <div>
-        <label style={s.label}>Fecha esperada de cierre</label>
-        <input
-          type="date"
-          style={s.input}
-          value={form.expected_close_date || ''}
-          onChange={(e) => set('expected_close_date', e.target.value)}
-        />
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <label style={s.label}>Tipo de deal *</label>
+          <FilterableSelect
+            value={form.deal_type}
+            onChange={(e) => set('deal_type', e.target.value)}
+            aria-label="Tipo de deal"
+            inputStyle={s.input}
+            options={DEAL_TYPES.map((dt) => ({ id: dt.value, label: dt.label }))}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <label style={s.label}>Tipo de contrato</label>
+          <FilterableSelect
+            value={form.contract_type || ''}
+            onChange={(e) => set('contract_type', e.target.value)}
+            aria-label="Tipo de contrato"
+            inputStyle={s.input}
+            placeholder="— Sin definir —"
+            options={CONTRACT_TYPES.map((ct) => ({ id: ct.value, label: ct.label }))}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <label style={s.label}>Fecha esperada de cierre</label>
+          <input
+            type="date"
+            style={s.input}
+            value={form.expected_close_date || ''}
+            onChange={(e) => set('expected_close_date', e.target.value)}
+          />
+        </div>
       </div>
-      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+
+      {/* Monto estimado — valoración del pipeline. Se refina con la cotización final. */}
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <label style={s.label}>Monto estimado (USD)</label>
+          <input
+            type="number"
+            min="0"
+            style={s.input}
+            value={form.one_time_amount_usd}
+            onChange={(e) => set('one_time_amount_usd', e.target.value)}
+            aria-label="Monto estimado USD"
+            placeholder="50000"
+          />
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--teal-mid)', paddingBottom: 10 }} aria-live="polite">
+          Booking: {fmtUsd(bookingPreview)}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        style={{ ...s.btnOutline, alignSelf: 'flex-start', fontSize: 12, padding: '4px 10px' }}
+        onClick={() => setShowAdvanced((x) => !x)}
+        aria-expanded={showAdvanced}
+        aria-label="Mostrar opciones avanzadas"
+      >
+        {showAdvanced ? '▾ Menos opciones' : '▸ Más opciones (Champion, EB, funding, drive)'}
+      </button>
+
+      {showAdvanced && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8, background: 'var(--surface-soft, #f8f7fa)', borderRadius: 8 }}>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!form.champion_identified}
+                onChange={(e) => set('champion_identified', e.target.checked)}
+                aria-label="Champion identificado"
+              />
+              Champion identificado
+            </label>
+            <label style={{ fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={!!form.economic_buyer_identified}
+                onChange={(e) => set('economic_buyer_identified', e.target.checked)}
+                aria-label="Economic Buyer identificado"
+              />
+              Economic Buyer identificado
+            </label>
+          </div>
+          <div>
+            <label style={s.label}>Funding source</label>
+            <FilterableSelect
+              value={form.funding_source}
+              onChange={(e) => set('funding_source', e.target.value)}
+              aria-label="Funding source"
+              inputStyle={s.input}
+              options={FUNDING_SOURCES.map((fs) => ({ id: fs.value, label: fs.label }))}
+            />
+          </div>
+          {form.funding_source !== 'client_direct' && (
+            <div>
+              <label style={s.label}>Monto de funding (USD) *</label>
+              <input
+                type="number"
+                min="0"
+                style={s.input}
+                value={form.funding_amount_usd}
+                onChange={(e) => set('funding_amount_usd', e.target.value)}
+                aria-label="Monto de funding USD"
+              />
+            </div>
+          )}
+          <div>
+            <label style={s.label}>Co-owner</label>
+            <FilterableSelect
+              value={form.co_owner_id || ''}
+              onChange={(e) => set('co_owner_id', e.target.value || '')}
+              aria-label="Co-owner"
+              inputStyle={s.input}
+              placeholder="— Sin co-owner —"
+              options={(users || []).map((u) => ({ id: String(u.id), label: u.name }))}
+            />
+          </div>
+          <div>
+            <label style={s.label}>Drive URL</label>
+            <input
+              type="url"
+              style={s.input}
+              value={form.drive_url}
+              onChange={(e) => set('drive_url', e.target.value)}
+              aria-label="Drive URL"
+              placeholder="https://drive.google.com/..."
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Brief de la oportunidad — insumo estructurado para preventa.
+          Cada sección es opcional al crear (un comercial rara vez tiene
+          los 5 bloques al inicio del deal); se enriquece a medida que avanza. */}
+      <fieldset style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, margin: 0 }}>
+        <legend style={{ fontSize: 12, fontWeight: 700, color: 'var(--purple-dark)', padding: '0 6px' }}>
+          📋 Brief de la oportunidad
+        </legend>
+        <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 10 }}>
+          Insumo para preventa: cuanto más rico, mejor cotización. Llena lo que tengas hoy y enriquécelo a medida que avanza el deal.
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {BRIEF_SECTIONS.map((sec) => (
+            <div key={sec.key}>
+              <label style={s.label} htmlFor={`brief-${sec.key}`}>
+                {sec.label} <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>· {sec.hint}</span>
+              </label>
+              <textarea
+                id={`brief-${sec.key}`}
+                style={{ ...s.input, minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }}
+                value={form[sec.key] || ''}
+                onChange={(e) => set(sec.key, e.target.value)}
+                placeholder={sec.placeholder}
+                aria-label={sec.label}
+              />
+            </div>
+          ))}
+        </div>
+      </fieldset>
+
+      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }} role="alert">{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
         <button type="submit" style={s.btn()} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>
@@ -137,14 +364,27 @@ function OpportunityForm({ initial, clients, onSave, onCancel, saving }) {
 }
 
 function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
-  const needsWinningQuot = target === 'won';
-  const needsReason      = target === 'lost' || target === 'cancelled';
+  const needsWinningQuot = target === 'closed_won';
+  const needsReason      = target === 'closed_lost';
+  const needsPostponedDate = target === 'postponed';
   const [winningId, setWinningId] = useState('');
   const [reason, setReason]       = useState('');
   const [notes, setNotes]         = useState('');
+  // SPEC-CRM-00 v1.1 PR2 — loss_reason formal (enum extendido + detail).
+  const [lossReason, setLossReason] = useState('');
+  const [lossDetail, setLossDetail] = useState('');
+  // SPEC-CRM-00 v1.1 — Postponed exige fecha futura de reactivación.
+  // Default: 30 días desde hoy (suficiente para que el comercial vuelva
+  // a tocar la opp pero no tan lejos que se olvide).
+  const defaultPostponedDate = (() => {
+    const d = new Date(); d.setDate(d.getDate() + 30);
+    return d.toISOString().slice(0, 10);
+  })();
+  const [postponedDate, setPostponedDate] = useState(defaultPostponedDate);
+  const [postponedReason, setPostponedReason] = useState('');
   const [err, setErr]             = useState('');
 
-  // fetch quotations list for this opp when marking as won
+  // Para closed_won, cargar cotizaciones de la opp así el usuario elige cuál ganó.
   const [quotations, setQuotations] = useState([]);
   useEffect(() => {
     if (needsWinningQuot && opp?.id) {
@@ -152,17 +392,33 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
     }
   }, [needsWinningQuot, opp?.id]);
 
+  // Validación local: la fecha de reactivación debe ser futura.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const postponedDateInvalid = needsPostponedDate && postponedDate <= todayIso;
+
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
     if (needsWinningQuot && !winningId) return setErr('Selecciona cotización ganadora');
-    if (needsReason && !reason) return setErr('Selecciona una razón');
+    if (needsReason) {
+      const lossErr = validateLossReason({ loss_reason: lossReason, loss_reason_detail: lossDetail });
+      if (lossErr) return setErr(lossErr);
+    }
+    if (needsPostponedDate && !postponedDate) return setErr('La fecha de reactivación es requerida');
+    if (needsPostponedDate && postponedDateInvalid) return setErr('La fecha de reactivación debe ser futura');
     try {
       await onConfirm({
         new_status: target,
         winning_quotation_id: winningId || undefined,
-        outcome_reason: reason || undefined,
+        // SPEC-CRM-00 v1.1 PR2 — campos formales del lost; el legacy
+        // outcome_reason se sigue mandando para que el backend pueda
+        // aceptar ambas formas durante el período de transición.
+        loss_reason: needsReason ? lossReason : undefined,
+        loss_reason_detail: needsReason ? lossDetail : undefined,
+        outcome_reason: needsReason ? lossReason : (reason || undefined),
         outcome_notes: notes || undefined,
+        postponed_until_date: needsPostponedDate ? postponedDate : undefined,
+        postponed_reason: needsPostponedDate ? (postponedReason || undefined) : undefined,
       });
     } catch (ex) {
       setErr(ex.message || 'Error');
@@ -180,14 +436,15 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
       {needsWinningQuot && (
         <div>
           <label style={s.label}>Cotización ganadora *</label>
-          <select style={s.input} value={winningId} onChange={(e) => setWinningId(e.target.value)} aria-label="Cotización ganadora" required>
-            <option value="">— Selecciona —</option>
-            {quotations.map((q) => (
-              <option key={q.id} value={q.id}>
-                {q.project_name} · {q.status}
-              </option>
-            ))}
-          </select>
+          <FilterableSelect
+            value={winningId}
+            onChange={(e) => setWinningId(e.target.value)}
+            aria-label="Cotización ganadora"
+            required
+            inputStyle={s.input}
+            placeholder="— Selecciona —"
+            options={quotations.map((q) => ({ id: String(q.id), label: q.project_name + ' · ' + q.status }))}
+          />
           {quotations.length === 0 && (
             <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 4 }}>
               Esta oportunidad no tiene cotizaciones todavía.
@@ -198,22 +455,74 @@ function TransitionModal({ opp, target, onConfirm, onCancel, saving }) {
       {needsReason && (
         <>
           <div>
-            <label style={s.label}>Razón *</label>
-            <select style={s.input} value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Razón" required>
-              <option value="">— Selecciona —</option>
-              {OUTCOME_REASONS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-            </select>
+            <label style={s.label}>Razón de pérdida *</label>
+            <FilterableSelect
+              value={lossReason}
+              onChange={(e) => setLossReason(e.target.value)}
+              aria-label="Razón de pérdida"
+              required
+              inputStyle={s.input}
+              placeholder="— Selecciona —"
+              options={LOSS_REASONS.map((r) => ({ id: r.value, label: r.label }))}
+            />
           </div>
           <div>
-            <label style={s.label}>Notas</label>
-            <textarea style={{ ...s.input, minHeight: 60, resize: 'vertical' }} value={notes} onChange={(e) => setNotes(e.target.value)} />
+            <label style={s.label}>
+              Descripción detallada * <span style={{ fontWeight: 400, color: 'var(--text-light)' }}>
+                (mín {LOSS_REASON_DETAIL_MIN} chars — {lossDetail.trim().length}/{LOSS_REASON_DETAIL_MIN})
+              </span>
+            </label>
+            <textarea
+              style={{ ...s.input, minHeight: 80, resize: 'vertical' }}
+              value={lossDetail}
+              onChange={(e) => setLossDetail(e.target.value)}
+              aria-label="Descripción detallada de la pérdida"
+              placeholder="Ej. Cliente eligió competidor X por feature Y. Plan: incluir Y en roadmap Q3 y reabrir oportunidad."
+              required
+            />
           </div>
         </>
       )}
-      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>}
+      {needsPostponedDate && (
+        <>
+          <div style={{ background: 'var(--surface-soft, #f8f7fa)', padding: 12, borderRadius: 8, fontSize: 12, color: 'var(--text-light)' }}>
+            ⚠ Las oportunidades postergadas <strong>NO entran</strong> en pipeline weighted hasta que se reactiven. Recibirás recordatorio el día indicado.
+          </div>
+          <div>
+            <label style={s.label}>Reactivar revisión el *</label>
+            <input
+              type="date"
+              style={s.input}
+              value={postponedDate}
+              min={todayIso}
+              onChange={(e) => setPostponedDate(e.target.value)}
+              aria-label="Fecha de reactivación"
+              required
+            />
+            {postponedDateInvalid && (
+              <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>
+                La fecha debe ser futura.
+              </div>
+            )}
+          </div>
+          <div>
+            <label style={s.label}>Razón de la postergación</label>
+            <textarea
+              style={{ ...s.input, minHeight: 60, resize: 'vertical' }}
+              value={postponedReason}
+              onChange={(e) => setPostponedReason(e.target.value)}
+              placeholder="Ej. Cliente postpuso decisión por restructura organizacional. Esperan resolver Q3."
+              aria-label="Razón de postergación"
+            />
+          </div>
+        </>
+      )}
+      {err && <div style={{ color: 'var(--danger)', fontSize: 13 }} role="alert">{err}</div>}
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
         <button type="button" style={s.btnOutline} onClick={onCancel}>Cancelar</button>
-        <button type="submit" style={s.btn()} disabled={saving}>{saving ? 'Guardando…' : 'Confirmar'}</button>
+        <button type="submit" style={s.btn()} disabled={saving || postponedDateInvalid}>
+          {saving ? 'Guardando…' : 'Confirmar'}
+        </button>
       </div>
     </form>
   );
@@ -225,11 +534,14 @@ export default function Opportunities() {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [clientFilter, setClientFilter] = useState('');
+  const [dealTypeFilter, setDealTypeFilter] = useState('');
   const [clients, setClients] = useState([]);
+  const [users, setUsers] = useState([]);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
   const [transitioning, setTransitioning] = useState(null); // { opp, target }
+  const sort = useSort({ field: 'created_at', dir: 'desc' });
 
   const load = useCallback(async (page = 1) => {
     setState((x) => ({ ...x, loading: true }));
@@ -239,6 +551,8 @@ export default function Opportunities() {
     if (search) qs.set('search', search);
     if (statusFilter) qs.set('status', statusFilter);
     if (clientFilter) qs.set('client_id', clientFilter);
+    if (dealTypeFilter) qs.set('deal_type', dealTypeFilter);
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/opportunities?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -247,7 +561,7 @@ export default function Opportunities() {
       // eslint-disable-next-line no-alert
       alert('Error cargando oportunidades: ' + e.message);
     }
-  }, [search, statusFilter, clientFilter]);
+  }, [search, statusFilter, clientFilter, dealTypeFilter, sort.field, sort.dir]);
 
   const loadClients = useCallback(async () => {
     try {
@@ -258,17 +572,51 @@ export default function Opportunities() {
     }
   }, []);
 
+  const loadUsers = useCallback(async () => {
+    try {
+      const r = await apiGet('/api/users?limit=200');
+      const list = Array.isArray(r?.data) ? r.data : Array.isArray(r) ? r : [];
+      setUsers(list);
+    } catch {
+      setUsers([]);
+    }
+  }, []);
+
   useEffect(() => { load(1); }, [load]);
   useEffect(() => { loadClients(); }, [loadClients]);
+  useEffect(() => { loadUsers(); }, [loadUsers]);
 
   const onSave = async (form) => {
     setSaving(true);
     try {
+      // Helper: transformar string vacío → null y string numérico → Number.
+      const num = (v) => (v === '' || v == null ? null : Number(v));
       const payload = {
         client_id: form.client_id,
         name: form.name,
         description: form.description,
         expected_close_date: form.expected_close_date || null,
+        // SPEC-CRM-00 v1.1 PR2 — modelo de revenue + funding + flags + drive.
+        revenue_type: form.revenue_type || 'one_time',
+        one_time_amount_usd: num(form.one_time_amount_usd),
+        mrr_usd: num(form.mrr_usd),
+        contract_length_months: num(form.contract_length_months),
+        champion_identified: !!form.champion_identified,
+        economic_buyer_identified: !!form.economic_buyer_identified,
+        funding_source: form.funding_source || 'client_direct',
+        funding_amount_usd: num(form.funding_amount_usd),
+        drive_url: form.drive_url || null,
+        // SPEC-CRM-01 — deal enrichment
+        deal_type: form.deal_type || 'new_business',
+        co_owner_id: form.co_owner_id || null,
+        // Tipo de contrato (project, capacity, resell)
+        contract_type: form.contract_type || null,
+        // Brief de la oportunidad
+        context_client: form.context_client || null,
+        context_scope: form.context_scope || null,
+        context_pains: form.context_pains || null,
+        context_requirements: form.context_requirements || null,
+        context_politics: form.context_politics || null,
       };
       if (editing?.id) {
         await apiPut(`/api/opportunities/${editing.id}`, payload);
@@ -360,16 +708,36 @@ export default function Opportunities() {
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Cliente</label>
-            <select style={s.input} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)} aria-label="Filtro por cliente">
-              <option value="">Cualquiera</option>
-              {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            <FilterableSelect
+              value={clientFilter}
+              onChange={(e) => setClientFilter(e.target.value)}
+              aria-label="Filtro por cliente"
+              inputStyle={s.input}
+              placeholder="Cualquiera"
+              options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
+            />
           </div>
           <div style={{ minWidth: 160 }}>
             <label style={s.label}>Estado</label>
-            <select style={s.input} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtro por estado">
-              {STATUS_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
+            <FilterableSelect
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filtro por estado"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={STAGES.map((st) => ({ id: st.id, label: st.label }))}
+            />
+          </div>
+          <div style={{ minWidth: 140 }}>
+            <label style={s.label}>Tipo de deal</label>
+            <FilterableSelect
+              value={dealTypeFilter}
+              onChange={(e) => setDealTypeFilter(e.target.value)}
+              aria-label="Filtro por tipo de deal"
+              inputStyle={s.input}
+              placeholder="Todos"
+              options={DEAL_TYPES.map((dt) => ({ id: dt.value, label: dt.label }))}
+            />
           </div>
         </div>
 
@@ -377,17 +745,22 @@ export default function Opportunities() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 800 }}>
             <thead>
               <tr>
-                {['Nombre', 'Cliente', 'Estado', 'Cotizaciones', 'Cierre esperado', 'Creada', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="name" style={s.th}>Nombre</SortableTh>
+                <th style={s.th}>Cliente</th>
+                <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <SortableTh sort={sort} field="deal_type" style={s.th}>Tipo</SortableTh>
+                <th style={s.th}>Cotizaciones</th>
+                <SortableTh sort={sort} field="expected_close_date" style={s.th}>Cierre esperado</SortableTh>
+                <SortableTh sort={sort} field="created_at" style={s.th}>Creada</SortableTh>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>
               {state.loading && (
-                <tr><td colSpan={7} style={{ ...s.td, textAlign: 'center', color: 'var(--text-light)' }}>Cargando…</td></tr>
+                <tr><td colSpan={8} style={{ ...s.td, textAlign: 'center', color: 'var(--text-light)' }}>Cargando…</td></tr>
               )}
               {!state.loading && state.data.length === 0 && (
-                <tr><td colSpan={7} style={{ ...s.td, textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>
+                <tr><td colSpan={8} style={{ ...s.td, textAlign: 'center', padding: 40, color: 'var(--text-light)' }}>
                   No hay oportunidades que coincidan con los filtros.
                 </td></tr>
               )}
@@ -402,6 +775,7 @@ export default function Opportunities() {
                     <td style={s.td}>
                       <StatusBadge domain="opportunity" value={o.status} label={STATUS_LABEL[o.status]} />
                     </td>
+                    <td style={{ ...s.td, fontSize: 11 }}>{(DEAL_TYPES.find((dt) => dt.value === o.deal_type) || {}).label || o.deal_type || '—'}</td>
                     <td style={{ ...s.td, textAlign: 'center' }}>{o.quotations_count ?? 0}</td>
                     <td style={s.td}>{o.expected_close_date ? String(o.expected_close_date).slice(0, 10) : '—'}</td>
                     <td style={s.td}>{o.created_at ? String(o.created_at).slice(0, 10) : '—'}</td>
@@ -447,6 +821,7 @@ export default function Opportunities() {
             <OpportunityForm
               initial={editing}
               clients={clients}
+              users={users}
               saving={saving}
               onCancel={() => { setShowForm(false); setEditing(null); }}
               onSave={onSave}

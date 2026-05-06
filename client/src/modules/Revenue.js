@@ -22,6 +22,7 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPut, apiPost } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`);
 
@@ -102,6 +103,7 @@ const formatPctForInput = (pctFraction) => pctFraction == null
 function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onCloseMonth }) {
   const isClosed = cell?.status === 'closed';
   const isProject = contract?.type === 'project';
+  const isAutoReal = !!cell?.auto_real;
   const planExists = cell != null;
   const totalValueUsd = Number(contract?.total_value_usd || 0);
   const ccyOrig = (contract?.original_currency || 'USD').toUpperCase();
@@ -109,8 +111,8 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
   const showDual = ccyOrig !== ccyDisplay;
   const fxMissing = !!cell?.fx_missing;
 
-  // Para projects el input es % (string). Para no-projects es la moneda
-  // original del contrato (no la display). El usuario en COP captura en COP.
+  // For non-capacity contracts, real is manually editable.
+  // For capacity contracts, real is auto-computed (read-only).
   const initialReal = isProject
     ? formatPctForInput(cell?.real_pct)
     : (cell?.real_amount_original != null ? String(cell.real_amount_original) : '');
@@ -127,6 +129,7 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
   }, [cell, isProject]);
 
   const flushReal = async () => {
+    if (isAutoReal) return; // capacity real is auto-computed, not editable
     if (real === realInitial.current) return;
     setSavingField('real');
     try {
@@ -144,16 +147,11 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
     } finally { setSavingField(null); }
   };
 
-  // En la celda vemos:
-  //   - PROY: amount_display (primary) + amount_original (sub) si difieren.
-  //          Para project mostramos también % en la primera línea.
-  //   - REAL: input en moneda original (o % para project) + display amount derivado.
   const projDisp = cell?.projected_amount_display;
   const projOrig = cell?.projected_amount_original;
   const realOrig = cell?.real_amount_original;
   const realDisp = cell?.real_amount_display;
 
-  // USD/display derivado en vivo cuando el usuario tipea % (project).
   const liveLocalUsd = isProject && real !== '' && !isNaN(Number(real))
     ? (Number(real) / 100) * totalValueUsd
     : null;
@@ -161,11 +159,11 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
   return (
     <td style={{ ...s.td, ...(isClosed ? s.cellClosed : {}) }}>
       <div style={s.cellInner}>
-        {/* PROY read-only */}
+        {/* PROY — plan declarado manualmente */}
         <div>
-          <span style={s.cellLabel}>Proy {fxMissing && <span title="No hay tasa configurada">⚠</span>}</span>
+          <span style={s.cellLabel}>Plan {fxMissing && <span title="No hay tasa configurada">⚠</span>}</span>
           <div style={{ ...s.cellInput, color: 'var(--text)', textAlign: 'right', cursor: 'default', padding: '3px 4px' }}>
-            {planExists
+            {planExists && projOrig > 0
               ? (isProject
                   ? (
                     <span title={fmtMoney(projOrig, ccyOrig)}>
@@ -189,31 +187,62 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
               : <span style={{ fontSize: 9, color: 'var(--text-light)', fontStyle: 'italic' }}>sin plan</span>}
           </div>
         </div>
+        {/* REAL — auto para capacity, manual para otros */}
         <div>
-          <span style={s.cellLabel}>Real {isProject ? '(%)' : `(${ccyOrig})`}</span>
-          <input
-            type="number" step="any" inputMode="decimal"
-            min="0" max={isProject ? '100' : undefined}
-            style={s.cellInput}
-            value={real}
-            disabled={isClosed || !planExists}
-            onChange={(e) => setReal(e.target.value)}
-            onBlur={flushReal}
-            placeholder={planExists ? (isProject ? '0' : '—') : 'declara plan'}
-            aria-label={`Real ${yyyymm}`}
-            title={!planExists
-              ? 'Declara primero el plan de reconocimiento del contrato'
-              : (isProject ? 'Avance del proyecto este mes (0-100%)' : `Monto real en ${ccyOrig}`)}
-          />
-          {planExists && (
-            <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
-              {isProject
-                ? (liveLocalUsd != null ? fmtMoney(liveLocalUsd, ccyOrig) : (realOrig != null ? fmtMoney(realOrig, ccyOrig) : '—'))
-                : (realDisp != null && showDual ? fmtMoney(realDisp, ccyDisplay) : (fxMissing ? '— sin tasa' : ''))}
-            </span>
+          <span style={s.cellLabel}>
+            Real {isAutoReal && <span title="Calculado automáticamente de asignaciones y tarifas" style={{ marginLeft: 2 }}>⚡</span>}
+            {!isAutoReal && (isProject ? '(%)' : `(${ccyOrig})`)}
+          </span>
+          {isAutoReal ? (
+            // Capacity: real is auto-computed, show read-only
+            <div style={{ ...s.cellInput, color: 'var(--text)', textAlign: 'right', cursor: 'default', padding: '3px 4px', fontWeight: 600 }}>
+              {realOrig != null && realOrig > 0
+                ? (
+                  <span>
+                    {fxMissing ? '— sin tasa' : fmtMoney(realDisp, ccyDisplay)}
+                    {showDual && realOrig != null && (
+                      <><br /><span style={{ fontSize: 9, color: 'var(--text-light)', fontWeight: 400 }}>{fmtMoney(realOrig, ccyOrig)}</span></>
+                    )}
+                  </span>
+                )
+                : <span style={{ fontSize: 9, color: 'var(--text-light)', fontStyle: 'italic', fontWeight: 400 }}>sin asignaciones</span>}
+            </div>
+          ) : (
+            // Non-capacity: editable input
+            <>
+              <input
+                type="number" step="any" inputMode="decimal"
+                min="0" max={isProject ? '100' : undefined}
+                style={s.cellInput}
+                value={real}
+                disabled={isClosed || !planExists}
+                onChange={(e) => setReal(e.target.value)}
+                onBlur={flushReal}
+                placeholder={planExists ? (isProject ? '0' : '—') : 'declara plan'}
+                aria-label={`Real ${yyyymm}`}
+                title={!planExists
+                  ? 'Declara primero el plan de reconocimiento del contrato'
+                  : (isProject ? 'Avance acumulado del proyecto a fin de mes (0-100%). El revenue del mes se calcula como (este % − % del mes anterior) × valor del contrato.' : `Monto real en ${ccyOrig}`)}
+              />
+              {planExists && (
+                <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
+                  {isProject
+                    ? (liveLocalUsd != null ? fmtMoney(liveLocalUsd, ccyOrig) : (realOrig != null ? fmtMoney(realOrig, ccyOrig) : '—'))
+                    : (realDisp != null && showDual ? fmtMoney(realDisp, ccyDisplay) : (fxMissing ? '— sin tasa' : ''))}
+                </span>
+              )}
+            </>
           )}
         </div>
-        {isClosed ? (
+        {/* Cumplimiento: real vs plan */}
+        {isAutoReal && realOrig != null && realOrig > 0 && projOrig > 0 && (
+          <div style={{ fontSize: 9, textAlign: 'right' }}>
+            <span style={{ color: cumplimientoColor(realOrig / projOrig), fontWeight: 700 }}>
+              {fmtCumplPct(realOrig / projOrig)}
+            </span>
+          </div>
+        )}
+        {!isAutoReal && (isClosed ? (
           <span style={s.closedBadge}>✓ Cerrado</span>
         ) : (real !== '' && real === realInitial.current && planExists && (
           <button type="button"
@@ -221,7 +250,7 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
                   style={{ fontSize: 10, color: 'var(--purple-dark)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'right' }}>
             cerrar mes →
           </button>
-        ))}
+        )))}
         {savingField && <span style={{ fontSize: 9, color: 'var(--warning)' }}>guardando…</span>}
       </div>
     </td>
@@ -337,26 +366,42 @@ export default function Revenue() {
         </label>
         <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
           Moneda
-          <select value={displayCurrency} onChange={(e) => setDisplayCurrency(e.target.value)}
-                  style={{ ...s.inp, width: 90 }} aria-label="Moneda de vista">
-            <option value="USD">USD</option>
-            <option value="COP">COP</option>
-            <option value="MXN">MXN</option>
-            <option value="GTQ">GTQ</option>
-            <option value="EUR">EUR</option>
-            <option value="PEN">PEN</option>
-          </select>
+          <FilterableSelect
+            value={displayCurrency}
+            onChange={(e) => setDisplayCurrency(e.target.value)}
+            inputStyle={{ ...s.inp, width: 90 }}
+            aria-label="Moneda de vista"
+            placeholder="— Moneda —"
+            options={[
+              { id: 'USD', label: 'USD' },
+              { id: 'COP', label: 'COP' },
+              { id: 'MXN', label: 'MXN' },
+              { id: 'GTQ', label: 'GTQ' },
+              { id: 'EUR', label: 'EUR' },
+              { id: 'PEN', label: 'PEN' },
+            ]}
+          />
         </label>
-        <select value={filters.type} onChange={(e) => setFilter('type', e.target.value)} style={s.inp} aria-label="Tipo">
-          <option value="">Todos los tipos</option>
-          <option value="capacity">Capacity</option>
-          <option value="project">Proyectos</option>
-          <option value="resell">Resell</option>
-        </select>
-        <select value={filters.owner_id} onChange={(e) => setFilter('owner_id', e.target.value)} style={s.inp} aria-label="Owner">
-          <option value="">Todos los owners</option>
-          {users.map((u) => <option key={u.id} value={u.id}>{u.name || u.email}</option>)}
-        </select>
+        <FilterableSelect
+          value={filters.type}
+          onChange={(e) => setFilter('type', e.target.value)}
+          inputStyle={s.inp}
+          aria-label="Tipo"
+          placeholder="Todos los tipos"
+          options={[
+            { id: 'capacity', label: 'Capacity' },
+            { id: 'project', label: 'Proyectos' },
+            { id: 'resell', label: 'Resell' },
+          ]}
+        />
+        <FilterableSelect
+          value={filters.owner_id}
+          onChange={(e) => setFilter('owner_id', e.target.value)}
+          inputStyle={s.inp}
+          aria-label="Owner"
+          placeholder="Todos los owners"
+          options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
+        />
         <input type="text" placeholder="País (CO, MX, …)" maxLength={3}
                value={filters.country} onChange={(e) => setFilter('country', e.target.value)}
                style={{ ...s.inp, width: 110 }} aria-label="País" />

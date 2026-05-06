@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { apiGet, apiPost, apiPut } from '../utils/apiV2';
 import CandidatesModal from './CandidatesModal';
+import BulkAssignModal from './BulkAssignModal';
+import FilterableSelect from '../shell/FilterableSelect';
 
 /**
  * Capacity Planner — US-PLN-1 (timeline) + US-PLN-2 (metric cards).
@@ -170,6 +172,29 @@ const s = {
     whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
   }),
 
+  // Empleados inactivos (terminated) — separador + fila atenuada
+  inactiveSeparator: (weeksLen) => ({
+    display: 'grid',
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
+    borderTop: '2px solid var(--ds-border, #ddd)',
+    background: 'var(--ds-bg-soft, #f4f5f7)',
+    minHeight: 32,
+  }),
+  inactiveSeparatorCell: {
+    padding: '6px 12px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--ds-text-dim, #888)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    position: 'sticky',
+    left: 0,
+    background: 'var(--ds-bg-soft, #f4f5f7)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+
   empty: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))', fontSize: 14 },
   error: { padding: 16, background: 'var(--ds-bad-soft, #fff0f0)', color: 'oklch(0.45 0.18 25)', borderRadius: 'var(--ds-radius, 8px)', fontSize: 13 },
   loading: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))' },
@@ -284,12 +309,26 @@ const ASSIGNMENT_STATUSES = [
   { value: 'cancelled', label: 'Cancelada' },
 ];
 
+const VALID_RATE_CURRENCIES = ['USD', 'COP', 'EUR', 'MXN', 'GBP'];
+
 function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
+  const navigate = useNavigate();
   const [asg, setAsg]         = useState(null);
   const [form, setForm]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving]   = useState(false);
   const [err, setErr]         = useState('');
+  // Rate history
+  const [rateHistory, setRateHistory] = useState([]);
+  const [showAddRate, setShowAddRate] = useState(false);
+  const [newRate, setNewRate] = useState({ effective_date: '', client_rate: '', reason: '' });
+  const [savingRate, setSavingRate] = useState(false);
+
+  const loadRateHistory = useCallback(() => {
+    apiGet(`/api/assignments/${assignmentId}/rate-history`)
+      .then(setRateHistory)
+      .catch((e) => console.warn('rate-history load failed:', e?.message || e));
+  }, [assignmentId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -299,12 +338,14 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
         if (cancelled) return;
         setAsg(data);
         setForm({
-          weekly_hours: data.weekly_hours ?? '',
-          start_date:   data.start_date   ? data.start_date.slice(0, 10)  : '',
-          end_date:     data.end_date     ? data.end_date.slice(0, 10)    : '',
-          role_title:   data.role_title   || '',
-          notes:        data.notes        || '',
-          status:       data.status       || 'planned',
+          weekly_hours:         data.weekly_hours ?? '',
+          start_date:           data.start_date   ? data.start_date.slice(0, 10)  : '',
+          end_date:             data.end_date     ? data.end_date.slice(0, 10)    : '',
+          role_title:           data.role_title   || '',
+          notes:                data.notes        || '',
+          status:               data.status       || 'planned',
+          client_rate:          data.client_rate  != null ? String(data.client_rate) : '',
+          client_rate_currency: data.client_rate_currency || data.contract_currency || 'USD',
         });
       })
       .catch((e) => { if (!cancelled) setErr(e.message || 'Error cargando asignación'); })
@@ -312,11 +353,14 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
     return () => { cancelled = true; };
   }, [assignmentId]);
 
+  useEffect(() => { loadRateHistory(); }, [loadRateHistory]);
+
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
   const save = async (e) => {
     e.preventDefault();
     setSaving(true); setErr('');
+    const isCapacity = asg && asg.contract_type === 'capacity';
     try {
       await apiPut(`/api/assignments/${assignmentId}`, {
         weekly_hours: Number(form.weekly_hours),
@@ -325,6 +369,10 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
         role_title:   form.role_title || undefined,
         notes:        form.notes      || undefined,
         status:       form.status,
+        ...(isCapacity && {
+          client_rate:          form.client_rate !== '' ? Number(form.client_rate) : null,
+          client_rate_currency: form.client_rate_currency || 'USD',
+        }),
       });
       onSaved();
       onClose();
@@ -352,7 +400,20 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
       <div style={ms.box}>
         <div style={ms.title}>
           Editar asignación
-          {asg && <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--ds-text-soft, var(--text-light))', marginLeft: 8 }}>{asg.contract_name} · {asg.employee_first_name} {asg.employee_last_name}</span>}
+          {asg && (
+            <span style={{ fontWeight: 400, fontSize: 13, color: 'var(--ds-text-soft, var(--text-light))', marginLeft: 8 }}>
+              {asg.contract_name} · {asg.employee_first_name} {asg.employee_last_name}
+              {asg.contract_type === 'capacity' && (
+                <button
+                  type="button"
+                  onClick={() => navigate(`/revenue?contract_id=${asg.contract_id}`)}
+                  style={{ marginLeft: 10, fontSize: 12, color: 'var(--ds-accent, var(--purple-dark))', background: 'none', border: 'none', cursor: 'pointer', padding: 0, textDecoration: 'underline' }}
+                >
+                  Ver proyección
+                </button>
+              )}
+            </span>
+          )}
         </div>
         {loading && <div style={{ fontSize: 13 }}>Cargando…</div>}
         {err && <div style={{ color: 'var(--ds-bad, #ef4444)', fontSize: 13, marginBottom: 8 }}>{err}</div>}
@@ -378,14 +439,109 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
             </div>
             <div style={ms.row}>
               <label style={ms.label}>Estado</label>
-              <select style={ms.input} value={form.status} onChange={(e) => set('status', e.target.value)}>
-                {ASSIGNMENT_STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-              </select>
+              <FilterableSelect
+                value={form.status}
+                onChange={(e) => set('status', e.target.value)}
+                inputStyle={ms.input}
+                options={ASSIGNMENT_STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+              />
             </div>
             <div style={ms.row}>
               <label style={ms.label}>Notas</label>
               <textarea style={{ ...ms.input, minHeight: 56, resize: 'vertical' }} value={form.notes} onChange={(e) => set('notes', e.target.value)} />
             </div>
+            {asg && asg.contract_type === 'capacity' && (
+              <div style={{ background: 'var(--ds-accent-soft, #faf7ff)', border: '1px solid var(--ds-accent-border, #e0d4f5)', borderRadius: 8, padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ds-accent-text, var(--purple-dark))', marginBottom: 8 }}>
+                  Historial de tarifas
+                </div>
+                {rateHistory.length > 0 ? (
+                  <div style={{ fontSize: 11, marginBottom: 8 }}>
+                    {rateHistory.map((r) => (
+                      <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0', borderBottom: '1px solid var(--ds-border, #eee)' }}>
+                        <div>
+                          <strong>{new Intl.NumberFormat('en-US', { style: 'currency', currency: r.client_rate_currency || 'USD', maximumFractionDigits: 0 }).format(r.client_rate)}</strong>
+                          <span style={{ color: 'var(--ds-text-soft, var(--text-light))', marginLeft: 6 }}>
+                            desde {r.effective_date?.slice(0, 10)}
+                          </span>
+                          {r.reason && <span style={{ color: 'var(--ds-text-soft)', marginLeft: 6, fontStyle: 'italic' }}>({r.reason})</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 11, color: 'var(--ds-text-soft, var(--text-light))', marginBottom: 8 }}>
+                    Sin historial de tarifas.
+                  </div>
+                )}
+                {/* Tarifa actual (editable, se refleja en assignments.client_rate) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10, marginBottom: 6 }}>
+                  <div>
+                    <label style={ms.label}>Moneda</label>
+                    <FilterableSelect
+                      value={form.client_rate_currency}
+                      onChange={(e) => set('client_rate_currency', e.target.value)}
+                      inputStyle={ms.input}
+                      options={VALID_RATE_CURRENCIES.map((c) => ({ id: c, label: c }))}
+                    />
+                  </div>
+                  <div>
+                    <label style={ms.label}>Tarifa actual</label>
+                    <input style={ms.input} type="number" min="0" step="0.01" value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Tarifa mensual" />
+                  </div>
+                </div>
+                {/* Agregar nueva tarifa futura */}
+                {!showAddRate ? (
+                  <button type="button" onClick={() => { setShowAddRate(true); setNewRate({ effective_date: '', client_rate: '', reason: '' }); }}
+                    style={{ fontSize: 11, color: 'var(--ds-accent, var(--purple-dark))', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0', fontWeight: 600 }}>
+                    + Agregar cambio de tarifa
+                  </button>
+                ) : (
+                  <div style={{ background: '#fff', borderRadius: 6, padding: 10, marginTop: 6, border: '1px solid var(--ds-border, #ddd)' }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Nueva tarifa</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 6 }}>
+                      <div>
+                        <label style={ms.label}>Desde</label>
+                        <input style={ms.input} type="date" value={newRate.effective_date} onChange={(e) => setNewRate((r) => ({ ...r, effective_date: e.target.value }))} />
+                      </div>
+                      <div>
+                        <label style={ms.label}>Tarifa</label>
+                        <input style={ms.input} type="number" min="0" step="0.01" value={newRate.client_rate} onChange={(e) => setNewRate((r) => ({ ...r, client_rate: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div style={{ marginBottom: 6 }}>
+                      <label style={ms.label}>Motivo</label>
+                      <input style={ms.input} type="text" value={newRate.reason} onChange={(e) => setNewRate((r) => ({ ...r, reason: e.target.value }))} placeholder="Ej: Ascenso a L7, Incremento anual" />
+                    </div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button type="button" disabled={savingRate || !newRate.effective_date || !newRate.client_rate}
+                        onClick={async () => {
+                          setSavingRate(true);
+                          try {
+                            await apiPost(`/api/assignments/${assignmentId}/rate-history`, {
+                              effective_date: newRate.effective_date,
+                              client_rate: Number(newRate.client_rate),
+                              client_rate_currency: form.client_rate_currency || 'USD',
+                              reason: newRate.reason || null,
+                            });
+                            loadRateHistory();
+                            set('client_rate', newRate.client_rate);
+                            setShowAddRate(false);
+                          } catch (ex) { setErr(ex.message); }
+                          finally { setSavingRate(false); }
+                        }}
+                        style={{ ...ms.btnPrimary, fontSize: 11, padding: '5px 12px' }}>
+                        {savingRate ? 'Guardando...' : 'Agregar'}
+                      </button>
+                      <button type="button" onClick={() => setShowAddRate(false)} style={{ ...ms.btnGhost, fontSize: 11, padding: '5px 12px' }}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
+                <div style={{ fontSize: 10, color: 'var(--ds-text-soft, var(--text-light))', marginTop: 6 }}>
+                  La proyección de ingresos usa el historial de tarifas para calcular el monto correcto por mes.
+                </div>
+              </div>
+            )}
             <div style={ms.foot}>
               <button type="button" style={ms.btnGhost} onClick={onClose}>Cancelar</button>
               <button type="submit" style={ms.btnPrimary} disabled={saving}>{saving ? 'Guardando…' : 'Guardar'}</button>
@@ -397,14 +553,15 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
   );
 }
 
-function AssignmentBar({ a, onOpen, capacity }) {
+function AssignmentBar({ a, onOpen, capacity, weekIndex }) {
   const cap = Number(capacity) || 0;
   const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
   const pctStr = pctVal !== null ? `${pctVal}%` : '—';
+  const actualHrs = (a.actual_hours_by_week && weekIndex != null) ? (a.actual_hours_by_week[weekIndex] || 0) : 0;
   return (
     <div
       style={{ ...s.bar(a.color), cursor: onOpen ? 'pointer' : 'default' }}
-      title={`${a.contract_name} · ${a.weekly_hours}h/sem`}
+      title={`${a.contract_name} · ${a.weekly_hours}h/sem${actualHrs > 0 ? ` · real: ${actualHrs}h` : ''}`}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
       role={onOpen ? 'button' : undefined}
       tabIndex={onOpen ? 0 : undefined}
@@ -412,6 +569,9 @@ function AssignmentBar({ a, onOpen, capacity }) {
     >
       <span style={s.barName}>{a.contract_name}</span>
       <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
+      {actualHrs > 0 && (
+        <span style={{ ...s.barMeta, fontSize: 9, opacity: 0.95, fontStyle: 'italic' }}>real: {actualHrs}h</span>
+      )}
     </div>
   );
 }
@@ -424,7 +584,7 @@ function UnassignedBar({ r }) {
   );
 }
 
-function EmployeeRow({ emp, weeks, onOpen }) {
+function EmployeeRow({ emp, weeks, onOpen, inactive }) {
   // Index assignments by week for O(1) lookup when rendering.
   const byWeek = useMemo(() => {
     const map = new Map();
@@ -438,23 +598,47 @@ function EmployeeRow({ emp, weeks, onOpen }) {
     return map;
   }, [emp.assignments]);
 
+  const rowStyle = inactive
+    ? { ...s.row(weeks.length), opacity: 0.6, background: 'var(--ds-bg-soft, #f9f9f9)' }
+    : s.row(weeks.length);
+
+  const empCellStyle = inactive
+    ? { ...s.empCell, background: 'var(--ds-bg-soft, #f4f4f4)' }
+    : s.empCell;
+
   return (
-    <div style={s.row(weeks.length)} data-testid={`emp-row-${emp.id}`}>
-      <div style={s.empCell}>
-        <div style={s.empName} title={emp.full_name}>{emp.full_name}</div>
+    <div style={rowStyle} data-testid={`emp-row-${emp.id}`}>
+      <div style={empCellStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <div style={s.empName} title={emp.full_name}>{emp.full_name}</div>
+          {inactive && (
+            <span style={{
+              fontSize: 9.5, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+              background: 'var(--ds-text-dim, #888)', color: '#fff',
+              textTransform: 'uppercase', letterSpacing: 0.4, flexShrink: 0,
+            }}>
+              Inactivo
+            </span>
+          )}
+        </div>
         <div style={s.empMeta}>{emp.level} · {emp.area_name || '—'}</div>
         <div style={s.empCap}>{emp.weekly_capacity_hours}h/sem</div>
       </div>
       {weeks.map((w, i) => {
         const weekInfo = emp.weekly[i] || { hours: 0, utilization_pct: 0, bucket: 'idle' };
         const asgs = byWeek.get(i) || [];
-        const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : '#fff';
+        const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : (inactive ? 'var(--ds-bg-soft, #f9f9f9)' : '#fff');
         return (
           <div key={w.index} style={s.weekCell(cellBg)} data-testid={`cell-${emp.id}-${i}`}>
-            {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} />)}
+            {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} weekIndex={i} />)}
             <div style={s.chip(weekInfo.bucket)}>
               {weekInfo.hours > 0 ? `${weekInfo.utilization_pct}%` : '—'}
             </div>
+            {weekInfo.actual_hours > 0 && (
+              <div style={{ fontSize: 9, color: 'var(--ds-text-dim, #888)', fontStyle: 'italic', marginTop: 1, fontFamily: 'var(--font-mono, inherit)' }}>
+                real: {weekInfo.actual_hours}h
+              </div>
+            )}
           </div>
         );
       })}
@@ -635,9 +819,33 @@ function buildProjectsView(data) {
   const out = [];
   for (const bucket of byId.values()) {
     if (bucket.summary.length === 0 && bucket.requests.size === 0 && bucket.unkeyed.length === 0) continue;
+    const reqs = Array.from(bucket.requests.values());
+    // Coverage: total weekly hours requested vs assigned.
+    // requested_hours = sum of (request.quantity × request.weekly_hours) for all requests
+    // assigned_hours  = sum of weekly_hours across all actual assignments
+    let requested_hours = 0;
+    let assigned_hours = 0;
+    for (const entry of reqs) {
+      if (entry.request) {
+        const qty = Number(entry.request.quantity) || 1;
+        const hrs = Number(entry.request.weekly_hours) || 0;
+        requested_hours += qty * hrs;
+      }
+      for (const a of entry.assignments) {
+        assigned_hours += Number(a.weekly_hours) || 0;
+      }
+    }
+    // Unkeyed assignments (no request) also count as assigned.
+    for (const a of bucket.unkeyed) {
+      assigned_hours += Number(a.weekly_hours) || 0;
+    }
+    const coverage_pct = requested_hours > 0 ? Math.round((assigned_hours / requested_hours) * 100) : null;
     out.push({
       ...bucket,
-      requests: Array.from(bucket.requests.values()),
+      requests: reqs,
+      requested_hours,
+      assigned_hours,
+      coverage_pct,
     });
   }
   out.sort((a, b) => (a.contract.name || '').localeCompare(b.contract.name || ''));
@@ -682,6 +890,21 @@ function ContractRow({ bucket, weeks, onOpen, isExpanded, onToggle }) {
           <div style={s.contractName} title={bucket.contract.name}>{bucket.contract.name}</div>
         </div>
         <div style={s.contractClient}>{bucket.contract.client_name || '—'}</div>
+        {bucket.requested_hours > 0 && (() => {
+          const pct = bucket.coverage_pct;
+          const assigned = bucket.assigned_hours;
+          const requested = bucket.requested_hours;
+          const color = pct >= 100 ? 'var(--ds-ok-text, #166534)' : pct >= 50 ? 'oklch(0.45 0.12 80)' : 'var(--ds-bad-text, #991b1b)';
+          const bg = pct >= 100 ? 'var(--ds-ok-soft, #dcfce7)' : pct >= 50 ? 'var(--ds-warn-soft, #fef9c3)' : 'var(--ds-bad-soft, #fee2e2)';
+          const icon = pct >= 100 ? '✓' : pct > 0 ? '⚠' : '✗';
+          return (
+            <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 4, background: bg, color, fontFamily: 'var(--font-mono, monospace)', letterSpacing: '-0.02em' }}>
+                {icon} {assigned}h / {requested}h ({pct}%)
+              </span>
+            </div>
+          );
+        })()}
       </div>
       {weeks.map((w, i) => {
         const items = byWeek.get(i) || [];
@@ -761,8 +984,10 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
       {weeks.map((w, i) => {
         const items = assignByWeek.get(i) || [];
         const inOpenRange = request && request.week_range && i >= request.week_range[0] && i <= request.week_range[1];
-        const showUnassigned = items.length === 0 && inOpenRange && missing > 0;
-        const cellStyle = showUnassigned
+        // Show N yellow bars for each missing slot, even when some are filled.
+        const missingInCell = inOpenRange ? missing : 0;
+        const hasYellow = missingInCell > 0;
+        const cellStyle = (hasYellow && items.length === 0)
           ? { ...s.weekCell('repeating-linear-gradient(45deg, #fffbea, #fffbea 10px, #fff7d6 10px, #fff7d6 20px)') }
           : s.weekCell('transparent');
         return (
@@ -787,11 +1012,15 @@ function RequestSubRow({ bucket, entry, weeks, onOpenCandidates, onOpen }) {
                 </div>
               );
             })}
-            {showUnassigned && (
-              <div style={s.unassignedBar(request.color || bucket.contract.color || '#e98b3f')} title={`Sin asignar · ${title}`}>
-                Sin asignar
+            {Array.from({ length: missingInCell }, (_, slotIdx) => (
+              <div
+                key={`vacant-${slotIdx}`}
+                style={{ ...s.unassignedBar(request?.color || bucket.contract.color || '#e98b3f'), cursor: 'pointer' }}
+                title={`Vacante · clic para asignar · ${title}`}
+              >
+                + Asignar
               </div>
-            )}
+            ))}
           </div>
         );
       })}
@@ -907,6 +1136,11 @@ export default function CapacityPlanner() {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(true);
   const [areas, setAreas] = useState([]);
+  // Ordenamiento de la vista Personas por utilización de una semana.
+  // sortWeek: índice de columna (0-based) | null = orden alfabético.
+  // sortDir: 'asc' (menor carga primero) | 'desc' (mayor carga primero).
+  const [sortWeek, setSortWeek] = useState(null);
+  const [sortDir, setSortDir]   = useState('asc');
   // US-RR-3: when an unassigned row is clicked we open the candidates
   // modal here instead of navigating away — the user stays in-context.
   const [openCandidatesFor, setOpenCandidatesFor] = useState(null);
@@ -916,10 +1150,27 @@ export default function CapacityPlanner() {
   const [editingAssignmentId, setEditingAssignmentId] = useState(null);
   // SPEC-009: accordion state — keyed by contract_id, true = expanded
   const [expandedProjects, setExpandedProjects] = useState({});
+  // SPEC-RM-00: bulk assignment modal
+  const [showBulkModal, setShowBulkModal] = useState(false);
 
   const toggleProject = useCallback((contractId) => {
     setExpandedProjects((prev) => ({ ...prev, [contractId]: !prev[contractId] }));
   }, []);
+
+  // Ciclo: sin orden → asc (↑ menor carga) → desc (↓ mayor carga) → sin orden.
+  const handleSortWeek = useCallback((weekIdx) => {
+    setSortWeek((prev) => {
+      if (prev !== weekIdx) { setSortDir('asc');  return weekIdx; }
+      if (sortDir === 'asc') { setSortDir('desc'); return weekIdx; }
+      setSortDir('asc'); return null;
+    });
+  }, [sortDir]);
+
+  // Resetear sort si cambia el número de semanas (el índice puede quedar fuera de rango).
+  useEffect(() => {
+    setSortWeek(null);
+    setSortDir('asc');
+  }, [weeks]);
 
   // When a single contract is filtered, show it expanded by default.
   const effectiveExpandedProjects = useMemo(() => {
@@ -967,6 +1218,48 @@ export default function CapacityPlanner() {
 
   useEffect(() => { load(); }, [load]);
 
+  const handleExport = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('dvpnyx_token');
+      const qs = buildQuery(filters);
+      const resp = await fetch(`/api/capacity/planner/export?${qs}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error('Error al exportar');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `planner_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (ex) {
+      setErr(ex.message || 'Error exportando Excel');
+    }
+  }, [filters]);
+
+  const handleExportActualHours = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('dvpnyx_token');
+      const p = new URLSearchParams({ week_from: start, week_to: shiftIso(start, (weeks - 1) * 7 + 6) });
+      if (contractId) p.set('contract_id', contractId);
+      if (areaId) p.set('area_id', areaId);
+      const resp = await fetch(`/api/rm/actual-hours/export?${p}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error('Error al exportar');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `DVPNYX_HorasReales_${start}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (ex) {
+      setErr(ex.message || 'Error exportando horas reales');
+    }
+  }, [start, weeks, contractId, areaId]);
+
   useEffect(() => {
     // Areas are a small lookup; fetch once for the filter dropdown.
     apiGet('/api/areas').then((r) => setAreas((r && r.data) || [])).catch(() => {});
@@ -975,6 +1268,25 @@ export default function CapacityPlanner() {
   const contracts = data?.contracts || [];
   const wks = data?.weeks || [];
   const projects = useMemo(() => buildProjectsView(data), [data]);
+
+  // Empleados separados en activos e inactivos (terminated O con end_date pasado).
+  // Los inactivos siempre van al fondo en su propia sección sombreada, nunca se mezclan con el sort.
+  const { sortedEmployees, inactiveEmployees } = useMemo(() => {
+    const all = data?.employees || [];
+    const active   = all.filter((e) => !e.inactive);
+    const inactive = all.filter((e) => e.inactive)
+                        .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
+
+    const sorted = (sortWeek === null || sortWeek === undefined)
+      ? active
+      : [...active].sort((a, b) => {
+          const pctA = a.weekly?.[sortWeek]?.utilization_pct ?? 0;
+          const pctB = b.weekly?.[sortWeek]?.utilization_pct ?? 0;
+          return sortDir === 'asc' ? pctA - pctB : pctB - pctA;
+        });
+
+    return { sortedEmployees: sorted, inactiveEmployees: inactive };
+  }, [data, sortWeek, sortDir]);
 
   return (
     <div style={s.page}>
@@ -1033,45 +1345,72 @@ export default function CapacityPlanner() {
         </div>
 
         {/* SPEC-006 / Spec 3: selector de rango + flechas dinámicas */}
-        <select
-          style={s.select}
-          value={weeks}
+        <FilterableSelect
+          value={String(weeks)}
           onChange={(e) => patchParams({ weeks: e.target.value })}
           aria-label="Rango de semanas"
           data-testid="weeks-range-select"
-        >
-          <option value="1">1 semana</option>
-          <option value="2">2 semanas</option>
-          <option value="4">4 semanas</option>
-          <option value="8">8 semanas</option>
-        </select>
+          inputStyle={s.select}
+          options={[
+            { id: '1', label: '1 semana' },
+            { id: '2', label: '2 semanas' },
+            { id: '4', label: '4 semanas' },
+            { id: '8', label: '8 semanas' },
+          ]}
+        />
 
         <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, -(weeks * 7)) })} aria-label={`${weeks} semanas atrás`}>←</button>
         <button type="button" style={s.btn} onClick={() => patchParams({ start: todayMondayIso() })}>Hoy</button>
         <button type="button" style={s.btn} onClick={() => patchParams({ start: shiftIso(start, weeks * 7) })} aria-label={`${weeks} semanas adelante`}>→</button>
 
-        <select style={s.select} value={contractId} onChange={(e) => patchParams({ contract_id: e.target.value })} aria-label="Filtro contrato">
-          <option value="">Todos los contratos</option>
-          {contracts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        <FilterableSelect
+          value={contractId}
+          onChange={(e) => patchParams({ contract_id: e.target.value })}
+          aria-label="Filtro contrato"
+          inputStyle={s.select}
+          placeholder="Todos los contratos"
+          options={contracts.map((c) => ({ id: String(c.id), label: c.name }))}
+        />
 
-        <select style={s.select} value={areaId} onChange={(e) => patchParams({ area_id: e.target.value })} aria-label="Filtro área">
-          <option value="">Todas las áreas</option>
-          {areas.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-        </select>
+        <FilterableSelect
+          value={areaId}
+          onChange={(e) => patchParams({ area_id: e.target.value })}
+          aria-label="Filtro área"
+          inputStyle={s.select}
+          placeholder="Todas las áreas"
+          options={areas.map((a) => ({ id: String(a.id), label: a.name }))}
+        />
 
-        <select style={s.select} value={levelMin} onChange={(e) => patchParams({ level_min: e.target.value })} aria-label="Nivel mínimo">
-          <option value="">Nivel min</option>
-          {['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
-        <select style={s.select} value={levelMax} onChange={(e) => patchParams({ level_max: e.target.value })} aria-label="Nivel máximo">
-          <option value="">Nivel max</option>
-          {['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
+        <FilterableSelect
+          value={levelMin}
+          onChange={(e) => patchParams({ level_min: e.target.value })}
+          aria-label="Nivel mínimo"
+          inputStyle={s.select}
+          placeholder="Nivel min"
+          options={['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => ({ id: l, label: l }))}
+        />
+        <FilterableSelect
+          value={levelMax}
+          onChange={(e) => patchParams({ level_max: e.target.value })}
+          aria-label="Nivel máximo"
+          inputStyle={s.select}
+          placeholder="Nivel max"
+          options={['L1','L2','L3','L4','L5','L6','L7','L8','L9','L10','L11'].map((l) => ({ id: l, label: l }))}
+        />
 
         {(contractId || areaId || levelMin || levelMax || search || projectSearch) && (
           <button type="button" style={s.btn} onClick={() => patchParams({ contract_id: '', area_id: '', level_min: '', level_max: '', search: '', project_search: '' })}>Limpiar filtros</button>
         )}
+
+        <button type="button" style={{ ...s.btn, fontWeight: 600 }} onClick={handleExport} aria-label="Exportar Excel">
+          Exportar Excel
+        </button>
+        <button type="button" style={{ ...s.btn, fontWeight: 600 }} onClick={handleExportActualHours} aria-label="Exportar horas reales">
+          Exportar horas reales
+        </button>
+        <button type="button" style={{ ...s.btn, fontWeight: 600, background: 'var(--ds-accent, var(--purple-dark))', color: '#fff' }} onClick={() => setShowBulkModal(true)} aria-label="Asignar en lote">
+          Asignar en lote
+        </button>
 
         {view === 'employees' && (
           <input style={s.input} type="search" placeholder="Buscar por nombre…" value={search} onChange={(e) => patchParams({ search: e.target.value })} aria-label="Buscar empleado" />
@@ -1095,24 +1434,76 @@ export default function CapacityPlanner() {
                 <div style={{ ...s.headCell, textAlign: 'left', borderLeft: 'none', fontSize: 11, fontWeight: 500 }}>
                   {view === 'projects' ? 'Proyecto / solicitud' : 'Empleado'}
                 </div>
-                {wks.map((w) => (
-                  <div key={w.index} style={s.headCell} data-testid={`week-${w.iso_week}`}>
-                    <div style={s.headCellWeek}>{w.label}</div>
-                    <div style={s.headCellDate}>{w.short_label}</div>
-                  </div>
-                ))}
+                {wks.map((w, i) => {
+                  const isActive = view === 'employees' && sortWeek === i;
+                  return (
+                    <div
+                      key={w.index}
+                      style={{
+                        ...s.headCell,
+                        ...(view === 'employees' ? {
+                          cursor: 'pointer',
+                          userSelect: 'none',
+                          background: isActive ? 'var(--ds-accent-soft, #f0ebff)' : undefined,
+                          color: isActive ? 'var(--ds-accent-text, var(--purple-dark))' : undefined,
+                        } : {}),
+                      }}
+                      data-testid={`week-${w.iso_week}`}
+                      onClick={view === 'employees' ? () => handleSortWeek(i) : undefined}
+                      title={view === 'employees' ? (isActive ? (sortDir === 'asc' ? 'Menor carga primero — click para invertir' : 'Mayor carga primero — click para quitar orden') : 'Click para ordenar por carga esta semana') : undefined}
+                      role={view === 'employees' ? 'button' : undefined}
+                      tabIndex={view === 'employees' ? 0 : undefined}
+                      onKeyDown={view === 'employees' ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSortWeek(i); } } : undefined}
+                    >
+                      <div style={s.headCellWeek}>
+                        {w.label}
+                        {isActive && (
+                          <span style={{ marginLeft: 4, fontSize: 10 }} aria-label={sortDir === 'asc' ? 'menor primero' : 'mayor primero'}>
+                            {sortDir === 'asc' ? '↑' : '↓'}
+                          </span>
+                        )}
+                      </div>
+                      <div style={s.headCellDate}>
+                        {w.short_label}
+                        {!isActive && view === 'employees' && (
+                          <span style={{ marginLeft: 3, opacity: 0.35, fontSize: 9 }}>↕</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               {view === 'employees' ? (
                 <>
-                  {/* Employees */}
-                  {data.employees.length === 0 && (
+                  {/* Empleados activos */}
+                  {sortedEmployees.length === 0 && inactiveEmployees.length === 0 && (
                     <div style={s.empty}>No hay empleados que cumplan los filtros.</div>
                   )}
-                  {data.employees.map((emp) => <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />)}
+                  {sortedEmployees.map((emp) => (
+                    <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />
+                  ))}
 
-                  {/* Unassigned requests (US-PLN-5 + US-RR-3: click → candidates modal) */}
-                  {data.open_requests.map((r) => (
+                  {/* Separador + empleados inactivos (terminated con historial en el viewport) */}
+                  {inactiveEmployees.length > 0 && (
+                    <>
+                      <div style={s.inactiveSeparator(wks.length)}>
+                        <div style={s.inactiveSeparatorCell}>
+                          <span>⚠ Ya no en la empresa</span>
+                          <span style={{ fontWeight: 400, fontSize: 10.5 }}>({inactiveEmployees.length})</span>
+                        </div>
+                        {wks.map((w) => (
+                          <div key={w.index} style={{ borderLeft: '1px solid var(--ds-border, #eee)' }} />
+                        ))}
+                      </div>
+                      {inactiveEmployees.map((emp) => (
+                        <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} inactive />
+                      ))}
+                    </>
+                  )}
+
+                  {/* Unassigned requests — solo las que aún tienen slots por llenar */}
+                  {data.open_requests.filter((r) => r.missing > 0).map((r) => (
                     <UnassignedRow
                       key={r.id}
                       request={r}
@@ -1196,6 +1587,15 @@ export default function CapacityPlanner() {
           assignmentId={editingAssignmentId}
           onClose={() => setEditingAssignmentId(null)}
           onSaved={() => { setEditingAssignmentId(null); load(); }}
+        />
+      )}
+
+      {/* SPEC-RM-00: Bulk assign modal */}
+      {showBulkModal && (
+        <BulkAssignModal
+          onClose={() => setShowBulkModal(false)}
+          onDone={() => { setShowBulkModal(false); load(); }}
+          plannerData={data}
         />
       )}
     </div>

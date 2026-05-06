@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import ResourceRequests from './ResourceRequests';
 import * as apiV2 from '../utils/apiV2';
+import { changeSelect } from '../utils/testHelpers';
 
 jest.mock('../utils/apiV2');
 
@@ -55,14 +56,14 @@ describe('ResourceRequests module', () => {
   it('contract filter excludes completed/cancelled contracts', async () => {
     mount();
     await screen.findByText('Senior Dev');
-    // Open the filter-bar SearchableSelect to inspect available options
+    // Open the SearchableSelect filter bar to inspect available options
     const filterInput = screen.getByLabelText('Filtro por contrato');
     fireEvent.click(filterInput);
     const listbox = await screen.findByRole('listbox');
     // Active contracts appear
     expect(within(listbox).getByText('Contrato Alpha')).toBeInTheDocument();
     expect(within(listbox).getByText('Contrato Beta')).toBeInTheDocument();
-    // Completed contract is filtered out by ResourceRequests before passing options
+    // Completed contract is filtered out before passing options
     expect(within(listbox).queryByText('Contrato Old')).toBeNull();
   });
 
@@ -70,7 +71,7 @@ describe('ResourceRequests module', () => {
     mount();
     await screen.findByText('Senior Dev');
     apiV2.apiGet.mockClear();
-    fireEvent.change(screen.getByLabelText('Filtro por estado'), { target: { value: 'open' } });
+    await changeSelect('Filtro por estado', 'open');
     await waitFor(() => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes('status=open'))).toBe(true);
@@ -81,7 +82,7 @@ describe('ResourceRequests module', () => {
     apiV2.apiPost.mockResolvedValue({ id: 'r-new' });
     mount();
     await screen.findByText('Senior Dev');
-    // Wait for contracts to finish loading before opening the form
+    // Wait for contracts to finish loading
     await waitFor(() => {
       expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true);
     });
@@ -95,7 +96,7 @@ describe('ResourceRequests module', () => {
     fireEvent.mouseDown(await screen.findByRole('option', { name: /Contrato Alpha/ }));
 
     fireEvent.change(within(dialog).getByLabelText('Role title'), { target: { value: 'UX Designer' } });
-    fireEvent.change(within(dialog).getByLabelText('Área'), { target: { value: '1' } });
+    await changeSelect('Área', '1');
     fireEvent.change(within(dialog).getByLabelText('Fecha de inicio'), { target: { value: '2026-08-01' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
 

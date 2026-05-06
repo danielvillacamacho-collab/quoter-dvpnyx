@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import CapacityPlanner from './CapacityPlanner';
 import * as apiV2 from '../utils/apiV2';
+import { changeSelect } from '../utils/testHelpers';
 
 jest.mock('../utils/apiV2');
 
@@ -152,7 +153,7 @@ describe('CapacityPlanner module', () => {
     mount();
     await screen.findByTestId('emp-row-e1');
 
-    fireEvent.change(screen.getByLabelText('Filtro contrato'), { target: { value: 'ct1' } });
+    await changeSelect('Filtro contrato', 'ct1');
     await waitFor(() => {
       expect(apiV2.apiGet.mock.calls.some((c) => String(c[0]).includes('contract_id=ct1'))).toBe(true);
     });
@@ -177,8 +178,8 @@ describe('CapacityPlanner module', () => {
       expect(lastPlannerCall).toMatch(/contract_id=ct1/);
       expect(lastPlannerCall).toMatch(/search=Ana/);
     });
-    // Controls reflect the URL
-    expect(screen.getByLabelText('Filtro contrato')).toHaveValue('ct1');
+    // Controls reflect the URL — FilterableSelect shows the label, not the id
+    expect(screen.getByLabelText('Filtro contrato')).toHaveValue('Contrato Alpha');
     expect(screen.getByLabelText('Buscar empleado')).toHaveValue('Ana');
   });
 
@@ -243,14 +244,20 @@ describe('CapacityPlanner module', () => {
     await screen.findByTestId('emp-row-e1');
 
     const sel = screen.getByLabelText('Rango de semanas');
-    // Default value
-    expect(sel).toHaveValue('4');
-    // All four options present
-    expect(within(sel).getByRole('option', { name: '1 semana' })).toBeInTheDocument();
-    expect(within(sel).getByRole('option', { name: '8 semanas' })).toBeInTheDocument();
+    // Default value — FilterableSelect shows the label, not the id
+    expect(sel).toHaveValue('4 semanas');
+    // Open dropdown to verify options are present
+    fireEvent.click(sel);
+    await waitFor(() => {
+      const listbox = document.querySelector('[role="listbox"]');
+      expect(listbox).not.toBeNull();
+      expect(listbox.textContent).toContain('1 semana');
+      expect(listbox.textContent).toContain('8 semanas');
+    });
+    fireEvent.keyDown(sel, { key: 'Escape' });
 
     // Change to 8 weeks → URL and API call updated
-    fireEvent.change(sel, { target: { value: '8' } });
+    await changeSelect('Rango de semanas', '8');
     await waitFor(() => {
       expect(screen.getByTestId('loc').getAttribute('data-search')).toMatch(/weeks=8/);
     });
@@ -357,8 +364,8 @@ describe('CapacityPlanner module', () => {
     const ct3Row = await screen.findByTestId('contract-row-ct3');
     fireEvent.click(ct3Row);
     const row = await screen.findByTestId('project-request-row-rr9');
-    // Unassigned bar in the request's week range.
-    expect(within(row).getAllByText(/Sin asignar/).length).toBeGreaterThan(0);
+    // Vacant slot bars in the request's week range.
+    expect(within(row).getAllByText(/Asignar/).length).toBeGreaterThan(0);
     expect(within(row).getByText(/faltan 2/)).toBeInTheDocument();
   });
 
@@ -452,7 +459,7 @@ describe('CapacityPlanner module', () => {
       mount();
       await screen.findByTestId('emp-row-e1');
       // Filtros siguen funcionando
-      fireEvent.change(screen.getByLabelText('Filtro contrato'), { target: { value: 'ct1' } });
+      await changeSelect('Filtro contrato', 'ct1');
       await waitFor(() => {
         expect(apiV2.apiGet.mock.calls.some((c) => String(c[0]).includes('contract_id=ct1'))).toBe(true);
       });

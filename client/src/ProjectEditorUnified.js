@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import useAutosave from './hooks/useAutosave';
 import AutosaveIndicator from './AutosaveIndicator';
+import FilterableSelect from './shell/FilterableSelect';
 import {
   calcProjectProfile,
   calcProjectSummary,
@@ -172,29 +173,19 @@ function TeamPanel({ data, onChange, params }) {
                   <input style={{ ...s.inputSm, minWidth: 130 }} value={p.role_title || ''} onChange={e => updateProfile(i, 'role_title', e.target.value)} placeholder="Ej: Senior Data Eng." />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, minWidth: 120 }} value={p.specialty || ''} onChange={e => updateProfile(i, 'specialty', e.target.value)} aria-label={`Especialidad perfil ${i + 1}`}>
-                    <option value="">—</option>
-                    {SPECIALTIES.map(sp => <option key={sp}>{sp}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, minWidth: 120 }} value={p.specialty || ''} onChange={e => updateProfile(i, 'specialty', e.target.value)} aria-label={`Especialidad perfil ${i + 1}`} placeholder="—" options={SPECIALTIES.map(sp => ({ id: sp, label: sp }))} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, width: 56 }} value={p.level || ''} onChange={e => updateProfile(i, 'level', Number(e.target.value))} aria-label={`Nivel perfil ${i + 1}`}>
-                    <option value="">—</option>
-                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(n => <option key={n} value={n}>L{n}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, width: 56 }} value={p.level || ''} onChange={e => updateProfile(i, 'level', Number(e.target.value))} aria-label={`Nivel perfil ${i + 1}`} placeholder="—" options={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(n => ({ id: String(n), label: `L${n}` }))} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, minWidth: 100 }} value={p.country || 'Colombia'} onChange={e => updateProfile(i, 'country', e.target.value)} aria-label={`País perfil ${i + 1}`}>
-                    {countries.map(c => <option key={c}>{c}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, minWidth: 100 }} value={p.country || 'Colombia'} onChange={e => updateProfile(i, 'country', e.target.value)} aria-label={`País perfil ${i + 1}`} placeholder="—" options={countries.map(c => ({ id: c, label: c }))} />
                 </td>
                 <td style={{ ...s.td, textAlign: 'center' }}>
                   <input type="checkbox" checked={p.bilingual || false} onChange={e => updateProfile(i, 'bilingual', e.target.checked)} aria-label={`Bilingüe perfil ${i + 1}`} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, minWidth: 110 }} value={p.stack || 'Especializada'} onChange={e => updateProfile(i, 'stack', e.target.value)} aria-label={`Stack perfil ${i + 1}`}>
-                    {stacks.map(st => <option key={st}>{st}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, minWidth: 110 }} value={p.stack || 'Especializada'} onChange={e => updateProfile(i, 'stack', e.target.value)} aria-label={`Stack perfil ${i + 1}`} placeholder="—" options={stacks.map(st => ({ id: st, label: st }))} />
                 </td>
                 <td style={{ ...s.td, fontWeight: 600, color: 'var(--purple-dark)', whiteSpace: 'nowrap' }}>{formatUSD2(p.cost_hour)}</td>
                 <td style={{ ...s.td, fontWeight: 600, color: 'var(--teal-mid)', whiteSpace: 'nowrap' }}>{formatUSD2(p.rate_hour)}</td>
@@ -469,9 +460,7 @@ function EpicsPanel({ data, onChange, open, onToggle }) {
                       <input style={{ ...s.inputSm, minWidth: 160 }} value={e.name || ''} onChange={ev => updateEpic(i, 'name', ev.target.value)} placeholder="Ej: Módulo de usuarios" />
                     </td>
                     <td style={s.td}>
-                      <select style={s.select} value={e.priority || 'Media'} onChange={ev => updateEpic(i, 'priority', ev.target.value)} aria-label={`Prioridad épica ${i + 1}`}>
-                        <option>Alta</option><option>Media</option><option>Baja</option>
-                      </select>
+                      <FilterableSelect inputStyle={s.select} value={e.priority || 'Media'} onChange={ev => updateEpic(i, 'priority', ev.target.value)} aria-label={`Prioridad épica ${i + 1}`} placeholder="—" options={[{ id: 'Alta', label: 'Alta' }, { id: 'Media', label: 'Media' }, { id: 'Baja', label: 'Baja' }]} />
                     </td>
                     {profiles.map((_, pIdx) => (
                       <td key={pIdx} style={{ ...s.td, textAlign: 'center' }}>
@@ -545,10 +534,7 @@ function MilestonesPanel({ data, onChange, finalPrice }) {
                   <td style={{ ...s.td, textAlign: 'center', width: 26 }}>{i + 1}</td>
                   <td style={s.td}><input style={s.inputSm} value={m.name || ''} onChange={e => updateMilestone(i, 'name', e.target.value)} placeholder="Ej: Kick-off firmado" /></td>
                   <td style={s.td}>
-                    <select style={s.select} value={m.phase || ''} onChange={e => updateMilestone(i, 'phase', e.target.value)} aria-label={`Fase hito ${i + 1}`}>
-                      <option value="">—</option>
-                      {phases.map((p, pi) => <option key={pi} value={p.name}>{p.name}</option>)}
-                    </select>
+                    <FilterableSelect inputStyle={s.select} value={m.phase || ''} onChange={e => updateMilestone(i, 'phase', e.target.value)} aria-label={`Fase hito ${i + 1}`} placeholder="—" options={phases.map((p, pi) => ({ id: p.name, label: p.name }))} />
                   </td>
                   <td style={s.td}>
                     <input

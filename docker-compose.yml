@@ -60,6 +60,8 @@ services:
       CLIENT_URL: ${CLIENT_URL}
       NODE_ENV: production
       PORT: 4000
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_ALLOWED_DOMAIN: ${GOOGLE_ALLOWED_DOMAIN:-doublevpartners.com}
     # Expose port to loopback only so the deploy health-check can probe it
     # without opening it to the internet (Traefik handles all external traffic)
     ports:

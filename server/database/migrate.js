@@ -371,6 +371,11 @@ const V2_NEW_TABLES = `
   CREATE INDEX IF NOT EXISTS assignments_request_idx  ON assignments(resource_request_id) WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS assignments_status_idx   ON assignments(status)              WHERE deleted_at IS NULL;
   CREATE INDEX IF NOT EXISTS assignments_dates_idx    ON assignments(start_date, end_date) WHERE deleted_at IS NULL;
+  -- PERF-003: composite index for the reports/utilization + bench queries that filter
+  -- by (employee_id, status='active') with deleted_at IS NULL. Single index lookup
+  -- replaces a bitmap-or of two single-column indexes plus a recheck on each row.
+  CREATE INDEX IF NOT EXISTS assignments_employee_active_idx
+    ON assignments(employee_id) WHERE deleted_at IS NULL AND status = 'active';
 
   CREATE TABLE IF NOT EXISTS time_entries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -456,9 +461,13 @@ const V2_ALTERS = `
   -- JSONB so we can add more keys later without another migration.
   ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'::jsonb;
 
-  -- Drop old role CHECK (was superadmin/admin/preventa) and add the V2 one.
-  -- We keep 'preventa' valid during migration so V1 data doesn't break; data
-  -- migration script will convert 'preventa' → 'member' with function='preventa'.
+  -- Drop old role CHECK and recreate with the FULL role set (V2 + PR4).
+  -- Includes 'director' (VP-level, ve todo) and 'external' (acceso restringido)
+  -- from PR4, plus 'preventa' for backward compat. Creating the full list from
+  -- the start prevents a re-deploy failure when a user already has role
+  -- 'director' or 'external' (the old code created a narrow constraint here
+  -- and widened it later in the same transaction — safe for first deploy but
+  -- broke on re-runs if data had those roles).
   DO $$
   BEGIN
     IF EXISTS (
@@ -469,7 +478,7 @@ const V2_ALTERS = `
     END IF;
   END $$;
   ALTER TABLE users ADD CONSTRAINT users_role_check
-    CHECK (role IN ('superadmin','admin','lead','member','viewer','preventa'));
+    CHECK (role IN ('superadmin','admin','director','lead','member','viewer','external','preventa'));
 
   -- users.function CHECK (nullable during backfill)
   DO $$
@@ -580,6 +589,363 @@ const V2_ALTERS = `
     WHERE weighted_amount_usd = 0 AND booking_amount_usd > 0;
 
   CREATE INDEX IF NOT EXISTS idx_opportunities_status_close ON opportunities(status, expected_close_date) WHERE deleted_at IS NULL;
+
+  -- ==================================================================
+  -- SPEC-CRM-00 v1.1 PR1 (Mayo 2026) — Pipeline 9 estados + Postponed
+  -- ==================================================================
+  -- Decisión CEO + CPO interim:
+  --   * Renombrado en lote de los 7 estados legacy a los 9 del spec.
+  --   * cancelled → closed_lost (decisión explícita CCO 2026-05).
+  --   * Estado postponed nuevo, requiere postponed_until_date.
+  --   * opportunity_number legible "OPP-{cc}-{año}-{seq}" generado para
+  --     las opps existentes y para todas las nuevas.
+  --
+  -- Mapping (idempotente — la segunda corrida no encuentra filas):
+  --   open       → lead
+  --   qualified  → qualified  (sin cambio)
+  --   proposal   → proposal_validated  (probability 50 = match exacto)
+  --   negotiation→ negotiation (sin cambio)
+  --   won        → closed_won
+  --   lost       → closed_lost
+  --   cancelled  → closed_lost (per decisión CCO; outcome se preserva)
+  --
+  -- Probabilidades nuevas (más granulares que las 7 legacy):
+  --   lead 5 / qualified 15 / solution_design 30 / proposal_validated 50
+  --   / negotiation 75 / verbal_commit 90 / closed_won 100 / closed_lost 0
+  --   / postponed 0
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS postponed_until_date DATE NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS postponed_reason     TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS country              VARCHAR(100) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS opportunity_number   VARCHAR(50) NULL;
+
+  -- 1) Drop el CHECK constraint legacy (autonombre de Postgres). Se
+  --    busca dinámicamente porque su nombre exacto depende de la versión
+  --    en la que se creó la tabla.
+  --
+  --    HOTFIX 2026-05-01: Postgres reescribe CHECK (status IN ('open', ...))
+  --    a CHECK ((status)::text = ANY (ARRAY['open'::varchar, ...])) cuando
+  --    hay >1 valor — la representacion canonica NO contiene la palabra IN.
+  --    El pattern original '%status%IN%open%' nunca matcheo en RDS, el
+  --    constraint legacy quedó vivo, y el primer UPDATE a 'lead' violó la
+  --    restricción → toda la transacción de migración hizo rollback en dev.
+  --    La señal específica del enum legacy es el literal 'cancelled', que
+  --    se eliminó en v1.1; usarlo como marcador es 100% determinístico.
+  DO $do_status_check_drop$
+  DECLARE
+    cn text;
+  BEGIN
+    SELECT con.conname INTO cn
+      FROM pg_constraint con
+      JOIN pg_class      cls ON cls.oid = con.conrelid
+     WHERE cls.relname = 'opportunities'
+       AND con.contype = 'c'
+       AND con.conname <> 'opportunities_status_check_v11'
+       AND con.conname <> 'opp_postponed_has_until_date'
+       AND pg_get_constraintdef(con.oid) ILIKE '%status%'
+       AND pg_get_constraintdef(con.oid) ILIKE '%''cancelled''%';
+    IF cn IS NOT NULL THEN
+      EXECUTE 'ALTER TABLE opportunities DROP CONSTRAINT ' || quote_ident(cn);
+    END IF;
+  END
+  $do_status_check_drop$;
+
+  -- 2) Migración de datos. Idempotente: la segunda vuelta no toca nada.
+  UPDATE opportunities SET status = 'lead'               WHERE status = 'open';
+  UPDATE opportunities SET status = 'proposal_validated' WHERE status = 'proposal';
+  UPDATE opportunities SET status = 'closed_won'         WHERE status = 'won';
+  UPDATE opportunities SET status = 'closed_lost'        WHERE status IN ('lost', 'cancelled');
+
+  -- 3) Constraint nuevo con los 9 estados aprobados + cláusula postponed.
+  --    HOTFIX 2026-05-01: envuelto en DO/IF NOT EXISTS para que la
+  --    migración sea idempotente entre deploys (el legacy ADD CONSTRAINT
+  --    crudo fallaba en la segunda corrida con "constraint already exists").
+  DO $do_status_check_v11_add$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint WHERE conname = 'opportunities_status_check_v11'
+    ) THEN
+      ALTER TABLE opportunities
+        ADD CONSTRAINT opportunities_status_check_v11
+        CHECK (status IN (
+          'lead','qualified','solution_design','proposal_validated',
+          'negotiation','verbal_commit','closed_won','closed_lost','postponed'
+        ));
+    END IF;
+  END
+  $do_status_check_v11_add$;
+
+  -- Default was still 'open' from the original CREATE TABLE; update it to
+  -- match the new status vocabulary so INSERTs without explicit status work.
+  ALTER TABLE opportunities ALTER COLUMN status SET DEFAULT 'lead';
+
+  -- Postponed siempre debe tener fecha de reactivación. Se nombra
+  -- explícitamente para poder verificarlo en tests + drop si se quita.
+  DO $do_postponed_check$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint WHERE conname = 'opp_postponed_has_until_date'
+    ) THEN
+      ALTER TABLE opportunities
+        ADD CONSTRAINT opp_postponed_has_until_date
+        CHECK (status <> 'postponed' OR postponed_until_date IS NOT NULL);
+    END IF;
+  END
+  $do_postponed_check$;
+
+  -- 4) Reescribimos opp_pipeline_recalc() con la nueva tabla de
+  --    probabilidades. CREATE OR REPLACE → idempotente.
+  CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    IF TG_OP = 'INSERT' OR NEW.status IS DISTINCT FROM OLD.status THEN
+      NEW.probability := CASE NEW.status
+        WHEN 'lead'                THEN 5
+        WHEN 'qualified'           THEN 15
+        WHEN 'solution_design'     THEN 30
+        WHEN 'proposal_validated'  THEN 50
+        WHEN 'negotiation'         THEN 75
+        WHEN 'verbal_commit'       THEN 90
+        WHEN 'closed_won'          THEN 100
+        WHEN 'closed_lost'         THEN 0
+        WHEN 'postponed'           THEN 0
+        ELSE 5
+      END;
+      IF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        NEW.last_stage_change_at := NOW();
+      END IF;
+    END IF;
+    NEW.weighted_amount_usd := COALESCE(NEW.booking_amount_usd, 0) * COALESCE(NEW.probability, 0) / 100.0;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  -- 5) Recalcular probability + weighted para las opps que acabamos de
+  --    renombrar. Disparamos el trigger por UPDATE no-op.
+  UPDATE opportunities SET status = status WHERE status IN (
+    'lead','qualified','proposal_validated','negotiation','closed_won','closed_lost'
+  );
+
+  -- 6) Backfill de country desde el cliente — solo donde está vacío.
+  UPDATE opportunities o
+     SET country = c.country
+    FROM clients c
+   WHERE o.client_id = c.id
+     AND o.country IS NULL
+     AND c.country IS NOT NULL;
+
+  -- 7) Backfill de opportunity_number. Formato OPP-{cc}-{yyyy}-{nnnnn}.
+  --    cc es el código de país de la opp en mayúsculas, máx 4 caracteres
+  --    para acomodar nombres en español ("Colombia"→"COLO", "México"→"MEXI").
+  --    Si el ops team prefiere ISO alpha-2 estricto se puede normalizar
+  --    en una migración futura sin romper este formato.
+  --    El seq se calcula por (cc, año) sobre el set existente — números
+  --    estables para opps ya en BD.
+  WITH numbered AS (
+    SELECT id,
+           UPPER(LEFT(REGEXP_REPLACE(COALESCE(country, 'XX'), '[^A-Za-z]', '', 'g'), 4)) AS cc,
+           EXTRACT(YEAR FROM created_at)::int AS yy,
+           ROW_NUMBER() OVER (
+             PARTITION BY UPPER(LEFT(REGEXP_REPLACE(COALESCE(country, 'XX'), '[^A-Za-z]', '', 'g'), 4)),
+                          EXTRACT(YEAR FROM created_at)
+             ORDER BY created_at, id
+           ) AS seq
+      FROM opportunities
+     WHERE opportunity_number IS NULL
+  )
+  UPDATE opportunities o
+     SET opportunity_number = 'OPP-' || COALESCE(NULLIF(n.cc, ''), 'XX') || '-' || n.yy::text || '-' || LPAD(n.seq::text, 5, '0')
+    FROM numbered n
+   WHERE o.id = n.id;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS opportunities_number_unique
+    ON opportunities(opportunity_number)
+    WHERE opportunity_number IS NOT NULL AND deleted_at IS NULL;
+
+  CREATE INDEX IF NOT EXISTS opportunities_postponed_until_idx
+    ON opportunities(postponed_until_date)
+    WHERE status = 'postponed' AND deleted_at IS NULL;
+
+  -- ==================================================================
+  -- SPEC-CRM-00 v1.1 PR2 (Mayo 2026) — Revenue model + Champion/EB +
+  -- Funding source + Loss reasons formalizadas + Drive URL
+  -- ==================================================================
+  -- Decisión CCO: el modelo legacy "booking_amount_usd suelto" no refleja
+  -- la operación real. Capacity y resell son recurrentes; tratarlos como
+  -- one-time falsea métricas. Aquí formalizamos:
+  --   * revenue_type (one_time | recurring | mixed)
+  --   * one_time_amount_usd / mrr_usd / contract_length_months
+  --   * booking_amount_usd ahora es DERIVADO via trigger:
+  --       one_time:  booking = one_time_amount_usd
+  --       recurring: booking = mrr_usd * contract_length_months
+  --       mixed:     booking = one_time + (mrr * months)
+  --   * champion_identified / economic_buyer_identified (alerta A3 PR4)
+  --   * funding_source (client_direct | aws_mdf | vendor_mdf | mixed)
+  --   * loss_reason enum extendida (9 valores spec) + loss_reason_detail
+  --   * drive_url (link a carpeta de cliente, opcional)
+  --
+  -- Migración legacy: opps existentes se asumen 'one_time' con
+  -- one_time_amount_usd = booking_amount_usd actual (idempotente).
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS revenue_type            TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS one_time_amount_usd     NUMERIC(18,2) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS mrr_usd                 NUMERIC(18,2) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS contract_length_months  INTEGER NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS champion_identified     BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS economic_buyer_identified BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS funding_source          TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS funding_amount_usd      NUMERIC(18,2) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS loss_reason             TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS loss_reason_detail      TEXT NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS drive_url               TEXT NULL;
+
+  -- Backfill: opps legacy todas son one_time con booking actual.
+  -- GREATEST(..., 0) garantiza non-negative para que opp_amounts_nonneg CHECK
+  -- pase incluso si alguna opp legacy tiene booking negativo (crédito / error).
+  UPDATE opportunities SET revenue_type = 'one_time'
+    WHERE revenue_type IS NULL;
+  UPDATE opportunities SET one_time_amount_usd = GREATEST(COALESCE(booking_amount_usd, 0), 0)
+    WHERE revenue_type = 'one_time' AND one_time_amount_usd IS NULL;
+  UPDATE opportunities SET funding_source = 'client_direct'
+    WHERE funding_source IS NULL;
+
+  -- Promover defaults + NOT NULL después del backfill.
+  ALTER TABLE opportunities ALTER COLUMN revenue_type   SET DEFAULT 'one_time';
+  ALTER TABLE opportunities ALTER COLUMN revenue_type   SET NOT NULL;
+  ALTER TABLE opportunities ALTER COLUMN funding_source SET DEFAULT 'client_direct';
+  ALTER TABLE opportunities ALTER COLUMN funding_source SET NOT NULL;
+
+  -- Enums via CHECK constraints nombrados (idempotente).
+  DO $do_revenue_enum$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_revenue_type_enum') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_revenue_type_enum
+        CHECK (revenue_type IN ('one_time','recurring','mixed'));
+    END IF;
+  END
+  $do_revenue_enum$;
+
+  DO $do_funding_enum$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_funding_source_enum') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_funding_source_enum
+        CHECK (funding_source IN ('client_direct','aws_mdf','vendor_mdf','mixed'));
+    END IF;
+  END
+  $do_funding_enum$;
+
+  DO $do_loss_enum$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_loss_reason_enum') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_loss_reason_enum
+        CHECK (loss_reason IS NULL OR loss_reason IN (
+          'price','competitor_won','no_decision','budget_cut','champion_left',
+          'wrong_fit','timing','incumbent_win','other'
+        ));
+    END IF;
+  END
+  $do_loss_enum$;
+
+  -- Consistency relajado: solo verificamos que los campos REQUERIDOS por
+  -- el motion estén presentes. NO forzamos NULL en los no-aplicables — el
+  -- trigger los ignora al calcular booking, y mantener el dato histórico
+  -- es útil cuando una opp pasa de recurring → one_time.
+  DO $do_rev_consistency$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_revenue_consistency') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_revenue_consistency
+        CHECK (
+          (revenue_type = 'one_time'  AND one_time_amount_usd IS NOT NULL) OR
+          (revenue_type = 'recurring' AND mrr_usd IS NOT NULL AND contract_length_months IS NOT NULL) OR
+          (revenue_type = 'mixed'     AND one_time_amount_usd IS NOT NULL AND mrr_usd IS NOT NULL AND contract_length_months IS NOT NULL)
+        );
+    END IF;
+  END
+  $do_rev_consistency$;
+
+  DO $do_fund_consistency$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_funding_consistency') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_funding_consistency
+        CHECK (funding_source = 'client_direct' OR funding_amount_usd IS NOT NULL);
+    END IF;
+  END
+  $do_fund_consistency$;
+
+  -- Sanidades: montos no negativos.
+  DO $do_amounts_nonneg$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_amounts_nonneg') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_amounts_nonneg
+        CHECK (
+          (one_time_amount_usd IS NULL OR one_time_amount_usd >= 0) AND
+          (mrr_usd IS NULL OR mrr_usd >= 0) AND
+          (contract_length_months IS NULL OR contract_length_months >= 0) AND
+          (funding_amount_usd IS NULL OR funding_amount_usd >= 0)
+        );
+    END IF;
+  END
+  $do_amounts_nonneg$;
+
+  -- Trigger reescrito: ahora calcula booking_amount_usd derivado del
+  -- revenue_type ANTES de calcular weighted. CREATE OR REPLACE → idempotente.
+  CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    -- 1) Booking derivado del revenue_type. La app sigue pudiendo enviar
+    --    booking_amount_usd directo; el trigger lo sobrescribe siempre que
+    --    haya datos del modelo. Si el modelo está vacío (legacy) se mantiene
+    --    el booking enviado.
+    IF NEW.revenue_type = 'recurring' THEN
+      NEW.booking_amount_usd := COALESCE(NEW.mrr_usd, 0) * COALESCE(NEW.contract_length_months, 0);
+    ELSIF NEW.revenue_type = 'mixed' THEN
+      NEW.booking_amount_usd := COALESCE(NEW.one_time_amount_usd, 0)
+                              + COALESCE(NEW.mrr_usd, 0) * COALESCE(NEW.contract_length_months, 0);
+    ELSIF NEW.revenue_type = 'one_time' THEN
+      -- Si la app envía one_time_amount_usd, se usa. Si no, se respeta el
+      -- booking enviado (compat legacy). Cuando la app esté 100% migrada
+      -- esta rama colapsa a COALESCE(NEW.one_time_amount_usd, 0).
+      NEW.booking_amount_usd := COALESCE(NEW.one_time_amount_usd, NEW.booking_amount_usd, 0);
+    END IF;
+
+    -- 2) Probability + last_stage_change_at cuando cambia status.
+    IF TG_OP = 'INSERT' OR NEW.status IS DISTINCT FROM OLD.status THEN
+      NEW.probability := CASE NEW.status
+        WHEN 'lead'                THEN 5
+        WHEN 'qualified'           THEN 15
+        WHEN 'solution_design'     THEN 30
+        WHEN 'proposal_validated'  THEN 50
+        WHEN 'negotiation'         THEN 75
+        WHEN 'verbal_commit'       THEN 90
+        WHEN 'closed_won'          THEN 100
+        WHEN 'closed_lost'         THEN 0
+        WHEN 'postponed'           THEN 0
+        ELSE 5
+      END;
+      IF TG_OP = 'UPDATE' AND NEW.status IS DISTINCT FROM OLD.status THEN
+        NEW.last_stage_change_at := NOW();
+      END IF;
+    END IF;
+
+    -- 3) Weighted siempre derivado.
+    NEW.weighted_amount_usd := COALESCE(NEW.booking_amount_usd, 0) * COALESCE(NEW.probability, 0) / 100.0;
+
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+
+  -- Re-trigger para recalcular booking en todas las opps (booking ya estaba
+  -- correcto en legacy porque era el campo directo, pero después del
+  -- rename one_time_amount_usd ← booking este UPDATE no-op confirma).
+  UPDATE opportunities SET revenue_type = revenue_type
+    WHERE revenue_type IS NOT NULL;
+
+  CREATE INDEX IF NOT EXISTS opportunities_revenue_type_idx
+    ON opportunities(revenue_type) WHERE deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS opportunities_funding_source_idx
+    ON opportunities(funding_source)
+    WHERE funding_source <> 'client_direct' AND deleted_at IS NULL;
+  CREATE INDEX IF NOT EXISTS opportunities_champion_idx
+    ON opportunities(champion_identified)
+    WHERE champion_identified = false AND deleted_at IS NULL;
 
   -- ==================================================================
   -- RR-MVP-00.1 (Abril 27 2026) — Revenue recognition mínimo
@@ -818,6 +1184,48 @@ const V2_ALTERS = `
     'DEPRECATED 2026-04: usar employee_costs.updated_at del último período.';
   COMMENT ON COLUMN employees.cost_updated_by IS
     'DEPRECATED 2026-04: usar employee_costs.updated_by del último período.';
+
+  -- ==================================================================
+  -- SPEC-CRM-00 v1.1 PR3 (Mayo 2026) — margin_pct + estimated_cost_usd
+  -- ==================================================================
+  -- margin_pct se calcula vía POST /api/opportunities/:id/check-margin.
+  -- El endpoint acepta estimated_cost_usd explícito o lo auto-computa
+  -- desde cost_hour / rate_hour de las líneas de cotización activa.
+  -- Si margin_pct < 20 % se emite opportunity.margin_low (Alerta A4).
+  -- Los dos campos son opcionales / nullable: no se exige que existan
+  -- para crear/actualizar la oportunidad.
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS estimated_cost_usd NUMERIC(18,2) NULL;
+  ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS margin_pct         NUMERIC(5,2)  NULL;
+
+  -- margin_pct no puede exceder 100 % (si cost >= 0 y booking > 0, esto
+  -- se cumple siempre; el constraint es una red de seguridad explícita).
+  DO $do_margin_pct_range$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_margin_pct_range') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_margin_pct_range
+        CHECK (margin_pct IS NULL OR margin_pct <= 100);
+    END IF;
+  END
+  $do_margin_pct_range$;
+
+  DO $do_estimated_cost_nonneg$
+  BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_estimated_cost_nonneg') THEN
+      ALTER TABLE opportunities ADD CONSTRAINT opp_estimated_cost_nonneg
+        CHECK (estimated_cost_usd IS NULL OR estimated_cost_usd >= 0);
+    END IF;
+  END
+  $do_estimated_cost_nonneg$;
+
+  -- Partial index orientado a reportes y alertas A4: solo rows con margen
+  -- calculado y por debajo del umbral (20 %).
+  CREATE INDEX IF NOT EXISTS opportunities_margin_low_idx
+    ON opportunities(id)
+    WHERE margin_pct IS NOT NULL AND margin_pct < 20 AND deleted_at IS NULL;
+
+  -- SPEC-CRM-00 v1.1 PR4 — RBAC 7 roles: 'director' y 'external' ya están
+  -- en el users_role_check de arriba (línea ~476). No se necesita un segundo
+  -- bloque DO. Eliminado en hotfix 2026-05-02 para evitar re-deploy failure.
 `;
 
 /* ==================================================================
@@ -1758,6 +2166,250 @@ const SPEC_II_00_HOLIDAY_SEED_SQL = `
   ON CONFLICT (country_id, holiday_date) DO NOTHING;
 `;
 
+// ---------------------------------------------------------------------------
+// ASSIGNMENT-RATES — client_rate + client_rate_currency en assignments
+// ---------------------------------------------------------------------------
+const ASSIGNMENT_RATES_SQL = `
+-- client_rate: tarifa mensual acordada con el cliente para contratos de capacidad.
+-- Solo aplica cuando el contrato es type='capacity'. NULL = no configurada.
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS client_rate          NUMERIC(18,4) NULL;
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS client_rate_currency VARCHAR(3)    NULL DEFAULT 'USD';
+
+-- Historial de tarifas por asignación: permite registrar cambios de tarifa
+-- a lo largo del tiempo (ascensos, incrementos anuales, renegociaciones).
+-- effective_date indica desde cuándo aplica cada tarifa. La proyección de
+-- revenue usa la tarifa vigente para cada mes según effective_date.
+CREATE TABLE IF NOT EXISTS assignment_rate_history (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+  effective_date DATE NOT NULL,
+  client_rate NUMERIC(18,4) NOT NULL,
+  client_rate_currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  reason VARCHAR(255) NULL,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS arh_assignment_idx
+  ON assignment_rate_history(assignment_id, effective_date);
+
+-- Back-fill: create initial rate history entry for existing assignments
+-- that have a client_rate but no history yet.
+INSERT INTO assignment_rate_history (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
+  SELECT a.id, a.start_date, a.client_rate, COALESCE(a.client_rate_currency, 'USD'), 'Tarifa inicial (migración)', a.created_by
+    FROM assignments a
+   WHERE a.client_rate IS NOT NULL
+     AND a.deleted_at IS NULL
+     AND NOT EXISTS (SELECT 1 FROM assignment_rate_history h WHERE h.assignment_id = a.id)
+ON CONFLICT DO NOTHING;
+`;
+
+// ---------------------------------------------------------------------------
+// SPEC-CRM-01 — Contacts, Activities, Budgets + Opportunity enrichment
+// ---------------------------------------------------------------------------
+const SPEC_CRM_01_SQL = `
+-- ====================================================================
+-- SPEC-CRM-01 — Contacts, Activities, Budgets + Opportunity enrichment
+-- ====================================================================
+
+-- 1. Contacts: personas de contacto asociadas a clientes
+CREATE TABLE IF NOT EXISTS contacts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  client_id UUID NOT NULL REFERENCES clients(id),
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  job_title VARCHAR(150) NULL,
+  email_primary VARCHAR(200) NULL,
+  phone_mobile VARCHAR(50) NULL,
+  seniority VARCHAR(50) NULL CHECK (seniority IS NULL OR seniority IN ('c_level','vp','director','manager','senior','mid','junior','intern')),
+  notes TEXT NULL,
+  deleted_at TIMESTAMPTZ NULL,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS contacts_email_unique
+  ON contacts(LOWER(email_primary)) WHERE deleted_at IS NULL AND email_primary IS NOT NULL;
+CREATE INDEX IF NOT EXISTS contacts_client_idx ON contacts(client_id) WHERE deleted_at IS NULL;
+
+-- 2. Opportunity-Contact bridge (deal_role per opp)
+CREATE TABLE IF NOT EXISTS opportunity_contacts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  opportunity_id UUID NOT NULL REFERENCES opportunities(id),
+  contact_id UUID NOT NULL REFERENCES contacts(id),
+  deal_role VARCHAR(50) NULL CHECK (deal_role IS NULL OR deal_role IN (
+    'economic_buyer','champion','coach','decision_maker','influencer',
+    'technical_evaluator','procurement','legal','detractor','blocker'
+  )),
+  notes TEXT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS opp_contact_unique
+  ON opportunity_contacts(opportunity_id, contact_id);
+
+-- 3. Activities: registro de interacciones comerciales
+CREATE TABLE IF NOT EXISTS activities (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  opportunity_id UUID NULL REFERENCES opportunities(id),
+  client_id UUID NULL REFERENCES clients(id),
+  contact_id UUID NULL REFERENCES contacts(id),
+  user_id UUID NOT NULL REFERENCES users(id),
+  activity_type VARCHAR(30) NOT NULL CHECK (activity_type IN (
+    'call','email','meeting','note','proposal_sent','demo','follow_up','other'
+  )),
+  subject VARCHAR(300) NOT NULL,
+  notes TEXT NULL,
+  activity_date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS activities_opp_idx ON activities(opportunity_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS activities_client_idx ON activities(client_id) WHERE deleted_at IS NULL;
+
+-- 4. Budgets: presupuestos comerciales (targets de booking)
+CREATE TABLE IF NOT EXISTS budgets (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  period_year INTEGER NOT NULL,
+  period_quarter INTEGER NULL CHECK (period_quarter IS NULL OR period_quarter BETWEEN 1 AND 4),
+  period_month INTEGER NULL CHECK (period_month IS NULL OR period_month BETWEEN 1 AND 12),
+  country VARCHAR(100) NULL,
+  owner_id UUID NULL REFERENCES users(id),
+  service_line VARCHAR(100) NULL,
+  target_usd NUMERIC(18,2) NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','active','closed')),
+  approved_by UUID NULL REFERENCES users(id),
+  approved_at TIMESTAMPTZ NULL,
+  notes TEXT NULL,
+  created_by UUID NOT NULL REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS budgets_period_idx ON budgets(period_year, period_quarter, period_month);
+
+-- 5. Opportunity enrichment columns
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS deal_type VARCHAR(30) NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS co_owner_id UUID NULL REFERENCES users(id);
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS drive_url TEXT NULL;
+
+-- Backfill deal_type
+UPDATE opportunities SET deal_type = 'new_business' WHERE deal_type IS NULL;
+
+-- Constraint for deal_type (only if not already present)
+DO $do_deal_type_enum$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_deal_type_enum') THEN
+    ALTER TABLE opportunities ADD CONSTRAINT opp_deal_type_enum
+      CHECK (deal_type IN ('new_business','upsell_cross_sell','renewal','resell'));
+  END IF;
+END
+$do_deal_type_enum$;
+
+-- Make deal_type NOT NULL after backfill
+ALTER TABLE opportunities ALTER COLUMN deal_type SET DEFAULT 'new_business';
+DO $do_deal_type_nn$
+BEGIN
+  -- Only set NOT NULL if all rows have a value
+  IF NOT EXISTS (SELECT 1 FROM opportunities WHERE deal_type IS NULL LIMIT 1) THEN
+    BEGIN
+      ALTER TABLE opportunities ALTER COLUMN deal_type SET NOT NULL;
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
+  END IF;
+END
+$do_deal_type_nn$;
+
+-- Update last_activity_at on clients (auto-calculated from activities)
+ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NULL;
+
+-- 6. Opportunity context brief (insumo estructurado para preventa)
+-- Nace del input que la country manager dio en chat para BBVA Colombia:
+-- contexto del cliente, alcance, pains, requisitos del nuevo proveedor y
+-- política/siguientes pasos. Cada sección es texto libre opcional; la UI
+-- guía con placeholders. El campo legacy "description" se mantiene para
+-- compat — es un resumen de una línea, mientras que estos 5 son el brief.
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_client       TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_scope        TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_pains        TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_requirements TEXT NULL;
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_politics     TEXT NULL;
+
+-- 7. Reset masivo de employees.end_date → NULL (mayo 2026)
+-- Decisión de negocio: por defecto los empleados deben tener fecha de fin
+-- "indefinida" (NULL). Sólo se pone fecha cuando hay contrato a término
+-- fijo o cuando renuncian/despiden. El reset previo evita que comerciales
+-- hayan puesto fechas por inercia (lo que después del fix 36a8b37 los
+-- marcaba como inactivos automáticamente cuando esas fechas pasaban).
+--
+-- Mecánica:
+--   1. Snapshot del estado previo en employee_end_date_audit_2026_05
+--      (idempotente vía CREATE TABLE IF NOT EXISTS + INSERT … ON CONFLICT
+--      DO NOTHING — la migración puede correrse N veces sin duplicar).
+--   2. UPDATE … SET end_date = NULL.
+--   3. La auditoría es la fuente de verdad si alguien necesita recuperar
+--      fechas legítimas (Andrew, etc.); el operations_owner re-ingresará
+--      manualmente las fechas reales después del reset.
+CREATE TABLE IF NOT EXISTS employee_end_date_audit_2026_05 (
+  employee_id   UUID PRIMARY KEY REFERENCES employees(id),
+  previous_end_date DATE NOT NULL,
+  snapshot_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO employee_end_date_audit_2026_05 (employee_id, previous_end_date)
+  SELECT id, end_date FROM employees WHERE end_date IS NOT NULL
+  ON CONFLICT (employee_id) DO NOTHING;
+
+UPDATE employees SET end_date = NULL, updated_at = NOW() WHERE end_date IS NOT NULL;
+
+-- 8. Opportunity contract_type + deal_type cleanup + resell subtypes
+-- contract_type indica qué tipo de contrato se creará cuando la oportunidad
+-- se gane: proyecto, capacidad o reventa. Reemplaza conceptualmente al
+-- revenue_type en el flujo de oportunidades (revenue_type se mantiene en
+-- DB por compat pero la UI ya no lo expone).
+ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS contract_type VARCHAR(20) NULL;
+DO $do_opp_contract_type$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_contract_type_enum') THEN
+    ALTER TABLE opportunities ADD CONSTRAINT opp_contract_type_enum
+      CHECK (contract_type IS NULL OR contract_type IN ('project','capacity','resell'));
+  END IF;
+END
+$do_opp_contract_type$;
+
+-- Remove 'resell' from deal_type CHECK (resell is now a contract_type, not a deal_type).
+-- Strategy: drop old constraint, add new one. Safe because deal_type='resell' rows
+-- need to be migrated first (backfill to 'new_business').
+UPDATE opportunities SET deal_type = 'new_business' WHERE deal_type = 'resell';
+DO $do_deal_type_v2$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_deal_type_enum') THEN
+    ALTER TABLE opportunities DROP CONSTRAINT opp_deal_type_enum;
+  END IF;
+  ALTER TABLE opportunities ADD CONSTRAINT opp_deal_type_enum
+    CHECK (deal_type IN ('new_business','upsell_cross_sell','renewal'));
+END
+$do_deal_type_v2$;
+
+-- Extend contract_subtype CHECK to include resell subtypes (aws, azure, gcp, other).
+-- Drop + re-add so new subtypes are recognized.
+DO $do_subtype_v2$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contracts_subtype_valid') THEN
+    ALTER TABLE contracts DROP CONSTRAINT contracts_subtype_valid;
+  END IF;
+  ALTER TABLE contracts ADD CONSTRAINT contracts_subtype_valid
+    CHECK (
+      contract_subtype IS NULL OR contract_subtype IN (
+        'staff_augmentation','mission_driven_squad','managed_service','time_and_materials',
+        'fixed_scope','hour_pool',
+        'aws','azure','gcp','other'
+      )
+    );
+END
+$do_subtype_v2$;
+
+COMMENT ON COLUMN contracts.contract_subtype IS
+  'Clasificación dentro del type. capacity → staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project → fixed_scope|hour_pool. resell → aws|azure|gcp|other. Coherencia type↔subtype validada en server/routes/contracts.js.';
+`;
+
 /**
  * Intenta crear la extensión pgvector. Si no está disponible (no instalada
  * en la imagen postgres, o falta privilegio), captura el error y devuelve
@@ -1786,6 +2438,118 @@ async function ensurePgVector(client) {
   }
 }
 
+/* ==================================================================
+ * GOOGLE_OAUTH — federated login via Google Workspace
+ * ================================================================== */
+const GOOGLE_OAUTH_SQL = `
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS users_google_id_unique
+    ON users(google_id) WHERE google_id IS NOT NULL;
+
+  -- Allow NULL password_hash for Google-only accounts.
+  -- Existing NOT NULL constraint needs to be dropped and re-added as nullable.
+  -- Idempotent: if already nullable, Postgres silently succeeds.
+  ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+`;
+
+/* ==================================================================
+ * SPEC-EMP-00 — Employee self-service portal
+ * ================================================================== */
+const SPEC_EMP_00_SQL = `
+  -- Profile fields on employees
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS bio TEXT NULL;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS linkedin_url VARCHAR(300) NULL;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS github_url VARCHAR(300) NULL;
+  ALTER TABLE employees ADD COLUMN IF NOT EXISTS portfolio_url VARCHAR(300) NULL;
+
+  -- Education history
+  CREATE TABLE IF NOT EXISTS employee_education (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id UUID NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+    institution VARCHAR(200) NOT NULL,
+    degree VARCHAR(200) NOT NULL,
+    field_of_study VARCHAR(200) NULL,
+    start_year INT NULL,
+    end_year INT NULL,
+    description TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS employee_education_emp_idx
+    ON employee_education(employee_id);
+
+  -- Add 'staff' to users role CHECK
+  DO $$
+  BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'users'::regclass AND conname = 'users_role_check'
+    ) THEN
+      ALTER TABLE users DROP CONSTRAINT users_role_check;
+    END IF;
+  END $$;
+  ALTER TABLE users ADD CONSTRAINT users_role_check
+    CHECK (role IN ('superadmin','admin','director','lead','member','viewer','external','preventa','staff'));
+
+  -- Expand skills catalogue with more entries
+  INSERT INTO skills (name, category) VALUES
+    -- additional languages
+    ('Rust','language'),('Scala','language'),('Dart','language'),('R','language'),
+    ('Elixir','language'),('Clojure','language'),
+    -- additional frameworks
+    ('Svelte','framework'),('Remix','framework'),('Astro','framework'),
+    ('FastAPI','framework'),('Gin','framework'),('Flutter','framework'),
+    ('React Native','framework'),('Nuxt.js','framework'),
+    -- devops & infra
+    ('Ansible','tool'),('Prometheus','tool'),('Grafana','tool'),
+    ('ArgoCD','tool'),('Helm','tool'),('Pulumi','tool'),
+    -- data & analytics
+    ('BigQuery','data'),('Redshift','data'),('Tableau','data'),
+    ('Power BI','data'),('Looker','data'),('Metabase','data'),
+    ('Apache Beam','data'),('Delta Lake','data'),
+    -- testing
+    ('Cypress','tool'),('Playwright','tool'),('Jest','tool'),
+    ('Selenium','tool'),('JMeter','tool'),('k6','tool'),
+    -- design & product
+    ('Figma','tool'),('Adobe XD','tool'),
+    -- security
+    ('OWASP','methodology'),('Pentesting','methodology'),('SOC 2','methodology'),
+    -- additional methodologies
+    ('ITIL','methodology'),('Lean','methodology'),('OKRs','methodology'),
+    -- additional soft skills
+    ('Gestión de stakeholders','soft'),('Presentaciones','soft'),
+    ('Negociación','soft'),('Trabajo remoto','soft'),
+    ('Resolución de conflictos','soft')
+  ON CONFLICT (LOWER(name)) DO NOTHING;
+`;
+
+// ── SPEC-RM-00 — Resource Management: locks + bulk assignments ──────
+const SPEC_RM_00_SQL = `
+  -- assignment_locks: tracks which (employee, week) pairs are locked
+  CREATE TABLE IF NOT EXISTS assignment_locks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    employee_id UUID NOT NULL REFERENCES employees(id),
+    week_starting DATE NOT NULL,
+    locked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    locked_by UUID NULL REFERENCES users(id),
+    lock_reason VARCHAR(40) NOT NULL DEFAULT 'time_entries_submitted'
+      CHECK (lock_reason IN ('time_entries_submitted','period_closed','manual_lock')),
+    unlocked_at TIMESTAMPTZ NULL,
+    unlocked_by UUID NULL REFERENCES users(id),
+    CONSTRAINT uq_assignment_lock UNIQUE (employee_id, week_starting)
+  );
+  CREATE INDEX IF NOT EXISTS idx_al_employee_week
+    ON assignment_locks (employee_id, week_starting) WHERE unlocked_at IS NULL;
+
+  -- Extend assignments with lock tracking
+  ALTER TABLE assignments ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE;
+
+  -- Performance index for planner bulk queries
+  CREATE INDEX IF NOT EXISTS idx_asg_employee_dates_status
+    ON assignments (employee_id, start_date, end_date, status)
+    WHERE deleted_at IS NULL AND status IN ('planned','active');
+`;
+
 const migrate = async () => {
   let client;
   try {
@@ -1795,13 +2559,32 @@ const migrate = async () => {
     const hasPgVector = await ensurePgVector(client);
 
     await client.query('BEGIN');
-    await client.query(V1_SCHEMA);
-    await client.query(V2_NEW_TABLES);
-    await client.query(V2_ALTERS);
-    await client.query(AI_READINESS_SQL);
-    await client.query(V2_SEEDS_SQL);
-    await client.query(SPEC_II_00_SQL);
-    await client.query(SPEC_II_00_HOLIDAY_SEED_SQL);
+
+    const blocks = [
+      ['V1_SCHEMA',                V1_SCHEMA],
+      ['V2_NEW_TABLES',            V2_NEW_TABLES],
+      ['V2_ALTERS',                V2_ALTERS],
+      ['AI_READINESS_SQL',         AI_READINESS_SQL],
+      ['V2_SEEDS_SQL',             V2_SEEDS_SQL],
+      ['SPEC_II_00_SQL',           SPEC_II_00_SQL],
+      ['SPEC_II_00_HOLIDAY_SEED',  SPEC_II_00_HOLIDAY_SEED_SQL],
+      ['SPEC_CRM_01',              SPEC_CRM_01_SQL],
+      ['ASSIGNMENT_RATES',         ASSIGNMENT_RATES_SQL],
+      ['GOOGLE_OAUTH',             GOOGLE_OAUTH_SQL],
+      ['SPEC_EMP_00',              SPEC_EMP_00_SQL],
+      ['SPEC_RM_00',               SPEC_RM_00_SQL],
+    ];
+    for (const [label, sql] of blocks) {
+      try {
+        await client.query(sql);
+        // eslint-disable-next-line no-console
+        console.log(`[migrate] ${label} ✓`);
+      } catch (blockErr) {
+        // eslint-disable-next-line no-console
+        console.error(`[migrate] ${label} FAILED:`, blockErr.message);
+        throw blockErr;
+      }
+    }
 
     // Normalizar nombres de empleados a Title Case (primera letra de cada
     // palabra en mayúscula, resto en minúscula). Idempotente: initcap(lower())
@@ -1830,7 +2613,7 @@ const migrate = async () => {
     }
 
     // eslint-disable-next-line no-console
-    console.log(`Migration completed successfully (V1 + V2 + AI-readiness + SPEC-II-00${hasPgVector ? ' + pgvector' : ''}).`);
+    console.log(`Migration completed successfully (V1 + V2 + AI-readiness + SPEC-II-00 + SPEC-CRM-01${hasPgVector ? ' + pgvector' : ''}).`);
   } catch (err) {
     if (client) await client.query('ROLLBACK');
     // eslint-disable-next-line no-console

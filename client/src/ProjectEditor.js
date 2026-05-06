@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import ProjectEditorUnified from './ProjectEditorUnified';
+import FilterableSelect from './shell/FilterableSelect';
 import {
   calcProjectProfile,
   calcAllocation,
@@ -159,29 +160,19 @@ function StepTeam({ data, onChange, params }) {
                   <input style={{ ...s.input, minWidth: 140, fontSize: 12, padding: 6 }} value={p.role_title || ''} onChange={e => updateProfile(i, 'role_title', e.target.value)} placeholder="Ej: Senior Data Eng." />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, fontSize: 11, minWidth: 130 }} value={p.specialty || ''} onChange={e => updateProfile(i, 'specialty', e.target.value)}>
-                    <option value="">—</option>
-                    {SPECIALTIES.map(sp => <option key={sp}>{sp}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, fontSize: 11, minWidth: 130 }} value={p.specialty || ''} onChange={e => updateProfile(i, 'specialty', e.target.value)} placeholder="—" options={SPECIALTIES.map(sp => ({ id: sp, label: sp }))} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, fontSize: 11, width: 60 }} value={p.level || ''} onChange={e => updateProfile(i, 'level', Number(e.target.value))}>
-                    <option value="">—</option>
-                    {[1,2,3,4,5,6,7,8,9,10,11].map(n => <option key={n} value={n}>L{n}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, fontSize: 11, width: 60 }} value={p.level || ''} onChange={e => updateProfile(i, 'level', Number(e.target.value))} placeholder="—" options={[1,2,3,4,5,6,7,8,9,10,11].map(n => ({ id: String(n), label: `L${n}` }))} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, fontSize: 11, minWidth: 110 }} value={p.country || 'Colombia'} onChange={e => updateProfile(i, 'country', e.target.value)}>
-                    {countries.map(c => <option key={c}>{c}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, fontSize: 11, minWidth: 110 }} value={p.country || 'Colombia'} onChange={e => updateProfile(i, 'country', e.target.value)} placeholder="—" options={countries.map(c => ({ id: c, label: c }))} />
                 </td>
                 <td style={{ ...s.td, textAlign: 'center' }}>
                   <input type="checkbox" checked={p.bilingual || false} onChange={e => updateProfile(i, 'bilingual', e.target.checked)} />
                 </td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, fontSize: 11, minWidth: 120 }} value={p.stack || 'Especializada'} onChange={e => updateProfile(i, 'stack', e.target.value)}>
-                    {stacks.map(st => <option key={st}>{st}</option>)}
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, fontSize: 11, minWidth: 120 }} value={p.stack || 'Especializada'} onChange={e => updateProfile(i, 'stack', e.target.value)} placeholder="—" options={stacks.map(st => ({ id: st, label: st }))} />
                 </td>
                 <td style={{ ...s.td, fontWeight: 600, color: 'var(--purple-dark)', whiteSpace: 'nowrap' }}>{formatUSD2(p.cost_hour)}</td>
                 <td style={{ ...s.td, fontWeight: 600, color: 'var(--teal-mid)', whiteSpace: 'nowrap' }}>{formatUSD2(p.rate_hour)}</td>
@@ -507,9 +498,7 @@ function StepEpics({ data, onChange }) {
                 <td style={{ ...s.td, textAlign: 'center', fontWeight: 600, width: 30 }}>{i + 1}</td>
                 <td style={s.td}><input style={{ ...s.input, padding: 6, minWidth: 180 }} value={e.name || ''} onChange={ev => updateEpic(i, 'name', ev.target.value)} placeholder="Ej: Módulo de usuarios" /></td>
                 <td style={s.td}>
-                  <select style={{ ...s.select, fontSize: 11 }} value={e.priority || 'Media'} onChange={ev => updateEpic(i, 'priority', ev.target.value)}>
-                    <option>Alta</option><option>Media</option><option>Baja</option>
-                  </select>
+                  <FilterableSelect inputStyle={{ ...s.select, fontSize: 11 }} value={e.priority || 'Media'} onChange={ev => updateEpic(i, 'priority', ev.target.value)} placeholder="—" options={[{ id: 'Alta', label: 'Alta' }, { id: 'Media', label: 'Media' }, { id: 'Baja', label: 'Baja' }]} />
                 </td>
                 {profiles.map((_, pIdx) => (
                   <td key={pIdx} style={s.td}>
@@ -617,10 +606,7 @@ function StepSummary({ data, onChange, params, onSave, saving, onStatusChange, o
                   <td style={{ ...s.td, textAlign: 'center', width: 30 }}>{i + 1}</td>
                   <td style={s.td}><input style={{ ...s.input, padding: 6 }} value={m.name || ''} onChange={e => updateMilestone(i, 'name', e.target.value)} placeholder="Ej: Kick-off firmado" /></td>
                   <td style={s.td}>
-                    <select style={{ ...s.select, fontSize: 11 }} value={m.phase || ''} onChange={e => updateMilestone(i, 'phase', e.target.value)}>
-                      <option value="">—</option>
-                      {phases.map((p, pi) => <option key={pi} value={p.name}>{p.name}</option>)}
-                    </select>
+                    <FilterableSelect inputStyle={{ ...s.select, fontSize: 11 }} value={m.phase || ''} onChange={e => updateMilestone(i, 'phase', e.target.value)} placeholder="—" options={phases.map((p, pi) => ({ id: p.name, label: p.name }))} />
                   </td>
                   <td style={s.td}>
                     <input style={{ ...s.input, padding: 6, width: 80, textAlign: 'center' }} type="number" min={0} max={100} step={1}

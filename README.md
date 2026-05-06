@@ -1,6 +1,8 @@
 # DVPNYX Quoter + Capacity Planner
 
-SaaS interno de **Double V Partners** que integra **quote → contract → staff → bill**: cotizaciones de staff augmentation y proyectos de alcance fijo, contratos, solicitudes de recursos, asignación de empleados, time tracking, plan-vs-real semanal, revenue mensual y reportes ejecutivos.
+SaaS interno de **Double V Partners** que integra el ciclo **quote → contract → staff → time tracking**: cotizaciones de staff augmentation y proyectos de alcance fijo, contratos, solicitudes de recursos, asignación de empleados, time tracking, plan-vs-real semanal, revenue mensual y reportes ejecutivos.
+
+> Nota de alcance: la **facturación / invoicing** vive en otro sistema (Holded); este producto cubre desde la oportunidad hasta el reconocimiento de ingresos (`revenue_periods`). No hay integración contable automática.
 
 **Producción:** https://quoter.doublevpartners.com · **Dev:** https://dev.quoter.doublevpartners.com
 
@@ -12,7 +14,8 @@ SaaS interno de **Double V Partners** que integra **quote → contract → staff
 
 | # | Documento | Para quién | Tiempo |
 |---|---|---|---|
-| 1 | [`HANDOFF.md`](HANDOFF.md) | **Equipo entrante** — punto de entrada | 10 min |
+| **0** | [`STATE_OF_THE_UNION.md`](STATE_OF_THE_UNION.md) | **Equipo senior entrante (2026-05-15)** — carta de aterrizaje día 1 | **15 min** |
+| 1 | [`HANDOFF.md`](HANDOFF.md) | Punto de entrada técnico | 10 min |
 | 2 | [`docs/PROJECT_STATE_HANDOFF.md`](docs/PROJECT_STATE_HANDOFF.md) | Estado real del sistema, deudas, decisiones | 20 min |
 | 3 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Diagramas, flujos, stack, AI layer | 15 min |
 | 4 | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) | Patrones de código actuales (server + client) | 15 min |
@@ -136,14 +139,18 @@ dvpnyx-quoter/
 
 ## 🔐 Roles y permisos
 
+7 roles activos (post SPEC-CRM-00 v1.1) + `preventa` legacy. Macros operativas en [`server/middleware/auth.js`](server/middleware/auth.js): `ROLES`, `SEE_ALL_ROLES`, `WRITE_ROLES`. Detalle completo y matriz de permisos en [`docs/specs/v2/02_glossary_and_roles.md`](docs/specs/v2/02_glossary_and_roles.md).
+
 | Rol | Descripción | Permisos típicos |
 |---|---|---|
-| `superadmin` | Bypass total | Todo + impersonation |
-| `admin` | Operativo | CRUD de todas las entidades, kick-off de cualquier contrato |
-| `lead` | Líder de equipo | Ve tiempo + plan-vs-real de sus reportes directos (`employees.manager_user_id = users.id`). Puede hacer kick-off si es DM del contrato |
-| `member` | Usuario estándar | Cotiza, registra horas, ve sus propios datos |
-| `viewer` | Solo lectura | Reportes |
-| `preventa` | Legacy | Middleware reescribe a `member` + `function='preventa'` |
+| `superadmin` | Bypass total | Todo + impersonation. Único que crea otros admin/superadmin. |
+| `admin` | Operativo | CRUD de todas las entidades, kick-off de cualquier contrato. Ve todo. |
+| `director` *(SPEC-CRM-00)* | VP / C-suite | Ve **todo** el pipeline + reportes. Sin permisos administrativos sobre usuarios. |
+| `lead` | Líder de equipo | Ve tiempo + plan-vs-real de sus reportes directos (`employees.manager_user_id = users.id`). Puede hacer kick-off si es DM del contrato. |
+| `member` | Usuario estándar | Cotiza, registra horas, ve sus propios datos. En oportunidades **ve solo las suyas** (account_owner o presales_lead). |
+| `viewer` | Solo lectura | Reportes. |
+| `external` *(SPEC-CRM-00)* | Acceso restringido | Usuarios fuera de DVP (clientes en demo, partners). En oportunidades retorna **403**. |
+| `preventa` (legacy) | Backward-compat | Middleware reescribe a `member` + `function='preventa'`. No usar para usuarios nuevos. |
 
 Campo adicional `users.function` (comercial / preventa / delivery_manager / capacity_manager / project_manager / fte_tecnico / people / finance / pmo / admin) para visibilidades futuras.
 
@@ -165,8 +172,8 @@ Convenciones de commits y PRs: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 | Métrica | Valor |
 |---|---|
-| Tests backend | **638 / 638** ✅ |
-| Tests frontend | 325 / 327 (2 TimeMe pre-existentes, no bloqueantes) |
+| Tests backend | **1018+ / 1018+** ✅ (post SPEC-CRM-00) |
+| Tests frontend | 470+ / 472+ (2 fallos pre-existentes en `client/src/modules/TimeMe.test.js`, sospecha DST/timezone — ver nota en cabecera del archivo) |
 | Build cliente | Limpio, sin warnings |
 | Tablas en DB | 28 |
 | Endpoints API | ~85 |

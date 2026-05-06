@@ -22,6 +22,18 @@ const router = require('express').Router();
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { parsePagination, isValidUUID } = require('../utils/sanitize');
+const { parseSort } = require('../utils/sort');
+
+const SORTABLE = {
+  agent_name:      'agent_name',
+  prompt_template: 'prompt_template',
+  human_decision:  'human_decision',
+  confidence:      'confidence',
+  cost_usd:        'cost_usd',
+  latency_ms:      'latency_ms',
+  created_at:      'created_at',
+  decided_at:      'decided_at',
+};
 const { serverError } = require('../utils/http');
 const { recordDecision } = require('../utils/ai_logger');
 
@@ -56,6 +68,9 @@ router.get('/', adminOnly, async (req, res) => {
     if (req.query.to)   wheres.push(`created_at <= ${add(req.query.to)}::timestamptz`);
 
     const where = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+    const sort = parseSort(req.query, SORTABLE, {
+      defaultField: 'created_at', defaultDir: 'desc', tieBreaker: 'id ASC',
+    });
     const limitIdx = filterParams.length + 1;
     const offsetIdx = filterParams.length + 2;
 
@@ -68,7 +83,7 @@ router.get('/', adminOnly, async (req, res) => {
                 created_at, decided_at
            FROM ai_interactions
            ${where}
-           ORDER BY created_at DESC
+           ORDER BY ${sort.orderBy}
            LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
         [...filterParams, limit, offset]
       ),

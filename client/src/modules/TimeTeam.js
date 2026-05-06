@@ -16,6 +16,7 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPut } from '../utils/apiV2';
+import FilterableSelect from '../shell/FilterableSelect';
 
 function startOfWeek(d) {
   const date = new Date(d);
@@ -172,19 +173,17 @@ export default function TimeTeam() {
           <label style={{ display: 'block', fontSize: 12, fontWeight: 600, color: 'var(--text-light)', marginBottom: 6 }}>
             Selecciona un empleado para continuar
           </label>
-          <select
+          <FilterableSelect
             value={selectedEmployeeId || ''}
             onChange={(e) => setSelectedEmployeeId(e.target.value || null)}
-            style={{ ...s.navBtn, width: '100%', padding: '8px 12px', fontSize: 13 }}
+            inputStyle={{ ...s.navBtn, width: '100%', padding: '8px 12px', fontSize: 13 }}
             aria-label="Empleado"
-          >
-            <option value="">— Selecciona un empleado —</option>
-            {(data.available_employees || []).map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.name}{emp.email ? ` · ${emp.email}` : ''}
-              </option>
-            ))}
-          </select>
+            placeholder="— Selecciona un empleado —"
+            options={(data.available_employees || []).map((emp) => ({
+              id: String(emp.id),
+              label: `${emp.name}${emp.email ? ` · ${emp.email}` : ''}`,
+            }))}
+          />
           <div style={{ fontSize: 11, color: 'var(--text-light)', marginTop: 8 }}>
             Tu propio rol como CEO/admin no requiere registrar tiempo, pero puedes ayudar a un empleado a llenar su semana desde aquí.
           </div>

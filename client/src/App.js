@@ -14,7 +14,6 @@ import CommandPalette from './shell/CommandPalette';
 import StatusBadge from './shell/StatusBadge';
 import NotificationsDrawer from './shell/NotificationsDrawer';
 import { apiGet } from './utils/apiV2';
-import ComingSoon from './shell/ComingSoon';
 import ErrorBoundary from './shell/ErrorBoundary';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
@@ -30,8 +29,15 @@ import ResourceRequests from './modules/ResourceRequests';
 import Assignments from './modules/Assignments';
 import CapacityPlanner from './modules/CapacityPlanner';
 import TimeMe from './modules/TimeMe';
+import TimeAdmin from './modules/TimeAdmin';
 import TimeTeam from './modules/TimeTeam';
 import Reports from './modules/Reports';
+import ReportsHub from './modules/reports/ReportsHub';
+import ExecutiveReports from './modules/reports/ExecutiveReports';
+import ComercialReports from './modules/reports/ComercialReports';
+import DeliveryReports from './modules/reports/DeliveryReports';
+import PeopleReports from './modules/reports/PeopleReports';
+import FinanceReports from './modules/reports/FinanceReports';
 import DashboardMe from './modules/DashboardMe';
 import ClientDetail from './modules/ClientDetail';
 import OpportunityDetail from './modules/OpportunityDetail';
@@ -40,15 +46,21 @@ import EmployeeDetail from './modules/EmployeeDetail';
 import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import BulkImport from './modules/BulkImport';
 import Users from './modules/Users';
-import Preferencias from './modules/Preferencias';
 import EmployeeCosts from './modules/EmployeeCosts';
 import EmployeeCostsImport from './modules/EmployeeCostsImport';
+// SPEC-CRM-01 — Contacts, Activities, Budgets
+import Contacts from './modules/Contacts';
+import Activities from './modules/Activities';
+import Budgets from './modules/Budgets';
 // SPEC-II-00 — Internal Initiatives, Novelties & Idle Time
 import InternalInitiatives from './modules/InternalInitiatives';
 import InternalInitiativeDetail from './modules/InternalInitiativeDetail';
 import Novelties from './modules/Novelties';
 import IdleTime from './modules/IdleTime';
 import CountryHolidays from './modules/CountryHolidays';
+import MiPerfil from './modules/MiPerfil';
+import MisAsignaciones from './modules/MisAsignaciones';
+import Deviations from './modules/Deviations';
 import './theme.css';
 import './App.css';
 
@@ -93,7 +105,7 @@ const css = {
 
 /* ========== LAYOUT ========== */
 function Layout() {
-  const { user, doLogout, isAdmin } = useAuth();
+  const { user, doLogout, isAdmin, isStaff, hasEmployee, isLeadOrAdmin } = useAuth();
   const nav = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -103,10 +115,17 @@ function Layout() {
   // Poll unread notifications every 60s so the bell badge stays fresh
   // without a heavy websocket. First fetch fires immediately on login.
   // Fail-soft: a failing fetch simply leaves the badge at 0.
+  //
+  // PERF-001: skip the poll when the tab is hidden, and re-fetch on
+  // visibility change. Users with multiple tabs open were generating
+  // a poll per tab per minute against a count(*) that scans the
+  // unread index — multiplied by ~10 users this was the dominant
+  // background DB load. Hidden tabs no longer contribute.
   useEffect(() => {
     if (!user) return undefined;
     let live = true;
     const fetchCount = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       try {
         const d = await apiGet('/api/notifications/unread-count');
         if (live && d && typeof d.count === 'number') setUnread(d.count);
@@ -114,7 +133,13 @@ function Layout() {
     };
     fetchCount();
     const t = setInterval(fetchCount, 60000);
-    return () => { live = false; clearInterval(t); };
+    const onVis = () => { if (document.visibilityState === 'visible') fetchCount(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      live = false;
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, [user]);
 
   // Global ⌘K / Ctrl+K opens the Command Palette. Registered once per
@@ -144,6 +169,9 @@ function Layout() {
       <Sidebar
         user={user}
         isAdmin={isAdmin}
+        isStaff={isStaff}
+        hasEmployee={hasEmployee}
+        isLeadOrAdmin={isLeadOrAdmin}
         open={sidebarOpen}
         onNavigate={closeSidebar}
         onLogout={() => { doLogout(); nav('/login'); }}
@@ -163,18 +191,27 @@ function Layout() {
         />
         <ErrorBoundary>
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={isStaff ? <Navigate to="/me/profile" /> : <Navigate to="/reports" />} />
+          {/* Staff-accessible routes */}
+          <Route path="/me/profile" element={<MiPerfil />} />
+          <Route path="/me/assignments" element={<MisAsignaciones />} />
+          <Route path="/dashboard/me" element={<DashboardMe />} />
+          <Route path="/time/me" element={<TimeMe />} />
+          <Route path="/time" element={<TimeMe />} />
+          <Route path="/wiki" element={<Wiki />} />
+          {!isStaff && <>
+          <Route path="/quotations" element={<QuotationHistory />} />
           <Route path="/quotation/new/:type" element={<QuotationRouter />} />
           <Route path="/quotation/:id" element={<QuotationRouter />} />
-          <Route path="/wiki" element={<Wiki />} />
           {isAdmin && <Route path="/admin/params" element={<AdminParams />} />}
           {isAdmin && <Route path="/admin/exchange-rates" element={<ExchangeRates />} />}
           {isAdmin && <Route path="/admin/users" element={<Users />} />}
           {isAdmin && <Route path="/admin/bulk-import" element={<BulkImport />} />}
-          {/* V2 modules — placeholders until they ship in later sprints */}
           <Route path="/clients" element={<Clients />} />
           <Route path="/clients/:id" element={<ClientDetail />} />
           <Route path="/opportunities" element={<Opportunities />} />
+          <Route path="/contacts" element={<Contacts />} />
+          <Route path="/activities" element={<Activities />} />
           <Route path="/pipeline" element={<PipelineKanban />} />
           <Route path="/revenue" element={<Revenue />} />
           <Route path="/revenue/plan/:contract_id" element={<RevenuePlanEditor />} />
@@ -186,23 +223,27 @@ function Layout() {
           <Route path="/resource-requests" element={<ResourceRequests />} />
           <Route path="/assignments" element={<Assignments />} />
           <Route path="/capacity/planner" element={<CapacityPlanner />} />
-          <Route path="/time" element={<TimeMe />} />
-          <Route path="/time/me" element={<TimeMe />} />
           <Route path="/time/team" element={<TimeTeam />} />
-          <Route path="/reports" element={<Reports />} />
+          {isLeadOrAdmin && <Route path="/time/admin" element={<TimeAdmin />} />}
+          <Route path="/reports" element={<ReportsHub />} />
+          <Route path="/reports/ejecutivo" element={<ExecutiveReports />} />
+          <Route path="/reports/comercial" element={<ComercialReports />} />
+          <Route path="/reports/delivery" element={<DeliveryReports />} />
+          <Route path="/reports/gente" element={<PeopleReports />} />
+          <Route path="/reports/finanzas" element={<FinanceReports />} />
           <Route path="/reports/:type" element={<Reports />} />
-          <Route path="/dashboard/me" element={<DashboardMe />} />
           {isAdmin && <Route path="/admin/areas" element={<Areas />} />}
           {isAdmin && <Route path="/admin/skills" element={<Skills />} />}
           {isAdmin && <Route path="/admin/employee-costs" element={<EmployeeCosts />} />}
           {isAdmin && <Route path="/admin/employee-costs/import" element={<EmployeeCostsImport />} />}
-          {/* SPEC-II-00 */}
           <Route path="/internal-initiatives"        element={<InternalInitiatives />} />
           <Route path="/internal-initiatives/:id"    element={<InternalInitiativeDetail />} />
           <Route path="/novelties"                    element={<Novelties />} />
           <Route path="/idle-time"                    element={<IdleTime />} />
+          {isAdmin && <Route path="/admin/budgets" element={<Budgets />} />}
           <Route path="/admin/holidays"               element={<CountryHolidays />} />
-          <Route path="/preferencias" element={<Preferencias />} />
+          <Route path="/deviations"                  element={<Deviations />} />
+          </>}
         </Routes>
         </ErrorBoundary>
         <Footer />
@@ -221,18 +262,74 @@ function Login() {
   const [newPw, setNewPw] = useState('');
   const { doLogin, commitLogin, user } = useAuth();
   const nav = useNavigate();
+  const googleBtnRef = React.useRef(null);
+  const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
 
-  // Only redirect when user is set AND we are NOT waiting for a password change.
-  // This prevents premature redirect during the 'must_change_password' flow.
+  // Handle the redirect-mode callback: server redirects here with ?google_token=JWT
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get('google_token');
+    const error = params.get('error');
+    if (error) {
+      const msgs = {
+        domain_not_allowed: 'Solo cuentas corporales pueden iniciar sesión',
+        no_account: 'No existe una cuenta asociada a este correo. Contacta al administrador.',
+        google_auth_failed: 'Error al autenticar con Google. Intenta de nuevo.',
+        google_not_configured: 'Google OAuth no está configurado.',
+      };
+      setErr(msgs[error] || 'Error al iniciar sesión con Google');
+      window.history.replaceState({}, '', '/login');
+      return;
+    }
+    if (!token) return;
+    window.history.replaceState({}, '', '/login');
+    setLoading(true);
+    localStorage.setItem('dvpnyx_token', token);
+    api.getMe().then((u) =>
+      api.getParams().then((p) => { commitLogin(u, p); nav('/'); })
+    ).catch((e) => {
+      localStorage.removeItem('dvpnyx_token');
+      setErr(e.message || 'Error al completar login');
+    }).finally(() => setLoading(false));
+  }, []); // eslint-disable-line
+
   if (user && !changePw) return <Navigate to="/" />;
+
+  // Render Google Sign-In button (redirect mode — no popup)
+  React.useEffect(() => {
+    if (!googleClientId || !window.google?.accounts?.id) return;
+    let cancelled = false;
+    let retries = 0;
+    const init = () => {
+      if (cancelled) return;
+      if (!window.google?.accounts?.id) {
+        if (retries++ < 50) setTimeout(init, 100);
+        return;
+      }
+      window.google.accounts.id.initialize({
+        client_id: googleClientId,
+        ux_mode: 'redirect',
+        login_uri: window.location.origin + '/api/auth/google-callback',
+      });
+      if (googleBtnRef.current) {
+        window.google.accounts.id.renderButton(googleBtnRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          width: googleBtnRef.current.offsetWidth || 320,
+          text: 'signin_with',
+          logo_alignment: 'center',
+        });
+      }
+    };
+    init();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line
 
   const handleLogin = async (e) => {
     e.preventDefault(); setErr(''); setLoading(true);
     try {
       const { user: u, params: p } = await doLogin(email, pw);
-      // Set all state in the same microtask → single React render batch.
-      // If we set user first (via doLogin internally) React would re-render
-      // and redirect to "/" before setChangePw(true) runs.
       commitLogin(u, p);
       if (u.must_change_password) setChangePw(true);
       else nav('/');
@@ -255,18 +352,28 @@ function Login() {
           <div style={{ fontSize: 12, color: 'var(--text-light)', marginTop: 4 }}>Cotizador de Servicios</div>
         </div>
         {!changePw ? (
-          <form onSubmit={handleLogin}>
-            <div style={{ marginBottom: 16 }}>
-              <label style={css.label}>Email</label>
-              <input style={css.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="correo@dvpnyx.com" required />
-            </div>
-            <div style={{ marginBottom: 24 }}>
-              <label style={css.label}>Contraseña</label>
-              <input style={css.input} type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" required />
-            </div>
-            {err && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12, textAlign: 'center' }}>{err}</div>}
-            <button style={{ ...css.btn('var(--ds-accent, var(--purple-dark))'), width: '100%', padding: 14, fontSize: 15 }} disabled={loading}>{loading ? 'Ingresando...' : 'Ingresar'}</button>
-          </form>
+          <>
+            <div ref={googleBtnRef} style={{ marginBottom: 20 }} />
+            {process.env.REACT_APP_GOOGLE_CLIENT_ID && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+                <span style={{ fontSize: 12, color: 'var(--text-light)' }}>o con email</span>
+                <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
+              </div>
+            )}
+            <form onSubmit={handleLogin}>
+              <div style={{ marginBottom: 16 }}>
+                <label style={css.label}>Email</label>
+                <input style={css.input} type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="correo@dvpnyx.com" required />
+              </div>
+              <div style={{ marginBottom: 24 }}>
+                <label style={css.label}>Contraseña</label>
+                <input style={css.input} type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="••••••••" required />
+              </div>
+              {err && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12, textAlign: 'center' }}>{err}</div>}
+              <button style={{ ...css.btn('var(--ds-accent, var(--purple-dark))'), width: '100%', padding: 14, fontSize: 15 }} disabled={loading}>{loading ? 'Ingresando...' : 'Ingresar'}</button>
+            </form>
+          </>
         ) : (
           <form onSubmit={handleChangePw}>
             <div style={{ fontSize: 14, color: 'var(--purple-mid)', marginBottom: 16, textAlign: 'center' }}>Debe cambiar su contraseña</div>
@@ -384,14 +491,13 @@ function ExecutiveKpis() {
   );
 }
 
-function Dashboard() {
+function QuotationHistory() {
   const [quots, setQuots] = useState([]);
   const [loading, setLoading] = useState(true);
   const nav = useNavigate();
 
   useEffect(() => { api.getQuotations().then(setQuots).catch(console.error).finally(() => setLoading(false)); }, []);
 
-  const statusColor = { draft: 'var(--text-light)', sent: 'var(--orange)', approved: 'var(--success)', rejected: 'var(--danger)', expired: '#999' };
   const statusLabel = { draft: 'Borrador', sent: 'Enviada', approved: 'Aprobada', rejected: 'Rechazada', expired: 'Expirada' };
 
   const handleDuplicate = async (id) => {
@@ -401,9 +507,8 @@ function Dashboard() {
 
   return (
     <div>
-      <ExecutiveKpis />
       <div className="page-header">
-        <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ds-text)', margin: 0 }}>Cotizaciones</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ds-text)', margin: 0 }}>Historial de cotizaciones</h1>
         <div className="page-header-actions">
           <button style={css.btn('var(--teal-mid)')} onClick={() => nav('/quotation/new/staff_aug')}>+ Staff Augmentation</button>
           <button style={css.btn('var(--orange)')} onClick={() => nav('/quotation/new/fixed_scope')}>+ Proyecto Alcance Fijo</button>
@@ -478,7 +583,7 @@ function QuotationRouter() {
   useEffect(() => {
     if (isNew) { setType(newType); setLoading(false); return; }
     if (quotId) {
-      api.getQuotation(quotId).then(q => { setType(q.type); setLoading(false); }).catch(() => nav('/'));
+      api.getQuotation(quotId).then(q => { setType(q.type); setLoading(false); }).catch(() => nav('/quotations'));
     }
   }, [quotId, newType, isNew, nav]);
 
@@ -490,7 +595,7 @@ function QuotationRouter() {
       <NewQuotationPreModal
         type={newType}
         onContext={setLinkingContext}
-        onCancel={() => nav('/')}
+        onCancel={() => nav('/quotations')}
       />
     );
   }

@@ -4,7 +4,10 @@ import AssignmentValidationModal from './AssignmentValidationModal';
 import AssignmentValidationInline from './AssignmentValidationInline';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import StatusBadge from '../shell/StatusBadge';
+import FilterableSelect from '../shell/FilterableSelect';
 import SearchableSelect from '../shell/SearchableSelect';
+import SortableTh from '../shell/SortableTh';
+import { useSort } from '../utils/useSort';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -47,7 +50,10 @@ const EMPTY = {
   resource_request_id: '', employee_id: '', contract_id: '',
   weekly_hours: 20, start_date: '', end_date: '',
   role_title: '', notes: '', status: 'planned',
+  client_rate: '', client_rate_currency: 'USD',
 };
+
+const RATE_CURRENCIES = ['USD', 'COP', 'EUR', 'MXN', 'GBP'];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // EmployeeMultiSelect — SPEC-007 Spec 1
@@ -191,6 +197,16 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
 
   const selectedRequest = requests.find((r) => r.id === form.resource_request_id);
 
+  // Pre-llenar la moneda de tarifa con la del contrato al seleccionar solicitud capacity
+  useEffect(() => {
+    if (selectedRequest?.contract_type === 'capacity' && selectedRequest.contract_currency) {
+      setForm((f) => f.client_rate_currency === 'USD' && !f.client_rate
+        ? { ...f, client_rate_currency: selectedRequest.contract_currency }
+        : f
+      );
+    }
+  }, [selectedRequest?.contract_type, selectedRequest?.contract_currency]);
+
   /* --- US-VAL-4: live pre-validation --------------------------------
    * Debounce-call GET /api/assignments/validate whenever the four
    * inputs (employee, request, hours, start_date) are populated. The
@@ -244,10 +260,17 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
     if (!form.weekly_hours || form.weekly_hours <= 0) return setErr('Horas semanales inválidas');
     if (!form.start_date) return setErr('Fecha de inicio es requerida');
     try {
-      await onSave({
+      const payload = {
         ...form,
         contract_id: selectedRequest?.contract_id || form.contract_id,
-      });
+      };
+      // Convertir client_rate a número (o null si vacío/no-capacity)
+      if (selectedRequest?.contract_type === 'capacity' && payload.client_rate !== '' && payload.client_rate != null) {
+        payload.client_rate = Number(payload.client_rate);
+      } else {
+        payload.client_rate = null;
+      }
+      await onSave(payload);
     } catch (ex) {
       setErr(ex.message || 'Error guardando');
     }
@@ -306,9 +329,14 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
         </div>
         <div>
           <label style={s.label}>Estado</label>
-          <select style={s.input} value={form.status} onChange={(e) => set('status', e.target.value)} aria-label="Estado">
-            {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-          </select>
+          <FilterableSelect
+            inputStyle={s.input}
+            value={form.status}
+            onChange={(e) => set('status', e.target.value)}
+            aria-label="Estado"
+            placeholder="— Selecciona estado —"
+            options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+          />
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -321,6 +349,34 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
           <input type="date" style={s.input} value={form.end_date ? String(form.end_date).slice(0, 10) : ''} onChange={(e) => set('end_date', e.target.value || null)} aria-label="Fecha fin" />
         </div>
       </div>
+      {/* Tarifa de cliente — solo para contratos de capacidad (staff aug) */}
+      {selectedRequest?.contract_type === 'capacity' && (
+        <div style={{ background: 'var(--ds-accent-soft, #faf7ff)', border: '1px solid var(--ds-accent-border, #e0d4f5)', borderRadius: 8, padding: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--ds-accent-text, var(--purple-dark))', marginBottom: 8 }}>
+            Tarifa mensual del cliente
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr', gap: 10 }}>
+            <div>
+              <label style={s.label}>Moneda</label>
+              <FilterableSelect
+                inputStyle={s.input}
+                value={form.client_rate_currency || selectedRequest?.contract_currency || 'USD'}
+                onChange={(e) => set('client_rate_currency', e.target.value)}
+                aria-label="Moneda tarifa"
+                placeholder="— Moneda —"
+                options={RATE_CURRENCIES.map((c) => ({ id: c, label: c }))}
+              />
+            </div>
+            <div>
+              <label style={s.label}>Tarifa mensual *</label>
+              <input type="number" min={0} step={0.01} style={s.input} value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Monto acordado con el cliente" aria-label="Tarifa mensual" />
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 6 }}>
+            Tarifa mensual acordada con el cliente para este recurso. Determina el ingreso proyectado del contrato.
+          </div>
+        </div>
+      )}
       <div>
         <label style={s.label}>Role title</label>
         <input style={s.input} value={form.role_title || ''} onChange={(e) => set('role_title', e.target.value)} aria-label="Role title" />
@@ -362,6 +418,7 @@ export default function Assignments() {
   const [showForm, setShowForm]               = useState(false);
   const [editing, setEditing]                 = useState(null);
   const [saving, setSaving]                   = useState(false);
+  const sort = useSort({ field: 'start_date', dir: 'desc' });
   const [validationModal, setValidationModal] = useState(null);
 
   // ── Validación de rango de fechas ─────────────────────────────────────────
@@ -397,6 +454,7 @@ export default function Assignments() {
     if (employeeIds.length)   qs.set('employee_ids', employeeIds.join(','));
     if (dateFrom)             qs.set('date_from', dateFrom);
     if (dateTo)               qs.set('date_to', dateTo);
+    sort.applyToQs(qs);
     try {
       const r = await apiGet(`/api/assignments?${qs}`);
       setState({ data: r.data || [], loading: false, page: r.pagination?.page || 1, total: r.pagination?.total || 0, pages: r.pagination?.pages || 1 });
@@ -405,7 +463,7 @@ export default function Assignments() {
       // eslint-disable-next-line no-alert
       alert('Error cargando asignaciones: ' + e.message);
     }
-  }, [statusFilter, employeeIds, dateFrom, dateTo]);
+  }, [statusFilter, employeeIds, dateFrom, dateTo, sort.field, sort.dir]);
 
   // INC-003: usar /lookup (sin paginación) para los combobox del formulario
   // y para la lista de empleados del filtro. Separamos ambos usos:
@@ -551,15 +609,14 @@ export default function Assignments() {
           {/* Filtro por estado (existente) */}
           <div style={{ minWidth: 150 }}>
             <label style={s.label}>Estado</label>
-            <select
-              style={s.input}
+            <FilterableSelect
+              inputStyle={s.input}
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               aria-label="Filtro por estado"
-            >
-              <option value="">Todos</option>
-              {STATUSES.map((st) => <option key={st.value} value={st.value}>{st.label}</option>)}
-            </select>
+              placeholder="Todos"
+              options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
+            />
           </div>
 
           {/* SPEC-007 Spec 1: Filtro por empleado (multi-select) */}
@@ -626,9 +683,14 @@ export default function Assignments() {
           <table className={TABLE_CLASS} style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
             <thead>
               <tr>
-                {['Empleado', 'Contrato', 'Role (solicitud)', 'h/sem', 'Inicio', 'Fin', 'Estado', ''].map((h) => (
-                  <th key={h} style={s.th}>{h}</th>
-                ))}
+                <SortableTh sort={sort} field="employee_name" style={s.th}>Empleado</SortableTh>
+                <SortableTh sort={sort} field="contract_name" style={s.th}>Contrato</SortableTh>
+                <SortableTh sort={sort} field="role_title" style={s.th}>Role (solicitud)</SortableTh>
+                <SortableTh sort={sort} field="weekly_hours" style={s.th}>h/sem</SortableTh>
+                <SortableTh sort={sort} field="start_date" style={s.th}>Inicio</SortableTh>
+                <SortableTh sort={sort} field="end_date" style={s.th}>Fin</SortableTh>
+                <SortableTh sort={sort} field="status" style={s.th}>Estado</SortableTh>
+                <th style={s.th}></th>
               </tr>
             </thead>
             <tbody>

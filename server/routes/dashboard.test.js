@@ -149,7 +149,8 @@ describe('GET /api/dashboard/overview', () => {
 
     const res = await client.call('GET', '/api/dashboard/overview');
     expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/dashboard/i);
+    expect(res.body.errorId).toMatch(/^ERR-/);
+    expect(res.body.where).toBe('GET /dashboard/overview');
   });
 
   it('issues exactly 6 queries (one per domain)', async () => {

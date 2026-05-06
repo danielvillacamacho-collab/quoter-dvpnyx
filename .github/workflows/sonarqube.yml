@@ -1,0 +1,42 @@
+name: SonarQube Analysis
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  sonarqube:
+    name: SonarQube Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for blame/new code detection
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install client deps
+        working-directory: client
+        run: npm install
+
+      - name: Run client tests with coverage
+        working-directory: client
+        run: npm test -- --watchAll=false --ci --coverage
+
+      - name: Install server deps
+        working-directory: server
+        run: npm install
+
+      - name: Run server tests with coverage
+        working-directory: server
+        run: npx jest --ci --coverage --coverageThreshold='{}' --passWithNoTests
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}

@@ -5,8 +5,10 @@ WORKDIR /app/client
 # footer shows the exact commit in every browser for bug reports.
 ARG REACT_APP_GIT_SHA=local
 ARG REACT_APP_VERSION=2.0.0
+ARG REACT_APP_GOOGLE_CLIENT_ID=
 ENV REACT_APP_GIT_SHA=$REACT_APP_GIT_SHA
 ENV REACT_APP_VERSION=$REACT_APP_VERSION
+ENV REACT_APP_GOOGLE_CLIENT_ID=$REACT_APP_GOOGLE_CLIENT_ID
 COPY client/package*.json ./
 RUN npm install
 COPY client/ ./

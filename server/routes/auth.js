@@ -1,9 +1,39 @@
-const router = require('express').Router();
+const express = require('express');
+const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { OAuth2Client } = require('google-auth-library');
 const pool = require('../database/pool');
 const { auth } = require('../middleware/auth');
 const { serverError } = require('../utils/http');
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
+async function provisionStaffUser(email, googleId, name) {
+  const { rows: empRows } = await pool.query(
+    `SELECT id, first_name, last_name FROM employees
+      WHERE deleted_at IS NULL
+        AND (LOWER(corporate_email)=$1 OR LOWER(personal_email)=$1)
+      LIMIT 1`,
+    [email.toLowerCase()],
+  );
+  if (!empRows.length) return null;
+  const emp = empRows[0];
+  const displayName = name || `${emp.first_name} ${emp.last_name}`;
+  const { rows } = await pool.query(
+    `INSERT INTO users (email, name, role, active)
+      VALUES ($1, $2, 'staff', true)
+      RETURNING *`,
+    [email.toLowerCase(), displayName],
+  );
+  const user = rows[0];
+  if (googleId) {
+    await pool.query('UPDATE users SET google_id=$1 WHERE id=$2', [googleId, user.id]);
+    user.google_id = googleId;
+  }
+  await pool.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [user.id, emp.id]);
+  return user;
+}
 
 router.post('/login', async (req, res) => {
   try {
@@ -22,6 +52,109 @@ router.post('/login', async (req, res) => {
       [user.id, req.ip]);
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null, must_change_password: user.must_change_password } });
   } catch (err) { serverError(res, 'POST /auth/login', err); }
+});
+
+router.post('/google', async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: 'Token de Google requerido' });
+
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!clientId) return res.status(500).json({ error: 'Google OAuth no configurado en el servidor' });
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: clientId,
+    });
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, name, hd } = payload;
+
+    const allowedDomain = process.env.GOOGLE_ALLOWED_DOMAIN;
+    if (allowedDomain && hd !== allowedDomain) {
+      return res.status(403).json({ error: `Solo cuentas @${allowedDomain} pueden iniciar sesión` });
+    }
+
+    let { rows } = await pool.query(
+      'SELECT * FROM users WHERE google_id=$1 AND active=true', [googleId]
+    );
+
+    if (!rows.length) {
+      ({ rows } = await pool.query(
+        'SELECT * FROM users WHERE email=$1 AND active=true', [email.toLowerCase()]
+      ));
+      if (rows.length) {
+        await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, rows[0].id]);
+      }
+    }
+
+    if (!rows.length) {
+      const staffUser = await provisionStaffUser(email, googleId, name);
+      if (!staffUser) {
+        return res.status(403).json({ error: 'No existe una cuenta asociada a este correo. Contacta al administrador.' });
+      }
+      rows = [staffUser];
+    }
+
+    const user = rows[0];
+    const token = jwt.sign(
+      { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null },
+      process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+    );
+    await pool.query(
+      `INSERT INTO audit_log (user_id, action, details, ip_address) VALUES ($1, 'google_login', '{}', $2)`,
+      [user.id, req.ip]
+    );
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null, must_change_password: false },
+    });
+  } catch (err) { serverError(res, 'POST /auth/google', err); }
+});
+
+// Google redirect-mode callback. GIS posts credential as urlencoded form.
+router.post('/google-callback', express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    const { credential } = req.body;
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (!credential || !clientId) return res.redirect('/login?error=google_not_configured');
+
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId });
+    const payload = ticket.getPayload();
+    const { sub: googleId, email, hd } = payload;
+
+    const allowedDomain = process.env.GOOGLE_ALLOWED_DOMAIN;
+    if (allowedDomain && hd !== allowedDomain) {
+      return res.redirect('/login?error=domain_not_allowed');
+    }
+
+    let { rows } = await pool.query('SELECT * FROM users WHERE google_id=$1 AND active=true', [googleId]);
+    if (!rows.length) {
+      ({ rows } = await pool.query('SELECT * FROM users WHERE email=$1 AND active=true', [email.toLowerCase()]));
+      if (rows.length) {
+        await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, rows[0].id]);
+      }
+    }
+    if (!rows.length) {
+      const name = payload.name || email.split('@')[0];
+      const staffUser = await provisionStaffUser(email, googleId, name);
+      if (!staffUser) return res.redirect('/login?error=no_account');
+      rows = [staffUser];
+    }
+
+    const user = rows[0];
+    const token = jwt.sign(
+      { id: user.id, email: user.email, name: user.name, role: user.role, function: user.function || null },
+      process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+    );
+    await pool.query(
+      `INSERT INTO audit_log (user_id, action, details, ip_address) VALUES ($1, 'google_login', '{}', $2)`,
+      [user.id, req.ip]
+    );
+    res.redirect(`/login?google_token=${token}`);
+  } catch (err) {
+    console.error('POST /auth/google-callback error:', err.message);
+    res.redirect('/login?error=google_auth_failed');
+  }
 });
 
 router.post('/change-password', auth, async (req, res) => {
@@ -47,11 +180,25 @@ router.get('/me', auth, async (req, res) => {
       [req.user.id],
     );
     if (!rows.length) return res.status(404).json({ error: 'Usuario no encontrado' });
-    // Ensure preferences is always an object on the wire — psql returns {} but
-    // if the column were ever NULL (shouldn't, DEFAULT guards it) the client
-    // would crash reading user.preferences.scheme.
     const row = rows[0];
     row.preferences = row.preferences || {};
+    let { rows: empRows } = await pool.query(
+      'SELECT id FROM employees WHERE user_id=$1 AND deleted_at IS NULL', [req.user.id],
+    );
+    if (!empRows.length && row.email) {
+      const { rows: match } = await pool.query(
+        `SELECT id FROM employees
+          WHERE user_id IS NULL AND deleted_at IS NULL
+            AND (LOWER(corporate_email)=$1 OR LOWER(personal_email)=$1)
+          LIMIT 1`,
+        [row.email.toLowerCase()],
+      );
+      if (match.length) {
+        await pool.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [row.id, match[0].id]);
+        empRows = match;
+      }
+    }
+    row.has_employee = empRows.length > 0;
     res.json(row);
   } catch (err) { serverError(res, 'GET /auth/me', err); }
 });

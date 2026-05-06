@@ -22,6 +22,39 @@
 
 Si tenías esta documentación cargada de la versión anterior, lo importante es:
 
+### SPEC-CRM-00 v1.1 — 4 PRs grandes en oportunidades (2026-05-01 a 2026-05-02)
+
+Cuatro entregas mayores que materializan el contrato CCO sobre el módulo de oportunidades. Detalle completo en [`CHANGELOG.md`](../CHANGELOG.md), resumen acá:
+
+1. **Pipeline 9 estados + Postponed + opportunity_number** (`c246b05`).
+   - Estados: `lead → qualified → solution_design → proposal_validated → negotiation → verbal_commit → {closed_won | closed_lost | postponed}`. Probabilidades 5/15/30/50/75/90/100/0/0.
+   - `postponed` es **limbo no terminal** (solo sale a `qualified` o `closed_lost`). Requiere `postponed_until_date`.
+   - `opportunity_number = OPP-{cc}-{year}-{seq}` correlativo por país/año.
+   - SSOT compartido en `server/utils/pipeline.js` + `client/src/utils/pipeline.js` + trigger DB.
+
+2. **Revenue model + Champion/EB + funding + loss reasons** (`3e6d65c`).
+   - Modelo `one_time | recurring | mixed` con booking derivado por trigger DB.
+   - Nuevas columnas: `revenue_type`, `one_time_amount_usd`, `mrr_usd`, `contract_length_months`, `champion_identified`, `economic_buyer_identified`, `funding_source`, `funding_amount_usd`, `loss_reason`, `loss_reason_detail`, `drive_url`.
+   - Loss reason enum extendido (price/competitor_won/no_decision/budget_cut/champion_left/wrong_fit/timing/incumbent_win/other) con `loss_reason_detail` ≥30 chars.
+   - Helpers `server/utils/booking.js` + `client/src/utils/booking.js` mantienen la fórmula sincronizada con el trigger.
+
+3. **margin_pct + check-margin + Alerta A4** (`e234137`).
+   - Columnas `estimated_cost_usd` + `margin_pct` con CHECK constraints e índice parcial para reportes.
+   - Endpoint `POST /api/opportunities/:id/check-margin` (auto-computa desde líneas si no se pasa el costo).
+   - `MARGIN_LOW_THRESHOLD = 20%` compartido cliente/server.
+   - Warning `a4_margin_low` (no bloqueante) en transiciones de estado.
+
+4. **RBAC 7 roles + alertas A1/A2/A3/A5** (`c8643d9`).
+   - **7 roles** en `users.role`: `superadmin`, `admin`, `director` (nuevo, VP-level), `lead`, `member`, `viewer`, `external` (nuevo, restringido). `preventa` se mantiene por backward-compat.
+   - `server/middleware/auth.js` exporta `ROLES`, `SEE_ALL_ROLES = {superadmin, admin, director}`, `WRITE_ROLES = {superadmin, admin, director, lead, member}`.
+   - Scoping inline en `GET /api/opportunities` y `GET /kanban`: see-all roles ven todo, lead ve su squad, member ve solo las suyas (account_owner o presales_lead), external → 403.
+   - Sistema de alertas en `server/utils/alerts.js` (205 LOC): `ALERT_DEFS` con A1 (estancada >30d), A2 (next_step vencido), A3 (Champion/EB gap), A4 (margen bajo), A5 (cierre próximo 7d). `createAlertNotification()` con dedup 24h. `runAlertScan()` con scoping.
+   - Endpoint `POST /api/opportunities/check-alerts` (diseñado para cron diario).
+
+**Hotfix migración**: el CHECK constraint del role en RDS se reescribió a `ANY (ARRAY[...])`; el DO block dinámico no lo matcheaba → fix con literal `cancelled` como señal del enum legacy + `IF NOT EXISTS` (`c6e6997`, `dbca79b`).
+
+**Tests post-CRM-00**: server **988+ → 1018+** (con A4/A5), cliente **463+ → 470+**. Mantiene los 2 fallos pre-existentes en `TimeMe.test.js` (DST/timezone, ver header).
+
 ### Nuevos features productivos
 
 - **Plan-vs-Real semanal** (`/reports/plan-vs-real`): compara `assignments.weekly_hours / weekly_capacity_hours` (planeado %) contra `weekly_time_allocations.pct` (real %) con tolerancia ±10pp. Auto-scoping por rol (lead → sus reportes; member → él mismo; admin → todos).
@@ -77,16 +110,22 @@ SaaS interno de **DVP (Double V Partners)** para:
 3. **Gente**: catálogos de áreas, skills, empleados, y sus skills con nivel de proficiency.
 4. **Reportes**: pipeline comercial, utilización, gaps de skills, reportes personales.
 
-La tesis es un "quote → contract → staff → bill" integrado, no tres herramientas separadas.
+La tesis es un "quote → contract → staff → time tracking" integrado, no tres herramientas separadas. La facturación queda en Holded (sistema externo); este producto cubre desde la oportunidad hasta el reconocimiento de ingresos (`revenue_periods`).
 
 ### Usuarios y roles
-Modelo V2 (ya productivo):
-- **superadmin** — god mode.
-- **admin** — crea/edita todo.
-- **lead** — lidera un squad, aprueba asignaciones.
-- **member** — usuario estándar (comercial, preventa, delivery).
-- **viewer** — solo lectura.
-- Campo adicional `users.function` (comercial / preventa / delivery / capacity / finanzas) para futuras visibilidades por función.
+Modelo V2 + SPEC-CRM-00 v1.1 (ya productivo, **7 roles + preventa legacy**):
+- **superadmin** — god mode (bypass total + impersonation).
+- **admin** — operativo, ve todo, crea/edita todo, kick-off de cualquier contrato.
+- **director** — VP-level, ve todo (introducido en SPEC-CRM-00 PR 4 para C-suite y heads).
+- **lead** — lidera un squad, ve sus reportes directos vía `employees.manager_user_id`. Puede hacer kick-off si es DM del contrato.
+- **member** — usuario estándar (comercial, preventa, delivery). En oportunidades, ve solo las suyas (account_owner o presales_lead).
+- **viewer** — solo lectura (reportes).
+- **external** — acceso restringido, 403 al endpoint de oportunidades (introducido en SPEC-CRM-00 PR 4).
+- `preventa` (legacy) — middleware reescribe a `member` + `function='preventa'`.
+
+Las macros `SEE_ALL_ROLES = {superadmin, admin, director}` y `WRITE_ROLES = {superadmin, admin, director, lead, member}` están exportadas en [`server/middleware/auth.js`](../server/middleware/auth.js) y son la fuente de verdad del scoping.
+
+Campo adicional `users.function` (comercial / preventa / delivery_manager / capacity_manager / project_manager / fte_tecnico / people / finance / pmo / admin) para visibilidades futuras por función.
 
 ---
 
@@ -95,13 +134,13 @@ Modelo V2 (ya productivo):
 | Capa | Tecnología |
 |------|------------|
 | Frontend | React 18 SPA con `react-router-dom` v6, estilos inline + `App.css`, sin librería UI (todo custom con variables CSS) |
-| Backend | Node.js + Express (`^4.18`), `pg` (driver Postgres nativo), `jsonwebtoken` para auth, `helmet`, `express-rate-limit`, `express-validator` |
+| Backend | Node.js + Express (`^4.18`), `pg` (driver Postgres nativo), `jsonwebtoken` para auth, `helmet`, `express-rate-limit`. (`express-validator` y `uuid` removidos en housekeeping 2026-05-01.) |
 | DB | PostgreSQL 16 |
 | Auth | JWT emitido por `/api/auth/login`; middleware `auth` y `adminOnly` en casi todas las rutas |
 | Packaging | Docker multi-stage; `client/build` servido por el mismo Express en prod |
 | Reverse proxy | Traefik (TLS, Host rule por env) |
 | CI/CD | GitHub Actions → build + push a GHCR → SSH a EC2 → `docker compose pull` y restart |
-| Tests | Jest + supertest (backend, **638 tests**) · Jest + RTL (frontend, **325/327** — 2 fallas pre-existentes) |
+| Tests | Jest + supertest (backend, **1018+ tests** post SPEC-CRM-00) · Jest + RTL (frontend, **470+ tests**, 2 fallas pre-existentes en TimeMe — DST/timezone, ver header del archivo) |
 | AI-readiness | `ai_interactions` log + `ai_prompt_templates` versionados + embeddings `vector(1536)` con HNSW (pgvector opcional) + `delivery_facts` denormalizado + materialized view |
 
 ### Entornos
@@ -137,9 +176,9 @@ Todos estos endpoints **existen, tienen tests, y están desplegados**:
 | `/api/time-entries` | ✅ | Time tracking por empleado contra asignaciones |
 | `/api/reports` | ✅ | 6 reportes críticos + dashboard personal |
 | `/api/bulk-import` | ✅ | CSV upload para empleados / clientes (admin+) |
-| `/api/squads` | ⚠️ **stub** | Devuelve array vacío. Squads **quitados de la UI** pero aún existen en DB como columna NOT NULL (ver §6) |
-| `/api/events` | ⚠️ stub | Hay tabla `events` pero la ruta aún no expone histórico |
-| `/api/notifications` | ⚠️ stub | Tabla existe, sin UI |
+| `/api/squads` | ⚠️ **stub** | Devuelve `501` con JSON `{error, spec}`. Squads **quitados de la UI** pero aún existen en DB como columna NOT NULL (ver §6). Ningún consumidor de la SPA llama este endpoint. |
+| `/api/events` | ⚠️ stub | Devuelve `501`. Hay tabla `events` poblándose, pero la ruta aún no expone histórico. Ningún consumidor de la SPA. |
+| `/api/notifications` | ✅ | Implementado. La SPA hace polling de `/unread-count` cada 60s desde el `Layout` (con visibility-gate por PERF-001) y el `NotificationsDrawer` consume el feed. |
 
 ### Frontend (`client/src/modules/`)
 Módulos con pantalla operativa:

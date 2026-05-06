@@ -27,12 +27,19 @@ function Field({ label, children }) {
   );
 }
 
+const ACTIVITY_TYPE_LABEL = {
+  call: 'Llamada', email: 'Email', meeting: 'Reunión', note: 'Nota',
+  proposal_sent: 'Propuesta', demo: 'Demo', follow_up: 'Seguimiento', other: 'Otro',
+};
+
 export default function ClientDetail() {
   const { id } = useParams();
   const nav = useNavigate();
   const [client, setClient] = useState(null);
   const [opps, setOpps] = useState([]);
   const [contracts, setContracts] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
 
@@ -42,11 +49,15 @@ export default function ClientDetail() {
       apiGet(`/api/clients/${id}`),
       apiGet(`/api/opportunities?client_id=${id}&limit=100`),
       apiGet(`/api/contracts?client_id=${id}&limit=100`),
+      apiGet(`/api/contacts/by-client/${id}`).catch(() => []),
+      apiGet(`/api/activities/by-client/${id}?limit=10`).catch(() => ({ data: [] })),
     ])
-      .then(([c, o, ct]) => {
+      .then(([c, o, ct, ctc, act]) => {
         setClient(c || null);
         setOpps(o?.data || []);
         setContracts(ct?.data || []);
+        setContacts(Array.isArray(ctc) ? ctc : (ctc?.data || []));
+        setActivities(act?.data || (Array.isArray(act) ? act : []));
       })
       .catch((e) => setErr(e.message || 'Error'))
       .finally(() => setLoading(false));
@@ -149,6 +160,71 @@ export default function ClientDetail() {
                   <td style={{ ...s.td, fontSize: 12 }}>{c.status}</td>
                   <td style={{ ...s.td, fontSize: 12 }}>{c.start_date ? String(c.start_date).slice(0, 10) : '—'}</td>
                   <td style={{ ...s.td, textAlign: 'center' }}>{c.active_assignments_count ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={s.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={s.h2}>Contactos ({contacts.length})</h2>
+          <Link to="/contacts" style={s.link}>Ver todos →</Link>
+        </div>
+        {contacts.length === 0 ? (
+          <div style={{ color: 'var(--text-light)', fontSize: 13, padding: 20, textAlign: 'center' }}>
+            Sin contactos para este cliente.{' '}
+            <Link to="/contacts" style={s.link}>Crear uno</Link>.
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {['Nombre', 'Email', 'Cargo', 'Seniority'].map((h) => <th key={h} style={s.th}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {contacts.map((ct) => (
+                <tr key={ct.id}>
+                  <td style={{ ...s.td, fontWeight: 600 }}>{ct.first_name} {ct.last_name}</td>
+                  <td style={s.td}>{ct.email_primary || '—'}</td>
+                  <td style={s.td}>{ct.job_title || '—'}</td>
+                  <td style={{ ...s.td, fontSize: 12 }}>{ct.seniority || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={s.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={s.h2}>Actividades recientes ({activities.length})</h2>
+          <Link to="/activities" style={s.link}>Ver todas →</Link>
+        </div>
+        {activities.length === 0 ? (
+          <div style={{ color: 'var(--text-light)', fontSize: 13, padding: 20, textAlign: 'center' }}>
+            Sin actividades registradas.
+          </div>
+        ) : (
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {['Fecha', 'Tipo', 'Asunto', 'Usuario'].map((h) => <th key={h} style={s.th}>{h}</th>)}
+              </tr>
+            </thead>
+            <tbody>
+              {activities.map((a) => (
+                <tr key={a.id}>
+                  <td style={{ ...s.td, fontSize: 12 }}>{a.activity_date ? String(a.activity_date).slice(0, 10) : '—'}</td>
+                  <td style={s.td}>
+                    <span style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 6, padding: '2px 8px', fontSize: 11, fontWeight: 600 }}>
+                      {ACTIVITY_TYPE_LABEL[a.activity_type] || a.activity_type}
+                    </span>
+                  </td>
+                  <td style={s.td}>{a.subject}</td>
+                  <td style={{ ...s.td, fontSize: 12 }}>{a.user_name || '—'}</td>
                 </tr>
               ))}
             </tbody>

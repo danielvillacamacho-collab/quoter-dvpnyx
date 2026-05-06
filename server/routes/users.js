@@ -15,6 +15,7 @@ const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
+const { serverError } = require('../utils/http');
 
 router.use(auth, adminOnly);
 
@@ -35,8 +36,7 @@ router.get('/', async (req, res) => {
     );
     res.json(rows);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'users', err);
   }
 });
 
@@ -75,8 +75,7 @@ router.post('/', async (req, res) => {
     res.status(201).json(rows[0]);
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'Email ya registrado' });
-    console.error(err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'users', err);
   }
 });
 
@@ -132,8 +131,7 @@ router.put('/:id', async (req, res) => {
 
     res.json(rows[0]);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'users', err);
   }
 });
 
@@ -179,8 +177,7 @@ router.delete('/:id', async (req, res) => {
     );
     res.json({ message: 'Usuario eliminado' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'users', err);
   }
 });
 
@@ -194,8 +191,7 @@ router.post('/:id/reset-password', async (req, res) => {
     );
     res.json({ message: 'Contraseña reseteada a 000000' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Error interno' });
+    serverError(res, 'users', err);
   }
 });
 

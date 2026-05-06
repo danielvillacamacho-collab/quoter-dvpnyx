@@ -149,6 +149,7 @@ describe('GET /api/search', () => {
     for (let i = 0; i < 5; i++) queryQueue.push({ rows: [] });
     const res = await client.call('GET', '/api/search?q=ana');
     expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/búsqueda/i);
+    expect(res.body.errorId).toMatch(/^ERR-/);
+    expect(res.body.where).toBe('GET /search');
   });
 });

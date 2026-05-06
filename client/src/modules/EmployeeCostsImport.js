@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom';
 import { apiPost } from '../utils/apiV2';
 import { useAuth } from '../AuthContext';
 import { formatPeriod, normalizePeriod, currentPeriod, recentPeriods } from '../utils/cost';
+import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
   page:    { maxWidth: 1100, margin: '0 auto' },
@@ -127,9 +128,13 @@ export default function EmployeeCostsImport() {
         <div style={{ display: 'flex', gap: 12, alignItems: 'end', marginBottom: 16, flexWrap: 'wrap' }}>
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Período</label>
-            <select style={s.input} value={period} onChange={(e) => setPeriod(e.target.value)}>
-              {periodOptions.map((p) => <option key={p} value={p}>{formatPeriod(p)}</option>)}
-            </select>
+            <FilterableSelect
+              value={period}
+              onChange={(e) => setPeriod(e.target.value)}
+              inputStyle={s.input}
+              placeholder="— Selecciona período —"
+              options={periodOptions.map((p) => ({ id: p, label: formatPeriod(p) }))}
+            />
           </div>
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-light)', display: 'block', marginBottom: 4 }}>Subir archivo CSV</label>

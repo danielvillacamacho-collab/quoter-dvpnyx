@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import * as api from '../utils/api';
+import FilterableSelect from '../shell/FilterableSelect';
 import { useAuth } from '../AuthContext';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 
@@ -207,21 +208,30 @@ export default function Users() {
               </div>
               <div>
                 <label htmlFor="new-role" style={css.label}>Rol *</label>
-                <select id="new-role" style={{ ...css.select, width: '100%' }} value={form.role} onChange={e => setForm({ ...form, role: e.target.value })}>
-                  <option value="member">Member</option>
-                  <option value="viewer">Viewer</option>
-                  <option value="lead">Lead</option>
-                  {isSuperadmin && <option value="admin">Administrador</option>}
-                </select>
+                <FilterableSelect
+                  id="new-role"
+                  inputStyle={{ ...css.select, width: '100%' }}
+                  value={form.role}
+                  onChange={e => setForm({ ...form, role: e.target.value })}
+                  placeholder="— Selecciona rol —"
+                  options={[
+                    { id: 'member', label: 'Member' },
+                    { id: 'viewer', label: 'Viewer' },
+                    { id: 'lead', label: 'Lead' },
+                    ...(isSuperadmin ? [{ id: 'admin', label: 'Administrador' }] : []),
+                  ]}
+                />
               </div>
               <div>
                 <label htmlFor="new-function" style={css.label}>Función</label>
-                <select id="new-function" style={{ ...css.select, width: '100%' }} value={form.function} onChange={e => setForm({ ...form, function: e.target.value })}>
-                  <option value="">— Sin función —</option>
-                  {Object.entries(FUNCTION_LABELS).map(([k, v]) => (
-                    <option key={k} value={k}>{v}</option>
-                  ))}
-                </select>
+                <FilterableSelect
+                  id="new-function"
+                  inputStyle={{ ...css.select, width: '100%' }}
+                  value={form.function}
+                  onChange={e => setForm({ ...form, function: e.target.value })}
+                  placeholder="— Sin función —"
+                  options={Object.entries(FUNCTION_LABELS).map(([k, v]) => ({ id: k, label: v }))}
+                />
               </div>
               <div>
                 <label htmlFor="new-password" style={css.label}>Contraseña inicial</label>
@@ -261,16 +271,14 @@ export default function Users() {
                     {/* rol */}
                     <td style={css.td}>
                       {canEditRole ? (
-                        <select
-                          style={{ ...css.select, fontSize: 12, padding: '4px 8px' }}
+                        <FilterableSelect
+                          inputStyle={{ ...css.select, fontSize: 12, padding: '4px 8px' }}
                           value={u.role}
                           onChange={e => handleRoleChange(u.id, e.target.value)}
                           aria-label={`Rol de ${u.name}`}
-                        >
-                          {ASSIGNABLE_ROLES.map(r => (
-                            <option key={r} value={r}>{ROLE_LABELS[r]}</option>
-                          ))}
-                        </select>
+                          placeholder="— Selecciona rol —"
+                          options={ASSIGNABLE_ROLES.map(r => ({ id: r, label: ROLE_LABELS[r] }))}
+                        />
                       ) : (
                         <span style={css.badge(ROLE_COLORS[u.role] || 'var(--text-light)')}>
                           {ROLE_LABELS[u.role] || u.role}
@@ -281,17 +289,14 @@ export default function Users() {
                     {/* función */}
                     <td style={css.td}>
                       {!isProtected ? (
-                        <select
-                          style={{ ...css.select, fontSize: 12, padding: '4px 8px' }}
+                        <FilterableSelect
+                          inputStyle={{ ...css.select, fontSize: 12, padding: '4px 8px' }}
                           value={u.function || ''}
                           onChange={e => handleFunctionChange(u.id, e.target.value)}
                           aria-label={`Función de ${u.name}`}
-                        >
-                          <option value="">— Sin función —</option>
-                          {Object.entries(FUNCTION_LABELS).map(([k, v]) => (
-                            <option key={k} value={k}>{v}</option>
-                          ))}
-                        </select>
+                          placeholder="— Sin función —"
+                          options={Object.entries(FUNCTION_LABELS).map(([k, v]) => ({ id: k, label: v }))}
+                        />
                       ) : (
                         <span style={{ fontSize: 12, color: 'var(--text-light)' }}>
                           {FUNCTION_LABELS[u.function] || '—'}

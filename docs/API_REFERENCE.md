@@ -31,26 +31,29 @@ Catálogo de endpoints REST. Esta referencia se mantiene a mano. Si agregas o ca
 
 1. [Auth + Users](#auth--users)
 2. [Clients](#clients-1)
-3. [Opportunities](#opportunities-1)
-4. [Quotations](#quotations-1)
-5. [Contracts](#contracts-1)
-6. [Resource Requests](#resource-requests-1)
-7. [Assignments](#assignments-1)
-8. [Capacity Planner](#capacity-planner-1)
-9. [Time Entries (`/time/me`)](#time-entries)
-10. [Time Allocations (`/time/team`)](#time-allocations)
-11. [Employees + Skills](#employees--skills)
-12. [Areas](#areas)
-13. [Skills](#skills-1)
-14. [Reports](#reports)
-15. [Dashboard](#dashboard)
-16. [Revenue + Exchange Rates](#revenue--exchange-rates)
-17. [Notifications](#notifications-1)
-18. [Bulk Import](#bulk-import-1)
-19. [Search](#search)
-20. [Parameters](#parameters-1)
-21. [AI Interactions](#ai-interactions-1)
-22. [Health](#health-1)
+3. [Contacts](#contacts)
+4. [Opportunities](#opportunities-1)
+5. [Activities](#activities)
+6. [Quotations](#quotations-1)
+7. [Contracts](#contracts-1)
+8. [Resource Requests](#resource-requests-1)
+9. [Assignments](#assignments-1)
+10. [Capacity Planner](#capacity-planner-1)
+11. [Time Entries (`/time/me`)](#time-entries)
+12. [Time Allocations (`/time/team`)](#time-allocations)
+13. [Employees + Skills](#employees--skills)
+14. [Areas](#areas)
+15. [Skills](#skills-1)
+16. [Reports](#reports)
+17. [Dashboard](#dashboard)
+18. [Revenue + Exchange Rates](#revenue--exchange-rates)
+19. [Budgets](#budgets)
+20. [Notifications](#notifications-1)
+21. [Bulk Import](#bulk-import-1)
+22. [Search](#search)
+23. [Parameters](#parameters-1)
+24. [AI Interactions](#ai-interactions-1)
+25. [Health](#health-1)
 
 ---
 
@@ -105,26 +108,112 @@ Soft delete. 409 si tiene opps/contracts vivos.
 
 ---
 
+## Contacts
+
+> **Nuevo en SPEC-CRM-01** (mayo 2026).
+
+### `GET /api/contacts`
+Filtros: `search`, `client_id`, `seniority`. Paginado estándar.
+
+### `GET /api/contacts/:id`
+
+### `GET /api/contacts/by-client/:clientId`
+Todos los contactos de un cliente (sin paginación).
+
+### `GET /api/contacts/by-opportunity/:oppId`
+Contactos vinculados a una oportunidad con su `deal_role`.
+
+### `POST /api/contacts`
+Body: `{ client_id*, first_name*, last_name*, email_primary?, phone?, job_title?, seniority?, linkedin_url?, notes? }`.
+- `seniority` válidos: `c_level | vp | director | manager | senior | mid | junior | intern`.
+
+### `PUT /api/contacts/:id`
+
+### `DELETE /api/contacts/:id`
+Soft delete.
+
+### `POST /api/contacts/opportunity-link`
+Body: `{ opportunity_id*, contact_id*, deal_role* }`. Upsert vía `ON CONFLICT`.
+- `deal_role` válidos: `economic_buyer | champion | coach | decision_maker | influencer | technical_evaluator | procurement | legal | detractor | blocker`.
+
+### `DELETE /api/contacts/opportunity-link/:id`
+Elimina el vínculo contacto↔oportunidad.
+
+---
+
 ## Opportunities
 
+> **Actualizado en SPEC-CRM-00 v1.1** (mayo 2026): pipeline 9 estados + revenue model + margin + RBAC scoping + alertas A1-A5. **SPEC-CRM-01** agrega `deal_type`, `co_owner_id`, exit criteria, y vínculos a contactos/actividades. Ver [`CHANGELOG.md`](../CHANGELOG.md) para detalle.
+
+**Pipeline 9 estados** (probabilidades 5/15/30/50/75/90/100/0/0):
+```
+lead → qualified → solution_design → proposal_validated → negotiation → verbal_commit → {closed_won | closed_lost | postponed}
+```
+`postponed` es **limbo no terminal** (sale a `qualified` o `closed_lost`).
+
+**RBAC scoping** (inline en list endpoints):
+- `superadmin/admin/director` (SEE_ALL_ROLES) → ven todas.
+- `lead` → su squad.
+- `member` → solo donde sea `account_owner_id` o `presales_lead_id`.
+- `external` → **403**.
+
 ### `GET /api/opportunities`
-Filtros: `search`, `client_id`, `status`, `owner_id`, `squad_id`, `from_expected_close`, `to_expected_close`.
+Filtros: `search`, `client_id`, `status`, `owner_id`, `squad_id`, `from_expected_close`, `to_expected_close`. Filtros CRM-00: `revenue_type` (one_time/recurring/mixed), `has_champion`, `has_economic_buyer`, `funding_source`. Filtro CRM-01: `deal_type` (new_business/upsell_cross_sell/renewal/resell). Valores fuera del enum se ignoran. Scoping inline por rol.
 
 ### `GET /api/opportunities/kanban`
-Devuelve agrupado por stage con summaries (count, total USD, weighted USD). Filtros igual que listado + `min_amount_usd`. Cap por columna 100.
+Devuelve agrupado por stage con summaries (count, total USD, weighted USD). Filtros igual que listado + `min_amount_usd`. Cap por columna 100. Payload incluye los flags de Champion/EB + revenue model para badges del card en el frontend. Scoping inline por rol.
 
 ### `GET /api/opportunities/:id`
 
 ### `POST /api/opportunities`
+Body legacy compatible. Nuevos campos opcionales: `revenue_type` (default `one_time`), `one_time_amount_usd`, `mrr_usd`, `contract_length_months`, `champion_identified`, `economic_buyer_identified`, `funding_source`, `funding_amount_usd`, `drive_url`. CRM-01: `deal_type` (default `new_business`; válidos: new_business/upsell_cross_sell/renewal/resell), `co_owner_id` (FK users). Validación de consistencia revenue + funding.
+
 ### `PUT /api/opportunities/:id`
+Editable los nuevos campos arriba. Validación de consistencia parcial (merge body con DB before). Cambios en `champion_identified`/`economic_buyer_identified` disparan check A3 inline (fire-and-forget).
 
 ### `POST /api/opportunities/:id/status`
-Body: `{ new_status, winning_quotation_id?, outcome_reason?, outcome_notes? }`.
-- `won` requiere `winning_quotation_id`.
-- `lost` / `cancelled` requieren `outcome_reason`.
+Body: `{ new_status, winning_quotation_id?, outcome_reason?, postponed_until_date?, loss_reason?, loss_reason_detail?, override_exit_criteria? }`.
+- `closed_won` requiere `winning_quotation_id`.
+- `closed_lost` requiere `loss_reason` (price/competitor_won/no_decision/budget_cut/champion_left/wrong_fit/timing/incumbent_win/other) + `loss_reason_detail` (≥30 chars). Legacy `outcome_reason` sigue como fallback.
+- `postponed` requiere `postponed_until_date` futura.
+- **Exit criteria (CRM-01):** al avanzar a etapas no terminales, valida campos requeridos por stage (`qualified+`: descripción; `solution_design+`: expected_close_date + next_step; `negotiation+`: champion_identified; `verbal_commit+`: economic_buyer_identified). Si faltan, devuelve 422 con `exit_criteria_missing` array y `can_override`. Admin/superadmin pueden pasar `override_exit_criteria: true`.
+- Soft warnings (`amount_zero`, `backwards`, `close_date_past`, `a4_margin_low`) se devuelven en el body — no bloquean.
+- Avanzar a `solution_design+` dispara A3 fire-and-forget. Avanzar a `proposal_validated/negotiation/verbal_commit/closed_won` con margen <20% emite warning `a4_margin_low` y evento `opportunity.margin_low`.
+- Eventos emitidos: `opportunity.status_changed`, `opportunity.won`, `opportunity.lost`, `opportunity.postponed`, `opportunity.reactivated`.
+
+### `POST /api/opportunities/:id/check-margin` *(SPEC-CRM-00 PR 3)*
+Body: `{ estimated_cost_usd? }`. Si no se pasa, auto-computa desde `cost_hour/rate_hour` de las líneas del quotation winning. Persiste `estimated_cost_usd` y `margin_pct`. Emite `opportunity.margin_low` si margen < 20%.
+
+### `POST /api/opportunities/check-alerts` *(SPEC-CRM-00 PR 4)*
+Escanea oportunidades con scoping del caller y genera notificaciones para A1 (estancada >30d), A2 (next_step vencido), A3 (Champion/EB gap), A4 (margen bajo), A5 (cierre próximo 7d). Dedup 24h por (alertCode, opportunityId, userId). Diseñado para cron diario o invocación manual.
 
 ### `DELETE /api/opportunities/:id` 🔒 admin
 Hard delete bloqueado si tiene quotations.
+
+---
+
+## Activities
+
+> **Nuevo en SPEC-CRM-01** (mayo 2026).
+
+### `GET /api/activities`
+Filtros: `search`, `activity_type`, `opportunity_id`, `client_id`, `contact_id`, `user_id`, `from`, `to`. Paginado estándar. Default sort: `activity_date DESC`.
+
+### `GET /api/activities/:id`
+
+### `GET /api/activities/by-client/:clientId`
+Query: `?limit=10`. Actividades recientes de un cliente.
+
+### `POST /api/activities`
+Body: `{ activity_type*, subject*, activity_date*, opportunity_id?, client_id?, contact_id?, notes?, outcome? }`.
+- `activity_type` válidos: `call | email | meeting | note | proposal_sent | demo | follow_up | other`.
+- Auto-actualiza `clients.last_activity_at` si hay client_id directo o vía la oportunidad vinculada.
+
+### `PUT /api/activities/:id`
+Solo el creador o admin.
+
+### `DELETE /api/activities/:id`
+Solo el creador o admin. Soft delete.
 
 ---
 
@@ -422,6 +511,30 @@ Body: `{ usd_rate, notes? }`.
 
 ---
 
+## Budgets
+
+> **Nuevo en SPEC-CRM-01** (mayo 2026). Admin-only para escritura.
+
+### `GET /api/budgets`
+Filtros: `status`, `period_start`, `period_end`, `owner_id`. Paginado estándar.
+
+### `GET /api/budgets/:id`
+
+### `GET /api/budgets/summary`
+Query: `?period_start=&period_end=`. Agrega target USD vs booking real (suma de `booking_amount_usd` de oportunidades `closed_won` en el rango).
+
+### `POST /api/budgets` 🔒 admin
+Body: `{ name*, target_amount_usd*, currency?, period_start*, period_end*, owner_id?, notes?, status? }`.
+- `status` default `draft`. Válidos: `draft | active | closed`.
+
+### `PUT /api/budgets/:id` 🔒 admin
+Auto-sets `approved_by` / `approved_at` al transicionar a `active`.
+
+### `DELETE /api/budgets/:id` 🔒 admin
+Hard delete (config data).
+
+---
+
 ## Notifications
 
 ### `GET /api/notifications`
@@ -568,7 +681,7 @@ Cada mutation relevante emite a `events` table con `event_type`. Los más comune
 - `*.created`, `*.updated`, `*.deleted`, `*.status_changed`
 - `assignment.overbooked`, `assignment.override`
 - `contract.kicked_off`, `contract.created_from_quotation`, `contract.completed`, `contract.cancelled`
-- `opportunity.won`, `opportunity.lost`, `opportunity.cancelled`, `opportunity.stage_changed`
+- `opportunity.won`, `opportunity.lost`, `opportunity.cancelled`, `opportunity.stage_changed`, `opportunity.postponed`, `opportunity.reactivated`, `opportunity.margin_low` *(SPEC-CRM-00)*
 - `quotation.duplicated`, `quotation.exported`
 - `parameter.updated`
 - `employee.status_changed`, `employee.leave_started`, `employee.leave_ended`

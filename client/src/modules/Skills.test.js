@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { MemoryRouter } from 'react-router-dom';
 import Skills from './Skills';
 import * as apiV2 from '../utils/apiV2';
+import { changeSelect } from '../utils/testHelpers';
 
 jest.mock('../utils/apiV2');
 
@@ -49,7 +50,7 @@ describe('Skills module', () => {
     mount();
     await screen.findByText('JavaScript');
     apiV2.apiGet.mockClear();
-    fireEvent.change(screen.getByLabelText('Filtro por categoría'), { target: { value: 'language' } });
+    await changeSelect('Filtro por categoría', 'language');
     await waitFor(() => {
       const urls = apiV2.apiGet.mock.calls.map((c) => c[0]);
       expect(urls.some((u) => u.includes('category=language'))).toBe(true);
@@ -63,7 +64,7 @@ describe('Skills module', () => {
     fireEvent.click(screen.getByRole('button', { name: /Nuevo Skill/i }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.change(within(dialog).getByLabelText('Nombre'), { target: { value: 'Rust' } });
-    fireEvent.change(within(dialog).getByLabelText('Categoría'), { target: { value: 'language' } });
+    await changeSelect('Categoría', 'language');
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
