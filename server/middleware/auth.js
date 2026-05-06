@@ -50,7 +50,7 @@ const requireRole = (...allowed) => (req, res, next) => {
 // SPEC-CRM-00 v1.1 PR4 — RBAC 7 roles.
 // 'preventa' se mantiene válido en BD (compat) pero el middleware lo normaliza
 // a member+function='preventa' en el auth handler de arriba.
-const ROLES = ['superadmin', 'admin', 'director', 'lead', 'member', 'viewer', 'external'];
+const ROLES = ['superadmin', 'admin', 'director', 'lead', 'member', 'staff', 'viewer', 'external'];
 const SEE_ALL_ROLES = new Set(['superadmin', 'admin', 'director']);
 const WRITE_ROLES = new Set(['superadmin', 'admin', 'director', 'lead', 'member']);
 

@@ -2478,6 +2478,19 @@ const SPEC_EMP_00_SQL = `
   CREATE INDEX IF NOT EXISTS employee_education_emp_idx
     ON employee_education(employee_id);
 
+  -- Add 'staff' to users role CHECK
+  DO $$
+  BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conrelid = 'users'::regclass AND conname = 'users_role_check'
+    ) THEN
+      ALTER TABLE users DROP CONSTRAINT users_role_check;
+    END IF;
+  END $$;
+  ALTER TABLE users ADD CONSTRAINT users_role_check
+    CHECK (role IN ('superadmin','admin','director','lead','member','viewer','external','preventa','staff'));
+
   -- Expand skills catalogue with more entries
   INSERT INTO skills (name, category) VALUES
     -- additional languages
