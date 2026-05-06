@@ -5,6 +5,7 @@ import StatusBadge from '../shell/StatusBadge';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
 import FilterableSelect from '../shell/FilterableSelect';
+import SearchableSelect from '../shell/SearchableSelect';
 
 const s = {
   page:   { maxWidth: 1300, margin: '0 auto' },
@@ -77,15 +78,20 @@ function ResourceRequestForm({ initial, contracts, areas, onSave, onCancel, savi
       </h2>
       <div>
         <label style={s.label}>Contrato *</label>
-        <FilterableSelect
-          value={form.contract_id || ''}
-          onChange={(e) => set('contract_id', e.target.value)}
+        <SearchableSelect
+          id="form-contract"
           aria-label="Contrato"
+          value={form.contract_id || ''}
+          onChange={(v) => set('contract_id', v)}
           required
           disabled={!!initial?.id}
-          inputStyle={s.input}
-          placeholder="— Selecciona —"
-          options={contracts.map((c) => ({ id: String(c.id), label: `${c.name} (${c.status})` }))}
+          noResultsText="No se encontraron contratos"
+          options={contracts.map((c) => ({
+            id: c.id,
+            label: c.name,
+            hint: c.client_name || undefined,
+            searchText: c.client_name ? `${c.name} ${c.client_name}` : c.name,
+          }))}
         />
       </div>
       <div>
@@ -275,13 +281,18 @@ export default function ResourceRequests() {
           </div>
           <div style={{ minWidth: 180 }}>
             <label style={s.label}>Contrato</label>
-            <FilterableSelect
-              value={contractFilter}
-              onChange={(e) => setContractFilter(e.target.value)}
+            <SearchableSelect
               aria-label="Filtro por contrato"
-              inputStyle={s.input}
+              value={contractFilter}
+              onChange={(v) => setContractFilter(v)}
               placeholder="Cualquiera"
-              options={contracts.map((c) => ({ id: String(c.id), label: c.name }))}
+              noResultsText="No se encontraron contratos"
+              options={contracts.map((c) => ({
+                id: c.id,
+                label: c.name,
+                hint: c.client_name || undefined,
+                searchText: c.client_name ? `${c.name} ${c.client_name}` : c.name,
+              }))}
             />
           </div>
           <div style={{ minWidth: 140 }}>

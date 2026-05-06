@@ -10,17 +10,17 @@ jest.mock('../utils/apiV2');
 const mount = () => render(<MemoryRouter><ResourceRequests /></MemoryRouter>);
 
 const sampleRequests = [
-  { id: 'r1', role_title: 'Senior Dev', contract_name: 'Contrato Alpha', area_name: 'Desarrollo',
-    level: 'L4', quantity: 2, priority: 'high', status: 'partially_filled',
-    active_assignments_count: 1, start_date: '2026-05-01' },
-  { id: 'r2', role_title: 'QA Lead', contract_name: 'Contrato Beta', area_name: 'Testing',
-    level: 'L5', quantity: 1, priority: 'critical', status: 'open',
-    active_assignments_count: 0, start_date: '2026-06-10' },
+  { id: 'r1', role_title: 'Senior Dev', contract_id: 'ct1', contract_name: 'Contrato Alpha',
+    area_name: 'Desarrollo', level: 'L4', quantity: 2, priority: 'high',
+    status: 'partially_filled', active_assignments_count: 1, start_date: '2026-05-01' },
+  { id: 'r2', role_title: 'QA Lead', contract_id: 'ct2', contract_name: 'Contrato Beta',
+    area_name: 'Testing', level: 'L5', quantity: 1, priority: 'critical',
+    status: 'open', active_assignments_count: 0, start_date: '2026-06-10' },
 ];
 const sampleContracts = [
-  { id: 'ct1', name: 'Contrato Alpha', status: 'active' },
-  { id: 'ct2', name: 'Contrato Beta',  status: 'active' },
-  { id: 'ct3', name: 'Contrato Old',   status: 'completed' },
+  { id: 'ct1', name: 'Contrato Alpha', status: 'active',  client_name: 'Cliente Uno' },
+  { id: 'ct2', name: 'Contrato Beta',  status: 'active',  client_name: 'Cliente Dos' },
+  { id: 'ct3', name: 'Contrato Old',   status: 'completed', client_name: 'Cliente Uno' },
 ];
 const sampleAreas = [
   { id: 1, name: 'Desarrollo', active: true },
@@ -56,18 +56,15 @@ describe('ResourceRequests module', () => {
   it('contract filter excludes completed/cancelled contracts', async () => {
     mount();
     await screen.findByText('Senior Dev');
-    // Open the contract filter dropdown and check options
-    const contractFilter = screen.getByLabelText('Filtro por contrato');
-    fireEvent.click(contractFilter);
-    await waitFor(() => {
-      const listbox = document.querySelector('[role="listbox"]');
-      expect(listbox).not.toBeNull();
-      // Active contracts are present
-      expect(listbox.querySelector('[data-value="ct1"]')).not.toBeNull();
-      expect(listbox.querySelector('[data-value="ct2"]')).not.toBeNull();
-      // Completed contract is filtered out
-      expect(listbox.querySelector('[data-value="ct3"]')).toBeNull();
-    });
+    // Open the SearchableSelect filter bar to inspect available options
+    const filterInput = screen.getByLabelText('Filtro por contrato');
+    fireEvent.click(filterInput);
+    const listbox = await screen.findByRole('listbox');
+    // Active contracts appear
+    expect(within(listbox).getByText('Contrato Alpha')).toBeInTheDocument();
+    expect(within(listbox).getByText('Contrato Beta')).toBeInTheDocument();
+    // Completed contract is filtered out before passing options
+    expect(within(listbox).queryByText('Contrato Old')).toBeNull();
   });
 
   it('status filter triggers refetch', async () => {
@@ -85,22 +82,24 @@ describe('ResourceRequests module', () => {
     apiV2.apiPost.mockResolvedValue({ id: 'r-new' });
     mount();
     await screen.findByText('Senior Dev');
-    // Wait for contracts to load by checking the filter options
-    const contractFilterInput = screen.getByLabelText('Filtro por contrato');
-    fireEvent.click(contractFilterInput);
+    // Wait for contracts to finish loading
     await waitFor(() => {
-      const listbox = document.querySelector('[role="listbox"]');
-      expect(listbox).not.toBeNull();
-      expect(listbox.querySelector('[data-value="ct1"]')).not.toBeNull();
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true);
     });
-    fireEvent.keyDown(contractFilterInput, { key: 'Escape' });
+
     fireEvent.click(screen.getByRole('button', { name: /Nueva Solicitud/i }));
     const dialog = await screen.findByRole('dialog');
-    await changeSelect('Contrato', 'ct1');
+
+    // Select contract via SearchableSelect: click to open, then mouseDown the option
+    const contractInput = within(dialog).getByLabelText('Contrato');
+    fireEvent.click(contractInput);
+    fireEvent.mouseDown(await screen.findByRole('option', { name: /Contrato Alpha/ }));
+
     fireEvent.change(within(dialog).getByLabelText('Role title'), { target: { value: 'UX Designer' } });
     await changeSelect('Área', '1');
     fireEvent.change(within(dialog).getByLabelText('Fecha de inicio'), { target: { value: '2026-08-01' } });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Guardar/i }));
+
     await waitFor(() => {
       expect(apiV2.apiPost).toHaveBeenCalledWith(
         '/api/resource-requests',
@@ -131,5 +130,101 @@ describe('ResourceRequests module', () => {
     mount();
     await screen.findByText('Old role');
     expect(screen.queryByLabelText('Cancelar Old role')).toBeNull();
+  });
+
+  // ── SPEC-010: Búsqueda por texto en selector de contrato ──────────────────
+
+  describe('SPEC-010: selector de contrato con búsqueda por texto', () => {
+    const openForm = async () => {
+      mount();
+      await screen.findByText('Senior Dev');
+      await waitFor(() => {
+        expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true);
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Nueva Solicitud/i }));
+      return screen.findByRole('dialog');
+    };
+
+    it('muestra todos los contratos al abrir el selector', async () => {
+      const dialog = await openForm();
+      const contractInput = within(dialog).getByLabelText('Contrato');
+      fireEvent.click(contractInput);
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText('Contrato Alpha')).toBeInTheDocument();
+      expect(within(listbox).getByText('Contrato Beta')).toBeInTheDocument();
+    });
+
+    it('filtra contratos al escribir (coincidencia parcial)', async () => {
+      const dialog = await openForm();
+      const contractInput = within(dialog).getByLabelText('Contrato');
+      fireEvent.change(contractInput, { target: { value: 'Alpha' } });
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText('Contrato Alpha')).toBeInTheDocument();
+      expect(within(listbox).queryByText('Contrato Beta')).toBeNull();
+    });
+
+    it('la búsqueda es insensible a mayúsculas', async () => {
+      const dialog = await openForm();
+      const contractInput = within(dialog).getByLabelText('Contrato');
+      fireEvent.change(contractInput, { target: { value: 'beta' } });
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText('Contrato Beta')).toBeInTheDocument();
+      expect(within(listbox).queryByText('Contrato Alpha')).toBeNull();
+    });
+
+    it('muestra "No se encontraron contratos" si no hay coincidencias', async () => {
+      const dialog = await openForm();
+      const contractInput = within(dialog).getByLabelText('Contrato');
+      fireEvent.change(contractInput, { target: { value: 'zzz-no-existe' } });
+      await screen.findByText('No se encontraron contratos');
+    });
+
+    it('al seleccionar un contrato el nombre aparece en el campo y se envía contract_id', async () => {
+      const dialog = await openForm();
+      const contractInput = within(dialog).getByLabelText('Contrato');
+      fireEvent.click(contractInput);
+      fireEvent.mouseDown(await screen.findByRole('option', { name: /Contrato Beta/ }));
+      expect(contractInput.value).toBe('Contrato Beta');
+    });
+
+    it('al borrar el texto la lista vuelve a mostrar todos los contratos', async () => {
+      const dialog = await openForm();
+      const contractInput = within(dialog).getByLabelText('Contrato');
+      fireEvent.change(contractInput, { target: { value: 'Alpha' } });
+      await screen.findByRole('listbox');
+      fireEvent.change(contractInput, { target: { value: '' } });
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText('Contrato Alpha')).toBeInTheDocument();
+      expect(within(listbox).getByText('Contrato Beta')).toBeInTheDocument();
+    });
+
+    it('en modo edición el campo de contrato está deshabilitado', async () => {
+      mount();
+      await screen.findByText('Senior Dev');
+      fireEvent.click(screen.getByLabelText('Editar Senior Dev'));
+      const dialog = await screen.findByRole('dialog');
+      const contractInput = within(dialog).getByLabelText('Contrato');
+      expect(contractInput).toBeDisabled();
+    });
+
+    it('la búsqueda por nombre de cliente también filtra resultados', async () => {
+      const dialog = await openForm();
+      const contractInput = within(dialog).getByLabelText('Contrato');
+      // "Cliente Dos" is the client_name of "Contrato Beta"
+      fireEvent.change(contractInput, { target: { value: 'Cliente Dos' } });
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText('Contrato Beta')).toBeInTheDocument();
+      expect(within(listbox).queryByText('Contrato Alpha')).toBeNull();
+    });
+
+    it('el filtro de contrato en la barra también usa búsqueda por texto', async () => {
+      mount();
+      await screen.findByText('Senior Dev');
+      const filterInput = screen.getByLabelText('Filtro por contrato');
+      fireEvent.change(filterInput, { target: { value: 'Beta' } });
+      const listbox = await screen.findByRole('listbox');
+      expect(within(listbox).getByText('Contrato Beta')).toBeInTheDocument();
+      expect(within(listbox).queryByText('Contrato Alpha')).toBeNull();
+    });
   });
 });
