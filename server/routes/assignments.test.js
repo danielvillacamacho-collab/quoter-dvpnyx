@@ -565,6 +565,17 @@ describe('DELETE /api/assignments/:id — EN-5', () => {
     const evt = emitEvent.mock.calls.find((c) => c[1].event_type === 'assignment.soft_deleted');
     expect(evt).toBeTruthy();
   });
+
+  it('returns 423 when assignment has locked weeks', async () => {
+    const { emitEvent } = require('../utils/events');
+    emitEvent.mockClear();
+    queryQueue.push({ rows: [{ employee_id: 'e1', start_date: '2026-05-01', end_date: '2026-08-01' }] });
+    queryQueue.push({ rows: [{ week_starting: '2026-05-04' }] }); // assignment_locks → has lock
+    const res = await client.call('DELETE', '/api/assignments/a1');
+    expect(res.status).toBe(423);
+    expect(res.body.code).toBe('ASSIGNMENT_LOCKED');
+    expect(res.body.locked_weeks).toContain('2026-05-04');
+  });
 });
 
 describe('GET /api/assignments/export.csv', () => {
