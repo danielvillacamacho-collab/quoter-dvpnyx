@@ -50,6 +50,7 @@ const s = {
   metaRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' },
   weekNav: { display: 'flex', alignItems: 'center', gap: 6 },
   weekPill: { minWidth: 180, justifyContent: 'center', fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'" },
+  weekDateInput: { padding: '3px 8px', fontSize: 12, fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'", border: '1px solid var(--ds-border)', borderRadius: 6, background: 'var(--ds-surface)', color: 'var(--ds-text)', cursor: 'pointer', minWidth: 140 },
 
   statWrap: { marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center' },
   statLabel: { fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 500, color: 'var(--ds-text-dim)' },
@@ -142,7 +143,6 @@ export default function TimeAdmin() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState({});
   const [errorMsg, setErrorMsg] = useState('');
-
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const weekFromIso = iso(weekStart);
   const weekToIso = iso(addDays(weekStart, 6));
@@ -152,6 +152,19 @@ export default function TimeAdmin() {
   const isCurrentWeek = iso(todayWeekStart) === weekFromIso;
   const todayIdx = isCurrentWeek ? ((now.getDay() + 6) % 7) : -1;
   const weekIsFuture = weekStart > todayWeekStart;
+
+  const [inputVal, setInputVal] = useState(weekFromIso);
+  useEffect(() => { setInputVal(weekFromIso); }, [weekFromIso]);
+
+  const handlePickerChange = useCallback((e) => {
+    setInputVal(e.target.value);
+  }, []);
+
+  const handlePickerBlur = useCallback((e) => {
+    const val = e.target.value;
+    if (!val) return;
+    setWeekStart(startOfWeek(new Date(val + 'T12:00:00')));
+  }, []);
 
   /* ---- Load employees once ---- */
   useEffect(() => {
@@ -327,13 +340,15 @@ export default function TimeAdmin() {
           <div style={s.metaRow}>
             <div style={s.weekNav}>
               <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Semana anterior">&#8249;</button>
-              <button
-                style={{ ...s.btn, ...s.btnSm, ...s.weekPill }}
-                onClick={() => setWeekStart(startOfWeek(new Date()))}
-                title="Ir a la semana actual"
-              >
-                {weekFromIso} &mdash; {weekToIso}
-              </button>
+              <input
+                type="date"
+                style={s.weekDateInput}
+                value={inputVal}
+                onChange={handlePickerChange}
+                onBlur={handlePickerBlur}
+                aria-label="Seleccionar semana"
+                title="Selecciona una fecha para saltar a esa semana"
+              />
               <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, 7))} aria-label="Semana siguiente">&#8250;</button>
               {!isCurrentWeek && (
                 <button style={{ ...s.btn, ...s.btnSm, ...s.btnGhost }} onClick={() => setWeekStart(startOfWeek(new Date()))}>Hoy</button>
