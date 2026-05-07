@@ -166,25 +166,14 @@ describe('TimeMe', () => {
       );
     });
 
-    it('selecting any day of the same week lands on the same Monday', async () => {
+    it('selecting Sunday navigates to the Monday of that same week', async () => {
       mount();
       await screen.findByText('Contrato Alpha');
-
-      // Pick Monday 2026-05-04 — weekStart → 2026-05-04
-      fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-04' } });
-      await waitFor(() => {
-        const calls = apiV2.apiGet.mock.calls.map((c) => c[0]);
-        expect(calls.some((u) => u.includes('from=2026-05-04'))).toBe(true);
-      });
-
-      apiV2.apiGet.mockClear();
-
-      // Pick Sunday 2026-05-10 — same ISO week → weekStart stays 2026-05-04
+      // Sunday 2026-05-10 belongs to the week Mon 2026-05-04 – Sun 2026-05-10
       fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-10' } });
-      await waitFor(() => {
-        const calls = apiV2.apiGet.mock.calls.map((c) => c[0]);
-        expect(calls.some((u) => u.includes('from=2026-05-04'))).toBe(true);
-      });
+      await waitFor(() =>
+        expect(screen.getByLabelText('Seleccionar semana').value).toBe('2026-05-04')
+      );
     });
 
     it('chevron buttons navigate week by week', async () => {
