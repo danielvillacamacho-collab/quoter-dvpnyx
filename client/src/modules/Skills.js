@@ -171,6 +171,7 @@ export default function Skills() {
               aria-label="Filtro por categoría"
               inputStyle={s.input}
               placeholder="Cualquiera"
+              clearable
               options={CATEGORY_OPTIONS.filter((c) => c).map((c) => ({ id: c, label: c }))}
             />
           </div>

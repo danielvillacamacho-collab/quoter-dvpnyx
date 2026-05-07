@@ -405,6 +405,7 @@ export default function PipelineKanban() {
           onChange={(e) => setFilter('owner_id', e.target.value)}
           inputStyle={s.filterInput}
           placeholder="Todos los owners"
+          clearable
           options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
         />
         <input

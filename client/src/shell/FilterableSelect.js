@@ -9,6 +9,11 @@ import SearchableSelect from './SearchableSelect';
  *   onChange     (event) =>   recibe { target: { value, name } }
  *   options      [{id, label, hint?, searchText?}]
  *   placeholder  string       texto cuando no hay selección
+ *   clearable    boolean      si true (típico en filtros), agrega una fila
+ *                             "Mostrar todos" en el dropdown que limpia la
+ *                             selección. Default false.
+ *   clearLabel   string       override del label de la fila de limpiar
+ *                             (default: usa el placeholder).
  *   ...rest      se pasan directo a SearchableSelect
  *
  * Así los handlers existentes (`e.target.value`) siguen funcionando

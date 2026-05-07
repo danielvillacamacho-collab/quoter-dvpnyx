@@ -232,6 +232,7 @@ export default function Contacts() {
               onChange={(e) => setClientId(e.target.value)}
               aria-label="Filtro por cliente"
               placeholder="Todos"
+              clearable
               options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
             />
           </div>
@@ -243,6 +244,7 @@ export default function Contacts() {
               onChange={(e) => setSeniority(e.target.value)}
               aria-label="Filtro por seniority"
               placeholder="Todos"
+              clearable
               options={SENIORITY_OPTIONS.filter((o) => o.value !== '').map((o) => ({ id: o.value, label: o.label }))}
             />
           </div>

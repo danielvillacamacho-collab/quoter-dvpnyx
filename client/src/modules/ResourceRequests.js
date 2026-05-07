@@ -298,6 +298,7 @@ export default function ResourceRequests() {
               value={contractFilter}
               onChange={(v) => setContractFilter(v)}
               placeholder="Cualquiera"
+              clearable
               noResultsText="No se encontraron contratos"
               options={contracts.map((c) => ({
                 id: c.id,
@@ -315,6 +316,7 @@ export default function ResourceRequests() {
               aria-label="Filtro por estado"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
             />
           </div>
@@ -326,6 +328,7 @@ export default function ResourceRequests() {
               aria-label="Filtro por prioridad"
               inputStyle={s.input}
               placeholder="Todas"
+              clearable
               options={PRIORITIES.map((p) => ({ id: p.value, label: p.label }))}
             />
           </div>
