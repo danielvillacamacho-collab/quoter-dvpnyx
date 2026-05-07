@@ -9,20 +9,18 @@ jest.mock('./utils/api');
 jest.mock('./utils/apiV2');
 
 /**
- * When entering the new-quotation flow, the EX-1 pre-modal intercepts
- * and requires picking cliente + oportunidad before the editor loads.
- * This helper walks past it in stepper tests that don't care about the
- * pre-modal itself (those tests live in NewQuotationPreModal.test.js).
+ * El linker de cliente+oportunidad ahora aparece AL GUARDAR (no al
+ * entrar al editor). Este helper lo despacha cuando el modal está abierto.
  */
-async function walkPastPreModal() {
-  // Pre-modal is up when its Cliente selector is on screen
+async function walkPastLinker() {
+  // El modal expone el FilterableSelect "Cliente" como combobox
   await screen.findByLabelText('Cliente');
   await changeSelect('Cliente', 'c-pre');
   await changeSelect('Oportunidad', 'o-pre');
   fireEvent.click(screen.getByRole('button', { name: /Continuar/i }));
 }
 
-function mockPreModalData() {
+function mockLinkerData() {
   apiV2.apiGet.mockImplementation((url) => {
     if (url.startsWith('/api/clients')) {
       return Promise.resolve({ data: [{ id: 'c-pre', name: 'Acme Test', active: true }], pagination: {} });
@@ -253,7 +251,7 @@ describe('ProjectEditor — fixed_scope stepper', () => {
     api.getMe.mockResolvedValue(mockUser);
     api.getParams.mockResolvedValue(mockParams);
     api.getQuotations.mockResolvedValue([]);
-    mockPreModalData();
+    mockLinkerData();
     window.history.pushState({}, '', '/quotation/new/fixed_scope');
   });
 
@@ -261,10 +259,8 @@ describe('ProjectEditor — fixed_scope stepper', () => {
 
   it('renders 6-step stepper when type=fixed_scope', async () => {
     render(<App />);
-    await walkPastPreModal();
-    // Use the unique Step-1 heading to confirm the project editor mounted
+    // El editor carga directo (sin pre-modal); ya en Step 1.
     await waitFor(() => expect(screen.getByText(/📝 Datos del Proyecto/)).toBeInTheDocument());
-    // stepper nav contains all 6 step labels (multiple "Proyecto" matches expected)
     expect(screen.getAllByText(/Proyecto/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Equipo/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Fases/)).toBeInTheDocument();
@@ -275,7 +271,6 @@ describe('ProjectEditor — fixed_scope stepper', () => {
 
   it('starts on Step 1 with project data form', async () => {
     render(<App />);
-    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     expect(screen.getByPlaceholderText(/Plataforma de analítica/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Acme SA/i)).toBeInTheDocument();
@@ -283,41 +278,39 @@ describe('ProjectEditor — fixed_scope stepper', () => {
 
   it('disables Next button until project name and client are filled', async () => {
     render(<App />);
-    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     const next = screen.getByRole('button', { name: /Siguiente paso/i });
-    // After the pre-modal the client_name is pre-filled from context ("Acme Test"),
-    // so Next is disabled only on project_name.
     expect(next).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Proyecto Alpha' } });
+    expect(next).toBeDisabled(); // todavía falta client_name
+    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
     expect(next).toBeEnabled();
   });
 
   it('navigates to Step 2 (Team) once name and client are provided', async () => {
     render(<App />);
-    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Proyecto Alpha' } });
-    // client_name is already filled from the pre-modal context
+    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
     fireEvent.click(screen.getByRole('button', { name: /Siguiente paso/i }));
     await waitFor(() => expect(screen.getByText(/Composición del Equipo/i)).toBeInTheDocument());
   });
 
-  it('"Guardar borrador" in header calls createQuotation with type=fixed_scope + linking IDs', async () => {
+  it('"Guardar borrador" abre linker y POST incluye client_id + opportunity_id', async () => {
     api.createQuotation.mockResolvedValue({ id: 'new-q-1' });
     api.getQuotation.mockResolvedValue({ id: 'new-q-1', type: 'fixed_scope', project_name: 'Draft P', client_name: 'Acme', lines: [], phases: [], epics: [], milestones: [], metadata: {} });
     const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
     render(<App />);
-    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Draft P' } });
+    // Clic en Guardar dispara el linker (faltan client_id+opportunity_id).
     fireEvent.click(screen.getByRole('button', { name: /Guardar borrador/i }));
+    await walkPastLinker();
     await waitFor(() => expect(api.createQuotation).toHaveBeenCalled());
     const payload = api.createQuotation.mock.calls[0][0];
     expect(payload.type).toBe('fixed_scope');
     expect(payload.project_name).toBe('Draft P');
     expect(payload.phases.length).toBe(5);
-    // EX-1: POST must carry the cliente+opp IDs the pre-modal collected.
     expect(payload.client_id).toBe('c-pre');
     expect(payload.opportunity_id).toBe('o-pre');
     alertSpy.mockRestore();
@@ -325,9 +318,9 @@ describe('ProjectEditor — fixed_scope stepper', () => {
 
   it('back button returns to previous step', async () => {
     render(<App />);
-    await walkPastPreModal();
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'P' } });
+    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'A' } });
     fireEvent.click(screen.getByRole('button', { name: /Siguiente paso/i }));
     await waitFor(() => screen.getByText(/Composición del Equipo/i));
     fireEvent.click(screen.getByRole('button', { name: /Anterior/i }));

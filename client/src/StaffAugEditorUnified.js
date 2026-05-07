@@ -12,6 +12,7 @@ import {
   SPECIALTIES,
   EMPTY_LINE,
 } from './utils/calc';
+import NewQuotationPreModal from './modules/NewQuotationPreModal';
 
 /*
  * Single-page unified staff-augmentation (capacity) editor — Spec 3
@@ -445,6 +446,9 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [infoCollapsed, setInfoCollapsed] = useState(false);
+  // Linker modal: si al guardar falta client_id/opportunity_id lo abrimos
+  // y reintentamos el save con override cuando el usuario los provee.
+  const [linkerStatus, setLinkerStatus] = useState(null);
   const [data, setData] = useState({
     type: 'staff_aug',
     client_id: context?.client_id || null,
@@ -498,7 +502,9 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   );
 
   const hasProfitableLines = (data.lines || []).some((l) => Number(l.rate_month || 0) > 0);
-  const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
+  // canSave ya no exige client_name escrito a mano: el linker (modal en
+  // save) se encarga de garantizar client_id + opportunity_id reales.
+  const canSave = !!(data.project_name || '').trim();
   // Export ya no depende de !dirty: autosave persiste; si está off, doExport
   // hace flush manual o manda el state como override en el body del export.
   const canExport = !isNew && hasProfitableLines;
@@ -516,23 +522,29 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   });
   autosaveRef.current = autosave;
 
-  const save = async (status) => {
+  const save = async (status, override = null) => {
     if (!canSave) {
       // eslint-disable-next-line no-alert
-      alert('Completa al menos el nombre del proyecto y el cliente antes de guardar.');
+      alert('Completa al menos el nombre del proyecto antes de guardar.');
+      return;
+    }
+    const merged = override ? { ...data, ...override } : data;
+    if (!override && (!merged.client_id || !merged.opportunity_id)) {
+      setLinkerStatus(status || data.status || 'draft');
       return;
     }
     setSaving(true);
     try {
-      const payload = { ...data, status: status || data.status };
+      const payload = { ...merged, status: status || merged.status };
       if (quotId) {
         const resp = await api.updateQuotation(quotId, payload);
-        const nextData = { ...data, ...resp };
+        const nextData = { ...merged, ...resp };
         setData(nextData);
         autosave.resetBaseline(nextData);
         setDirty(false);
       } else {
         const resp = await api.createQuotation(payload);
+        if (override) setData(merged);
         nav(`/quotation/${resp.id}`, { replace: true });
       }
     } catch (e) {
@@ -609,6 +621,22 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
       </div>
 
       <MobileFooter summary={summary} />
+
+      {linkerStatus && (
+        <NewQuotationPreModal
+          type={data.type}
+          onContext={(ctx) => {
+            const status = linkerStatus;
+            setLinkerStatus(null);
+            save(status, {
+              client_id: ctx.client_id,
+              opportunity_id: ctx.opportunity_id,
+              client_name: data.client_name || ctx.client_name,
+            });
+          }}
+          onCancel={() => setLinkerStatus(null)}
+        />
+      )}
     </div>
   );
 }

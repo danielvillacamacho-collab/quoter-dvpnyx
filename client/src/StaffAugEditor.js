@@ -5,6 +5,7 @@ import StaffAugEditorUnified from './StaffAugEditorUnified';
 import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
 import { TABLE_CLASS } from './shell/tableStyles';
 import FilterableSelect from './shell/FilterableSelect';
+import NewQuotationPreModal from './modules/NewQuotationPreModal';
 
 /**
  * Spec 3 (spec_capacity_editor.docx, Abril 2026) — por defecto renderizamos
@@ -57,6 +58,9 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
   const isNew = !!newType;
 
   const [saving, setSaving] = useState(false);
+  // Linker modal: si al guardar falta client_id/opportunity_id, abrimos el
+  // selector y luego reintentamos el save con el contexto resuelto.
+  const [linkerStatus, setLinkerStatus] = useState(null); // null | string status pendiente
   const [data, setData] = useState({
     type: newType || 'staff_aug',
     client_id: context?.client_id || null,
@@ -86,12 +90,23 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
   const totalMonthly = data.lines.reduce((s, l) => s + (l.rate_month || 0) * (l.quantity || 1), 0);
   const totalContract = data.lines.reduce((s, l) => s + (l.total || 0), 0);
 
-  const save = async (status) => {
+  const save = async (status, override = null) => {
+    const merged = override ? { ...data, ...override } : data;
+    // Si falta client_id u opportunity_id, abrimos el linker y reintentamos
+    // cuando el usuario los provee (override).
+    if (!override && (!merged.client_id || !merged.opportunity_id)) {
+      setLinkerStatus(status || data.status || 'draft');
+      return;
+    }
     setSaving(true);
     try {
-      const payload = { ...data, status: status || data.status };
+      const payload = { ...merged, status: status || merged.status };
       if (quotId) { await api.updateQuotation(quotId, payload); }
-      else { const q = await api.createQuotation(payload); nav(`/quotation/${q.id}`, { replace: true }); }
+      else {
+        const q = await api.createQuotation(payload);
+        if (override) setData(merged);
+        nav(`/quotation/${q.id}`, { replace: true });
+      }
       // eslint-disable-next-line no-alert
       alert('Cotización guardada');
     } catch (e) {
@@ -207,6 +222,22 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
           <div style={{ ...css.metricValue, color: 'var(--teal-mid)' }}>{formatUSD(totalContract * (1 - (data.discount_pct || 0)))}</div>
           <div style={css.metricLabel}>Con descuento ({formatPct(data.discount_pct)})</div>
         </div>
+
+      {linkerStatus && (
+        <NewQuotationPreModal
+          type={data.type}
+          onContext={(ctx) => {
+            const status = linkerStatus;
+            setLinkerStatus(null);
+            save(status, {
+              client_id: ctx.client_id,
+              opportunity_id: ctx.opportunity_id,
+              client_name: data.client_name || ctx.client_name,
+            });
+          }}
+          onCancel={() => setLinkerStatus(null)}
+        />
+      )}
       </div>
     </div>
   );
