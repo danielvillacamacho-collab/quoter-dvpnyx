@@ -226,13 +226,8 @@ const COMMITTERS = {
       [v.key, v.name, v.description, v.sort_order, v.active],
     );
     const status = rows[0].inserted ? 'created' : 'updated';
-    await emitEvent(client, {
-      event_type: `area.${status === 'created' ? 'created' : 'updated'}`,
-      entity_type: 'area',
-      entity_id: rows[0].id.toString(),  // areas.id is SERIAL
-      actor_user_id: ctx.userId,
-      payload: { key: v.key, source: 'bulk_import' },
-    });
+    // area.id is SERIAL (integer), not UUID — emitEvent skipped here to avoid
+    // aborting the transaction; bulk_import.committed covers the audit trail.
     return { status, id: rows[0].id };
   },
 
@@ -254,13 +249,8 @@ const COMMITTERS = {
          WHERE id=$4`,
         [v.category, v.description, v.active, id],
       );
-      await emitEvent(client, {
-        event_type: 'skill.updated',
-        entity_type: 'skill',
-        entity_id: id.toString(),
-        actor_user_id: ctx.userId,
-        payload: { name: v.name, source: 'bulk_import' },
-      });
+      // skill.id is SERIAL (integer), not UUID — emitEvent skipped here to avoid
+      // aborting the transaction; bulk_import.committed covers the audit trail.
       return { status: 'updated', id };
     }
     const { rows } = await client.query(
@@ -268,13 +258,7 @@ const COMMITTERS = {
        VALUES ($1,$2,$3,$4) RETURNING id`,
       [v.name, v.category, v.description, v.active],
     );
-    await emitEvent(client, {
-      event_type: 'skill.created',
-      entity_type: 'skill',
-      entity_id: rows[0].id.toString(),
-      actor_user_id: ctx.userId,
-      payload: { name: v.name, source: 'bulk_import' },
-    });
+    // Same reason: skip emitEvent for integer-id entities in bulk context.
     return { status: 'created', id: rows[0].id };
   },
 
@@ -499,11 +483,18 @@ async function runBulkImport({ entity, rows, pool, userId, dryRun = false }) {
         report.push({ row_number: v.row_number, status: 'error', reason: v.reason });
         continue;
       }
+      const sp = `sp_row_${v.row_number}`;
       try {
+        await client.query(`SAVEPOINT ${sp}`);
         const res = await committer(client, v.value, { userId });
+        await client.query(`RELEASE SAVEPOINT ${sp}`);
         counts[res.status] = (counts[res.status] || 0) + 1;
         report.push({ row_number: v.row_number, ...res });
       } catch (err) {
+        try {
+          await client.query(`ROLLBACK TO SAVEPOINT ${sp}`);
+          await client.query(`RELEASE SAVEPOINT ${sp}`);
+        } catch (_) { /* transaction unrecoverable — outer catch will ROLLBACK */ }
         counts.error++;
         report.push({ row_number: v.row_number, status: 'error', reason: err.message });
       }
