@@ -92,7 +92,7 @@ const VALIDATORS = {
   skills(row) {
     if (!notEmpty(row.name)) return { ok: false, error: 'Columna "name" requerida' };
     const category = notEmpty(row.category) ? String(row.category).trim().toLowerCase() : null;
-    if (category && !['language', 'framework', 'cloud', 'data', 'ai', 'tool', 'methodology', 'soft'].includes(category)) {
+    if (category && !['language', 'framework', 'cloud', 'data', 'ai', 'tool', 'methodology', 'soft', 'other'].includes(category)) {
       return { ok: false, error: `Categoría inválida: "${category}"` };
     }
     return {
