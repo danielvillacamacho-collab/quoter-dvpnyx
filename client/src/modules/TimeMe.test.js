@@ -149,21 +149,20 @@ describe('TimeMe', () => {
       jest.useRealTimers();
     });
 
-    it('pill is rendered with the calendar icon and hidden date input is in the DOM', async () => {
+    it('date input is rendered in the week navigation', async () => {
       mount();
       await screen.findByText('Contrato Alpha');
       expect(screen.getByLabelText('Seleccionar semana')).toBeInTheDocument();
-      expect(screen.getByLabelText('Seleccionar semana').textContent).toContain('📅');
-      expect(screen.getByLabelText('Elegir fecha')).toBeInTheDocument();
+      expect(screen.getByLabelText('Seleccionar semana').value).toBe(CURRENT_MONDAY);
     });
 
     it('selecting a date navigates to the Monday of that week', async () => {
       mount();
       await screen.findByText('Contrato Alpha');
-      // Pick Thursday 2026-05-07 → should navigate to Monday 2026-05-04
-      fireEvent.change(screen.getByLabelText('Elegir fecha'), { target: { value: '2026-05-07' } });
+      // Pick Thursday 2026-05-07 → Monday 2026-05-04
+      fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-07' } });
       await waitFor(() =>
-        expect(screen.getByLabelText('Seleccionar semana').textContent).toContain('2026-05-04')
+        expect(screen.getByLabelText('Seleccionar semana').value).toBe('2026-05-04')
       );
     });
 
@@ -171,11 +170,11 @@ describe('TimeMe', () => {
       mount();
       await screen.findByText('Contrato Alpha');
 
-      fireEvent.change(screen.getByLabelText('Elegir fecha'), { target: { value: '2026-05-04' } });
-      const afterMonday = screen.getByLabelText('Seleccionar semana').textContent;
+      fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-04' } });
+      const afterMonday = screen.getByLabelText('Seleccionar semana').value;
 
-      fireEvent.change(screen.getByLabelText('Elegir fecha'), { target: { value: '2026-05-10' } });
-      const afterSunday = screen.getByLabelText('Seleccionar semana').textContent;
+      fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-10' } });
+      const afterSunday = screen.getByLabelText('Seleccionar semana').value;
 
       expect(afterMonday).toBe(afterSunday);
     });
@@ -185,11 +184,11 @@ describe('TimeMe', () => {
       await screen.findByText('Contrato Alpha');
       fireEvent.click(screen.getByLabelText('Semana siguiente'));
       await waitFor(() =>
-        expect(screen.getByLabelText('Seleccionar semana').textContent).toContain('2026-04-13')
+        expect(screen.getByLabelText('Seleccionar semana').value).toBe('2026-04-13')
       );
       fireEvent.click(screen.getByLabelText('Semana anterior'));
       await waitFor(() =>
-        expect(screen.getByLabelText('Seleccionar semana').textContent).toContain(CURRENT_MONDAY)
+        expect(screen.getByLabelText('Seleccionar semana').value).toBe(CURRENT_MONDAY)
       );
     });
 
@@ -200,7 +199,7 @@ describe('TimeMe', () => {
       const hoyBtn = await screen.findByRole('button', { name: /Hoy/i });
       fireEvent.click(hoyBtn);
       await waitFor(() =>
-        expect(screen.getByLabelText('Seleccionar semana').textContent).toContain(CURRENT_MONDAY)
+        expect(screen.getByLabelText('Seleccionar semana').value).toBe(CURRENT_MONDAY)
       );
     });
   });

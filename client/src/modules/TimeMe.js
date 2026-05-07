@@ -16,7 +16,7 @@
  *  - Week nav as a compact chevron-pill-chevron with "Hoy" shortcut
  *  - Right-side mini stats (esta semana, cumplimiento 7d)
  */
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 
@@ -60,8 +60,7 @@ const s = {
   metaRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' },
   weekNav: { display: 'flex', alignItems: 'center', gap: 6 },
   weekPill: { minWidth: 180, justifyContent: 'center', fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'" },
-  pickerWrap: { position: 'relative', display: 'inline-flex' },
-  hiddenDateInput: { position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' },
+  weekDateInput: { padding: '3px 8px', fontSize: 12, fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'", border: '1px solid var(--ds-border)', borderRadius: 6, background: 'var(--ds-surface)', color: 'var(--ds-text)', cursor: 'pointer', minWidth: 140 },
 
   statWrap: { marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center' },
   statLabel: { fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 500, color: 'var(--ds-text-dim)' },
@@ -110,8 +109,6 @@ export default function TimeMe() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState({}); // keyed by `${assignmentId}-${dateIso}`
   const [errorMsg, setErrorMsg] = useState('');
-  const dateInputRef = useRef(null);
-
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const weekFromIso = iso(weekStart);
   const weekToIso = iso(addDays(weekStart, 6));
@@ -127,12 +124,6 @@ export default function TimeMe() {
     const val = e.target.value;
     if (!val) return;
     setWeekStart(startOfWeek(new Date(val + 'T12:00:00')));
-  }, []);
-
-  const openDatePicker = useCallback(() => {
-    if (dateInputRef.current) {
-      dateInputRef.current.showPicker();
-    }
   }, []);
 
   const load = useCallback(async () => {
@@ -248,25 +239,14 @@ export default function TimeMe() {
         <div style={s.metaRow}>
           <div style={s.weekNav}>
             <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Semana anterior">‹</button>
-            <div style={s.pickerWrap}>
-              <button
-                style={{ ...s.btn, ...s.btnSm, ...s.weekPill }}
-                onClick={openDatePicker}
-                aria-label="Seleccionar semana"
-                title="Haz clic para saltar a una semana específica"
-              >
-                {weekFromIso} — {weekToIso} 📅
-              </button>
               <input
-                ref={dateInputRef}
                 type="date"
-                style={s.hiddenDateInput}
+                style={s.weekDateInput}
                 value={weekFromIso}
                 onChange={handlePickerChange}
-                aria-label="Elegir fecha"
-                tabIndex={-1}
+                aria-label="Seleccionar semana"
+                title="Selecciona una fecha para saltar a esa semana"
               />
-            </div>
             <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, 7))} aria-label="Semana siguiente">›</button>
             {!isCurrentWeek && (
               <button style={{ ...s.btn, ...s.btnSm, ...s.btnGhost }} onClick={() => setWeekStart(startOfWeek(new Date()))}>Hoy</button>
