@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import useAutosave from './hooks/useAutosave';
+import useQuotationLookups from './hooks/useQuotationLookups';
 import AutosaveIndicator from './AutosaveIndicator';
 import FilterableSelect from './shell/FilterableSelect';
+import CreateClientOppModal from './modules/CreateClientOppModal';
 import {
   calcStaffAugLine,
   formatUSD,
@@ -66,9 +68,15 @@ function levelTooltip(level, params) {
 }
 
 /* ========== ZONE 1 — PROJECT INFO (collapsible) ========== */
-function ProjectInfoPanel({ data, onChange, collapsed, onToggleCollapse }) {
+function ProjectInfoPanel({ data, onChange, lookups, collapsed, onToggleCollapse, onOpenCreateModal }) {
   const set = (k, v) => onChange({ ...data, [k]: v });
+  const setMulti = (patch) => onChange({ ...data, ...patch });
   const hasData = (data.project_name || '').trim() && (data.client_name || '').trim();
+
+  const clientOptions = (lookups.clients || []).map((c) => ({ id: String(c.id), label: c.name }));
+  const oppOptions = (lookups.opportunities || []).map((o) => ({ id: String(o.id), label: `${o.name} (${o.status})` }));
+  const commercialOptions = (lookups.commercials || []).map((u) => ({ id: String(u.id), label: u.name }));
+
   return (
     <div style={s.cardTight}>
       <div
@@ -82,7 +90,7 @@ function ProjectInfoPanel({ data, onChange, collapsed, onToggleCollapse }) {
       >
         <h3 style={s.panelTitle}>
           <span style={{ display: 'inline-block', transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform .15s', marginRight: 6 }}>▾</span>
-          📝 Datos del Proyecto
+          Datos del Proyecto
           {collapsed && hasData && (
             <span style={{ marginLeft: 10, fontWeight: 400, fontSize: 12, color: 'var(--text-light)' }}>
               · {data.project_name} · {data.client_name}
@@ -98,11 +106,53 @@ function ProjectInfoPanel({ data, onChange, collapsed, onToggleCollapse }) {
           </div>
           <div>
             <label style={s.label}>Cliente *</label>
-            <input style={s.input} value={data.client_name || ''} onChange={(e) => set('client_name', e.target.value)} placeholder="Ej: Acme SA" />
+            <FilterableSelect
+              aria-label="Cliente"
+              inputStyle={s.input}
+              value={data.client_id ? String(data.client_id) : ''}
+              onChange={(e) => {
+                const cid = e.target.value || null;
+                const cl = lookups.clients.find((c) => String(c.id) === cid);
+                setMulti({ client_id: cid, client_name: cl?.name || '', opportunity_id: null });
+              }}
+              placeholder="— Buscar cliente —"
+              options={clientOptions}
+            />
+            <button type="button" style={{ background: 'transparent', color: 'var(--teal-mid)', border: 'none', fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 4 }} onClick={() => onOpenCreateModal('client')}>
+              + Crear cliente
+            </button>
+          </div>
+          <div>
+            <label style={s.label}>Oportunidad *</label>
+            <FilterableSelect
+              aria-label="Oportunidad"
+              inputStyle={s.input}
+              value={data.opportunity_id ? String(data.opportunity_id) : ''}
+              onChange={(e) => set('opportunity_id', e.target.value || null)}
+              placeholder={data.client_id ? '— Buscar oportunidad —' : '— Primero selecciona un cliente —'}
+              disabled={!data.client_id}
+              options={oppOptions}
+            />
+            {data.client_id && (
+              <button type="button" style={{ background: 'transparent', color: 'var(--teal-mid)', border: 'none', fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 4 }} onClick={() => onOpenCreateModal('opportunity')}>
+                + Crear oportunidad
+              </button>
+            )}
           </div>
           <div>
             <label style={s.label}>Responsable Comercial</label>
-            <input style={s.input} value={data.commercial_name || ''} onChange={(e) => set('commercial_name', e.target.value)} />
+            <FilterableSelect
+              aria-label="Responsable Comercial"
+              inputStyle={s.input}
+              value={data.commercial_user_id ? String(data.commercial_user_id) : ''}
+              onChange={(e) => {
+                const uid = e.target.value || null;
+                const u = lookups.commercials.find((c) => String(c.id) === uid);
+                setMulti({ commercial_user_id: uid, commercial_name: u?.name || '' });
+              }}
+              placeholder="— Seleccionar —"
+              options={commercialOptions}
+            />
           </div>
           <div>
             <label style={s.label}>Ingeniero de Pre-venta</label>
@@ -445,16 +495,21 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [infoCollapsed, setInfoCollapsed] = useState(false);
+  const [createModal, setCreateModal] = useState(null); // null | 'client' | 'opportunity'
   const [data, setData] = useState({
     type: 'staff_aug',
     client_id: context?.client_id || null,
     opportunity_id: context?.opportunity_id || null,
     project_name: '', client_name: context?.client_name || '',
-    commercial_name: '', preventa_name: '',
+    commercial_name: '', commercial_user_id: null,
+    preventa_name: '',
     discount_pct: 0, notes: '', status: 'draft',
     lines: [],
     metadata: {},
   });
+
+  // Lookups: clients, opportunities (by client_id), commercial users
+  const lookups = useQuotationLookups(data.client_id);
 
   const defaultMargin = useMemo(
     () => (params ? Number(params.margin?.find((p) => p.key === 'talent')?.value) || 0.35 : 0.35),
@@ -479,8 +534,6 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
 
   const handleChange = useCallback((next) => {
     setDirty(true);
-    // If margin changed, recalc all lines with the new override so the
-    // cascade (rate/mes, total, blend, final price) updates in real time.
     const prevMargin = data.metadata?.margin_pct;
     const nextMargin = next.metadata?.margin_pct;
     if (params && prevMargin !== nextMargin) {
@@ -498,9 +551,8 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   );
 
   const hasProfitableLines = (data.lines || []).some((l) => Number(l.rate_month || 0) > 0);
-  const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
-  // Export ya no depende de !dirty: autosave persiste; si está off, doExport
-  // hace flush manual o manda el state como override en el body del export.
+  // canSave requiere: proyecto, cliente (dropdown) y oportunidad (dropdown)
+  const canSave = !!((data.project_name || '').trim() && data.client_id && data.opportunity_id);
   const canExport = !isNew && hasProfitableLines;
   const exportDisabledReason = isNew
     ? 'Debes guardar cambios para exportar'
@@ -519,7 +571,7 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   const save = async (status) => {
     if (!canSave) {
       // eslint-disable-next-line no-alert
-      alert('Completa al menos el nombre del proyecto y el cliente antes de guardar.');
+      alert('Completa el nombre del proyecto, selecciona un cliente y una oportunidad antes de guardar.');
       return;
     }
     setSaving(true);
@@ -546,7 +598,6 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
   const doExport = async (format) => {
     if (!quotId) return;
     try {
-      // Flush antes de exportar.
       if (autosave.enabled) {
         await autosave.flush();
       }
@@ -564,6 +615,21 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
       // eslint-disable-next-line no-alert
       alert('Error al exportar: ' + e.message);
     }
+  };
+
+  const handleCreated = (result) => {
+    setCreateModal(null);
+    const patch = {};
+    if (result.client_id) {
+      patch.client_id = result.client_id;
+      patch.client_name = result.client_name || '';
+      lookups.addClient({ id: result.client_id, name: result.client_name });
+    }
+    if (result.opportunity_id) {
+      patch.opportunity_id = result.opportunity_id;
+      lookups.addOpportunity({ id: result.opportunity_id, name: result.opportunity_name, status: 'open' });
+    }
+    handleChange({ ...data, ...patch });
   };
 
   return (
@@ -585,9 +651,9 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
             onClick={() => { if (!canSave || saving) return; save('draft'); }}
             disabled={saving}
             aria-disabled={!canSave || saving}
-            title={!canSave ? 'Campos pendientes de diligenciar para guardar' : undefined}
+            title={!canSave ? 'Completa proyecto, cliente y oportunidad para guardar' : undefined}
           >
-            {saving ? 'Guardando…' : '💾 Guardar borrador'}
+            {saving ? 'Guardando…' : 'Guardar borrador'}
           </button>
           {onSwitchToClassic && (
             <button type="button" style={{ ...s.btnOutlineSm, marginLeft: 4 }} onClick={onSwitchToClassic} title="Cambiar a la vista clásica">
@@ -597,7 +663,14 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
         </div>
       </div>
 
-      <ProjectInfoPanel data={data} onChange={handleChange} collapsed={infoCollapsed} onToggleCollapse={() => setInfoCollapsed((c) => !c)} />
+      <ProjectInfoPanel
+        data={data}
+        onChange={handleChange}
+        lookups={lookups}
+        collapsed={infoCollapsed}
+        onToggleCollapse={() => setInfoCollapsed((c) => !c)}
+        onOpenCreateModal={(mode) => setCreateModal(mode)}
+      />
 
       <div className="project-editor-grid">
         <div className="project-editor-main">
@@ -609,6 +682,16 @@ export default function StaffAugEditorUnified({ params, context, onSwitchToClass
       </div>
 
       <MobileFooter summary={summary} />
+
+      {createModal && (
+        <CreateClientOppModal
+          mode={createModal}
+          clientId={data.client_id}
+          clientName={data.client_name}
+          onCreated={handleCreated}
+          onCancel={() => setCreateModal(null)}
+        />
+      )}
     </div>
   );
 }

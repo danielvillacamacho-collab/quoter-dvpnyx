@@ -2,7 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import ProjectEditorUnified from './ProjectEditorUnified';
+import useQuotationLookups from './hooks/useQuotationLookups';
 import FilterableSelect from './shell/FilterableSelect';
+import CreateClientOppModal from './modules/CreateClientOppModal';
 import {
   calcProjectProfile,
   calcAllocation,
@@ -77,8 +79,15 @@ function Stepper({ current, completed, onJump }) {
 }
 
 /* ========== STEP 1 — PROJECT DATA ========== */
-function StepProject({ data, onChange }) {
+function StepProject({ data, onChange, lookups, onOpenCreateModal }) {
   const set = (k, v) => onChange({ ...data, [k]: v });
+  const setMulti = (patch) => onChange({ ...data, ...patch });
+
+  const clientOptions = (lookups.clients || []).map((c) => ({ id: String(c.id), label: c.name }));
+  const oppOptions = (lookups.opportunities || []).map((o) => ({ id: String(o.id), label: `${o.name} (${o.status})` }));
+  const commercialOptions = (lookups.commercials || []).map((u) => ({ id: String(u.id), label: u.name }));
+  const inlineBtn = { background: 'transparent', color: 'var(--teal-mid)', border: 'none', fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 4 };
+
   return (
     <div style={s.card}>
       <h3 style={{ fontSize: 15, color: 'var(--purple-dark)', marginBottom: 16, fontFamily: 'Montserrat' }}>📝 Datos del Proyecto</h3>
@@ -89,11 +98,49 @@ function StepProject({ data, onChange }) {
         </div>
         <div>
           <label style={s.label}>Cliente *</label>
-          <input style={s.input} value={data.client_name || ''} onChange={e => set('client_name', e.target.value)} placeholder="Ej: Acme SA" />
+          <FilterableSelect
+            aria-label="Cliente"
+            inputStyle={s.input}
+            value={data.client_id ? String(data.client_id) : ''}
+            onChange={(e) => {
+              const cid = e.target.value || null;
+              const cl = lookups.clients.find((c) => String(c.id) === cid);
+              setMulti({ client_id: cid, client_name: cl?.name || '', opportunity_id: null });
+            }}
+            placeholder="— Buscar cliente —"
+            options={clientOptions}
+          />
+          <button type="button" style={inlineBtn} onClick={() => onOpenCreateModal('client')}>+ Crear cliente</button>
+        </div>
+        <div>
+          <label style={s.label}>Oportunidad *</label>
+          <FilterableSelect
+            aria-label="Oportunidad"
+            inputStyle={s.input}
+            value={data.opportunity_id ? String(data.opportunity_id) : ''}
+            onChange={(e) => set('opportunity_id', e.target.value || null)}
+            placeholder={data.client_id ? '— Buscar oportunidad —' : '— Primero selecciona un cliente —'}
+            disabled={!data.client_id}
+            options={oppOptions}
+          />
+          {data.client_id && (
+            <button type="button" style={inlineBtn} onClick={() => onOpenCreateModal('opportunity')}>+ Crear oportunidad</button>
+          )}
         </div>
         <div>
           <label style={s.label}>Responsable Comercial</label>
-          <input style={s.input} value={data.commercial_name || ''} onChange={e => set('commercial_name', e.target.value)} />
+          <FilterableSelect
+            aria-label="Responsable Comercial"
+            inputStyle={s.input}
+            value={data.commercial_user_id ? String(data.commercial_user_id) : ''}
+            onChange={(e) => {
+              const uid = e.target.value || null;
+              const u = lookups.commercials.find((c) => String(c.id) === uid);
+              setMulti({ commercial_user_id: uid, commercial_name: u?.name || '' });
+            }}
+            placeholder="— Seleccionar —"
+            options={commercialOptions}
+          />
         </div>
         <div>
           <label style={s.label}>Ingeniero de Pre-venta</label>
@@ -703,13 +750,13 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
 
   const [current, setCurrent] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [createModal, setCreateModal] = useState(null);
   const [data, setData] = useState({
     type: 'fixed_scope',
-    // EX-1: cliente+opp IDs from the pre-modal's context (new) or from the
-    // GET response (edit). Both flow through to POST/PUT payloads below.
     client_id: context?.client_id || null,
     opportunity_id: context?.opportunity_id || null,
-    project_name: '', client_name: context?.client_name || '', commercial_name: '', preventa_name: '',
+    project_name: '', client_name: context?.client_name || '',
+    commercial_name: '', commercial_user_id: null, preventa_name: '',
     discount_pct: 0, notes: '', status: 'draft',
     lines: [],
     phases: [...DEFAULT_PHASES],
@@ -718,10 +765,11 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
     metadata: { allocation: {} },
   });
 
+  const lookups = useQuotationLookups(data.client_id);
+
   useEffect(() => {
     if (!quotId) return;
     api.getQuotation(quotId).then(q => {
-      // Recompute cost/rate hour in case params changed
       const lines = (q.lines || []).map(l => params ? calcProjectProfile(l, params) : l);
       setData({
         ...q,
@@ -737,11 +785,11 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
   /* ---- step gating ---- */
   const canAdvance = useMemo(() => {
     switch (current) {
-      case 0: return !!(data.project_name?.trim() && data.client_name?.trim());
+      case 0: return !!(data.project_name?.trim() && data.client_id && data.opportunity_id);
       case 1: return (data.lines || []).length > 0 && data.lines.every(l => l.level && l.country && l.stack);
       case 2: return (data.phases || []).some(p => Number(p.weeks || 0) > 0);
-      case 3: return true;   // allocation never blocks (can be 0 hours)
-      case 4: return true;   // epics optional
+      case 3: return true;
+      case 4: return true;
       case 5: return true;
       default: return true;
     }
@@ -749,7 +797,7 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
 
   const completed = useMemo(() => {
     const set = new Set();
-    if (data.project_name?.trim() && data.client_name?.trim()) set.add(0);
+    if (data.project_name?.trim() && data.client_id && data.opportunity_id) set.add(0);
     if ((data.lines || []).length > 0 && data.lines.every(l => l.level)) set.add(1);
     if ((data.phases || []).some(p => Number(p.weeks || 0) > 0)) set.add(2);
     if (Object.keys(data.metadata?.allocation || {}).length > 0) set.add(3);
@@ -757,7 +805,14 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
     return set;
   }, [data]);
 
+  const canSave = !!(data.project_name?.trim() && data.client_id && data.opportunity_id);
+
   const save = async (status) => {
+    if (!canSave) {
+      // eslint-disable-next-line no-alert
+      alert('Completa el nombre del proyecto, selecciona un cliente y una oportunidad antes de guardar.');
+      return;
+    }
     setSaving(true);
     try {
       const payload = { ...data, status: status || data.status };
@@ -779,6 +834,21 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
     await save(status);
   };
 
+  const handleCreated = (result) => {
+    setCreateModal(null);
+    const patch = {};
+    if (result.client_id) {
+      patch.client_id = result.client_id;
+      patch.client_name = result.client_name || '';
+      lookups.addClient({ id: result.client_id, name: result.client_name });
+    }
+    if (result.opportunity_id) {
+      patch.opportunity_id = result.opportunity_id;
+      lookups.addOpportunity({ id: result.opportunity_id, name: result.opportunity_name, status: 'open' });
+    }
+    setData(d => ({ ...d, ...patch }));
+  };
+
   const go = (n) => setCurrent(Math.max(0, Math.min(STEPS.length - 1, n)));
 
   return (
@@ -791,7 +861,7 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
           </span>
         </div>
         <div className="editor-actions">
-          <button type="button" style={s.btnOutline} onClick={() => save('draft')} disabled={saving}>{saving ? 'Guardando...' : '💾 Guardar borrador'}</button>
+          <button type="button" style={s.btnOutline} onClick={() => save('draft')} disabled={saving || !canSave}>{saving ? 'Guardando...' : 'Guardar borrador'}</button>
           {onSwitchToUnified && (
             <button
               type="button"
@@ -807,7 +877,7 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
 
       <Stepper current={current} completed={completed} onJump={go} />
 
-      {current === 0 && <StepProject data={data} onChange={setData} />}
+      {current === 0 && <StepProject data={data} onChange={setData} lookups={lookups} onOpenCreateModal={(mode) => setCreateModal(mode)} />}
       {current === 1 && <StepTeam data={data} onChange={setData} params={params} />}
       {current === 2 && <StepPhases data={data} onChange={setData} />}
       {current === 3 && <StepAllocation data={data} onChange={setData} params={params} />}
@@ -828,6 +898,16 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
             aria-label="Siguiente paso"
           >Siguiente →</button>
         </div>
+      )}
+
+      {createModal && (
+        <CreateClientOppModal
+          mode={createModal}
+          clientId={data.client_id}
+          clientName={data.client_name}
+          onCreated={handleCreated}
+          onCancel={() => setCreateModal(null)}
+        />
       )}
     </div>
   );

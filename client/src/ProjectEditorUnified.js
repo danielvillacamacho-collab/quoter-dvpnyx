@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import useAutosave from './hooks/useAutosave';
+import useQuotationLookups from './hooks/useQuotationLookups';
 import AutosaveIndicator from './AutosaveIndicator';
 import FilterableSelect from './shell/FilterableSelect';
+import CreateClientOppModal from './modules/CreateClientOppModal';
 import {
   calcProjectProfile,
   calcProjectSummary,
@@ -69,9 +71,15 @@ function applyFinancialOverrides(params, overrides) {
 }
 
 /* ========== ZONE 1 — PROJECT INFO (collapsible) ========== */
-function ProjectInfoPanel({ data, onChange, collapsed, onToggleCollapse }) {
+function ProjectInfoPanel({ data, onChange, lookups, collapsed, onToggleCollapse, onOpenCreateModal }) {
   const set = (k, v) => onChange({ ...data, [k]: v });
+  const setMulti = (patch) => onChange({ ...data, ...patch });
   const hasData = (data.project_name || '').trim() && (data.client_name || '').trim();
+
+  const clientOptions = (lookups.clients || []).map((c) => ({ id: String(c.id), label: c.name }));
+  const oppOptions = (lookups.opportunities || []).map((o) => ({ id: String(o.id), label: `${o.name} (${o.status})` }));
+  const commercialOptions = (lookups.commercials || []).map((u) => ({ id: String(u.id), label: u.name }));
+
   return (
     <div style={s.cardTight}>
       <div
@@ -85,7 +93,7 @@ function ProjectInfoPanel({ data, onChange, collapsed, onToggleCollapse }) {
       >
         <h3 style={s.panelTitle}>
           <span style={{ display: 'inline-block', transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform .15s', marginRight: 6 }}>▾</span>
-          📝 Datos del Proyecto
+          Datos del Proyecto
           {collapsed && hasData && (
             <span style={{ marginLeft: 10, fontWeight: 400, fontSize: 12, color: 'var(--text-light)' }}>
               · {data.project_name} · {data.client_name}
@@ -101,11 +109,53 @@ function ProjectInfoPanel({ data, onChange, collapsed, onToggleCollapse }) {
           </div>
           <div>
             <label style={s.label}>Cliente *</label>
-            <input style={s.input} value={data.client_name || ''} onChange={e => set('client_name', e.target.value)} placeholder="Ej: Acme SA" />
+            <FilterableSelect
+              aria-label="Cliente"
+              inputStyle={s.input}
+              value={data.client_id ? String(data.client_id) : ''}
+              onChange={(e) => {
+                const cid = e.target.value || null;
+                const cl = lookups.clients.find((c) => String(c.id) === cid);
+                setMulti({ client_id: cid, client_name: cl?.name || '', opportunity_id: null });
+              }}
+              placeholder="— Buscar cliente —"
+              options={clientOptions}
+            />
+            <button type="button" style={{ background: 'transparent', color: 'var(--teal-mid)', border: 'none', fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 4 }} onClick={() => onOpenCreateModal('client')}>
+              + Crear cliente
+            </button>
+          </div>
+          <div>
+            <label style={s.label}>Oportunidad *</label>
+            <FilterableSelect
+              aria-label="Oportunidad"
+              inputStyle={s.input}
+              value={data.opportunity_id ? String(data.opportunity_id) : ''}
+              onChange={(e) => set('opportunity_id', e.target.value || null)}
+              placeholder={data.client_id ? '— Buscar oportunidad —' : '— Primero selecciona un cliente —'}
+              disabled={!data.client_id}
+              options={oppOptions}
+            />
+            {data.client_id && (
+              <button type="button" style={{ background: 'transparent', color: 'var(--teal-mid)', border: 'none', fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 4 }} onClick={() => onOpenCreateModal('opportunity')}>
+                + Crear oportunidad
+              </button>
+            )}
           </div>
           <div>
             <label style={s.label}>Responsable Comercial</label>
-            <input style={s.input} value={data.commercial_name || ''} onChange={e => set('commercial_name', e.target.value)} />
+            <FilterableSelect
+              aria-label="Responsable Comercial"
+              inputStyle={s.input}
+              value={data.commercial_user_id ? String(data.commercial_user_id) : ''}
+              onChange={(e) => {
+                const uid = e.target.value || null;
+                const u = lookups.commercials.find((c) => String(c.id) === uid);
+                setMulti({ commercial_user_id: uid, commercial_name: u?.name || '' });
+              }}
+              placeholder="— Seleccionar —"
+              options={commercialOptions}
+            />
           </div>
           <div>
             <label style={s.label}>Ingeniero de Pre-venta</label>
@@ -786,12 +836,14 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
   const [dirty, setDirty] = useState(false);
   const [infoCollapsed, setInfoCollapsed] = useState(false);
   const [epicsOpen, setEpicsOpen] = useState(false);
+  const [createModal, setCreateModal] = useState(null); // null | 'client' | 'opportunity'
   const [data, setData] = useState({
     type: 'fixed_scope',
     client_id: context?.client_id || null,
     opportunity_id: context?.opportunity_id || null,
     project_name: '', client_name: context?.client_name || '',
-    commercial_name: '', preventa_name: '',
+    commercial_name: '', commercial_user_id: null,
+    preventa_name: '',
     discount_pct: 0, notes: '', status: 'draft',
     lines: [],
     phases: [...DEFAULT_PHASES],
@@ -800,9 +852,9 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
     metadata: { allocation: {}, financial_overrides: {} },
   });
 
-  // Autosave hook — declarado antes del load useEffect para poder llamar
-  // resetBaseline justo después del fetch y evitar que la transición
-  // defaults→loaded dispare un PUT espurio.
+  // Lookups: clients, opportunities (by client_id), commercial users
+  const lookups = useQuotationLookups(data.client_id);
+
   const autosaveRef = useRef(null);
 
   // Load existing quotation if editing
@@ -819,39 +871,29 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
         metadata: { allocation: {}, financial_overrides: {}, ...(q.metadata || {}) },
       };
       setData(loaded);
-      // Reset autosave baseline al estado recién cargado, así el hook NO
-      // interpreta la transición defaults→loaded como "edit del usuario".
       if (autosaveRef.current) autosaveRef.current.resetBaseline(loaded);
-      // Collapse project info by default if we already have data
       if (q.project_name) setInfoCollapsed(true);
       if ((q.epics || []).length > 0) setEpicsOpen(true);
     }).catch(() => nav('/'));
   }, [quotId, nav, params]);
 
-  // Wrap setData to track dirty state
   const handleChange = useCallback((next) => {
     setDirty(true);
     setData(next);
   }, []);
 
-  // Effective params with UI-driven financial overrides applied
   const effectiveParams = useMemo(
     () => applyFinancialOverrides(params, data.metadata?.financial_overrides || {}),
     [params, data.metadata?.financial_overrides]
   );
 
-  // Real-time financial cascade — recomputed on every data change
   const summary = useMemo(
     () => calcProjectSummary(data.lines || [], data.phases || [], data.metadata?.allocation || {}, data.discount_pct || 0, effectiveParams),
     [data.lines, data.phases, data.metadata?.allocation, data.discount_pct, effectiveParams]
   );
 
-  const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
-  // Export ya NO depende de !dirty: con autosave activo, los cambios se
-  // persisten solos; con autosave inactivo, doExport hace flush manual al
-  // PUT antes de generar el archivo. La condición de export queda sólo
-  // sobre datos fundamentalmente requeridos (ya guardado, ≥1 perfil,
-  // ≥1 fase con horas).
+  // canSave requiere: proyecto, cliente (dropdown) y oportunidad (dropdown)
+  const canSave = !!((data.project_name || '').trim() && data.client_id && data.opportunity_id);
   const canExport = !isNew
     && (data.lines || []).length > 0
     && (data.phases || []).some(p => Number(p.weeks || 0) > 0);
@@ -862,21 +904,17 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
       : '';
 
   // ──────── Autosave (debounced PUT) ────────
-  // Sólo aplica a cotizaciones ya creadas. Para nuevas, el primer Guardar
-  // crea el registro y de ahí en adelante el autosave hace su trabajo.
   const autosave = useAutosave({
     quotId,
     data,
     onSaved: () => setDirty(false),
   });
-  // Expose autosave handle to load useEffect via ref so we can resetBaseline
-  // right after fetch completes.
   autosaveRef.current = autosave;
 
   const save = async (status) => {
     if (!canSave) {
       // eslint-disable-next-line no-alert
-      alert('Completa al menos el nombre del proyecto y el cliente antes de guardar.');
+      alert('Completa el nombre del proyecto, selecciona un cliente y una oportunidad antes de guardar.');
       return;
     }
     setSaving(true);
@@ -904,16 +942,11 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
   const doExport = async (format) => {
     if (!quotId) return;
     try {
-      // Flush antes de exportar: si autosave está activo, persiste los
-      // cambios pendientes; si está inactivo, mandamos el `state` actual
-      // como override en el body para que el server use lo que ve el
-      // usuario en pantalla (no la versión en BD potencialmente vieja).
       if (autosave.enabled) {
         await autosave.flush();
       }
       const overrideState = autosave.enabled ? null : data;
       const res = await api.exportQuotation(quotId, format, overrideState);
-      // res is a Blob; trigger download
       const url = URL.createObjectURL(res.blob);
       const a = document.createElement('a');
       a.href = url;
@@ -926,6 +959,21 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
       // eslint-disable-next-line no-alert
       alert('Error al exportar: ' + e.message);
     }
+  };
+
+  const handleCreated = (result) => {
+    setCreateModal(null);
+    const patch = {};
+    if (result.client_id) {
+      patch.client_id = result.client_id;
+      patch.client_name = result.client_name || '';
+      lookups.addClient({ id: result.client_id, name: result.client_name });
+    }
+    if (result.opportunity_id) {
+      patch.opportunity_id = result.opportunity_id;
+      lookups.addOpportunity({ id: result.opportunity_id, name: result.opportunity_name, status: 'open' });
+    }
+    handleChange({ ...data, ...patch });
   };
 
   return (
@@ -948,9 +996,9 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
             onClick={() => { if (!canSave || saving) return; save('draft'); }}
             disabled={saving}
             aria-disabled={!canSave || saving}
-            title={!canSave ? 'Campos pendientes de diligenciar para guardar' : undefined}
+            title={!canSave ? 'Completa proyecto, cliente y oportunidad para guardar' : undefined}
           >
-            {saving ? 'Guardando…' : '💾 Guardar borrador'}
+            {saving ? 'Guardando…' : 'Guardar borrador'}
           </button>
           {onSwitchToClassic && (
             <button type="button" style={{ ...s.btnOutlineSm, marginLeft: 4 }} onClick={onSwitchToClassic} title="Cambiar a la vista clásica por pasos">
@@ -961,7 +1009,14 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
       </div>
 
       {/* Zone 1: project info */}
-      <ProjectInfoPanel data={data} onChange={handleChange} collapsed={infoCollapsed} onToggleCollapse={() => setInfoCollapsed(c => !c)} />
+      <ProjectInfoPanel
+        data={data}
+        onChange={handleChange}
+        lookups={lookups}
+        collapsed={infoCollapsed}
+        onToggleCollapse={() => setInfoCollapsed(c => !c)}
+        onOpenCreateModal={(mode) => setCreateModal(mode)}
+      />
 
       {/* Zone 2 + 3: main grid */}
       <div className="project-editor-grid">
@@ -977,6 +1032,16 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
       </div>
 
       <MobileFooter summary={summary} />
+
+      {createModal && (
+        <CreateClientOppModal
+          mode={createModal}
+          clientId={data.client_id}
+          clientName={data.client_name}
+          onCreated={handleCreated}
+          onCancel={() => setCreateModal(null)}
+        />
+      )}
     </div>
   );
 }

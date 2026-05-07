@@ -17,13 +17,40 @@ const pool = require('../database/pool');
 const { auth, adminOnly } = require('../middleware/auth');
 const { serverError } = require('../utils/http');
 
-router.use(auth, adminOnly);
-
 const ASSIGNABLE_ROLES = ['admin', 'lead', 'member', 'viewer'];
 const VALID_FUNCTIONS = [
   'comercial', 'preventa', 'capacity_manager', 'delivery_manager',
   'project_manager', 'fte_tecnico', 'people', 'finance', 'pmo', 'admin',
 ];
+
+/* ── GET /lookup ────────────────────────────────────────────────────
+ * Lightweight endpoint for any authenticated user. Returns {id, name}
+ * pairs filtered by `function` query param. Used by quotation editors
+ * to populate the "Responsable Comercial" dropdown without requiring
+ * admin privileges.
+ *
+ * GET /users/lookup?function=comercial → [{id, name}]
+ */
+router.get('/lookup', auth, async (req, res) => {
+  try {
+    const wheres = ['deleted_at IS NULL', 'active = true'];
+    const params = [];
+    if (req.query.function && VALID_FUNCTIONS.includes(req.query.function)) {
+      params.push(req.query.function);
+      wheres.push(`function = $${params.length}`);
+    }
+    const { rows } = await pool.query(
+      `SELECT id, name FROM users WHERE ${wheres.join(' AND ')} ORDER BY name ASC`,
+      params,
+    );
+    res.json(rows);
+  } catch (err) {
+    serverError(res, 'GET /users/lookup', err);
+  }
+});
+
+// All routes below require admin
+router.use(auth, adminOnly);
 
 /* ── GET / ──────────────────────────────────────────────────────── */
 router.get('/', async (req, res) => {
