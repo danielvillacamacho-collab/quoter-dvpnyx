@@ -20,7 +20,7 @@ jest.mock('../utils/apiV2');
 const mount = () => render(<MemoryRouter><TimeMe /></MemoryRouter>);
 
 const sampleAssignments = [
-  { id: 'a1', employee_id: 'e1', contract_name: 'Contrato Alpha', role_title: 'Senior Dev', request_role_title: 'Backend Lead', status: 'active' },
+  { id: 'a1', employee_id: 'e1', contract_name: 'Contrato Alpha', role_title: 'Senior Dev', request_role_title: 'Backend Lead', status: 'active', start_date: '2026-01-01', end_date: null },
 ];
 const sampleEntries = [
   // An entry on whichever Monday the test runs in — we'll compute it in tests

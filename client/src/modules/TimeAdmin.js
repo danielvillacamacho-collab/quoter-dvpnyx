@@ -440,7 +440,7 @@ export default function TimeAdmin() {
                   {assignments.map((a) => {
                     const hue = hueFrom(a.contract_id || a.id);
                     const isEnded = a.status === 'ended';
-                    const aStart = String(a.start_date).slice(0, 10);
+                    const aStart = a.start_date ? String(a.start_date).slice(0, 10) : null;
                     const aEnd = a.end_date ? String(a.end_date).slice(0, 10) : null;
                     return (
                       <tr key={a.id}>
@@ -462,7 +462,7 @@ export default function TimeAdmin() {
                           const existing = findEntry(a.id, dIso);
                           const st = stateFor(i);
                           // Cells outside the assignment's active date range are blocked.
-                          const outOfRange = dIso < aStart || (aEnd !== null && dIso > aEnd);
+                          const outOfRange = (aStart !== null && dIso < aStart) || (aEnd !== null && dIso > aEnd);
                           const blocked = st.future || outOfRange;
                           const pastEmpty = !blocked && !st.today && !st.weekend && !existing;
                           const bg = outOfRange ? s.cellBg.outOfRange
@@ -529,7 +529,7 @@ export default function TimeAdmin() {
             <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
               {assignments.filter((a) => a.status !== 'ended').map((a) => {
                 const hue = hueFrom(a.contract_id || a.id);
-                const aStart = String(a.start_date).slice(0, 10);
+                const aStart = a.start_date ? String(a.start_date).slice(0, 10) : null;
                 const aEnd = a.end_date ? String(a.end_date).slice(0, 10) : null;
                 return (
                   <button
@@ -540,7 +540,7 @@ export default function TimeAdmin() {
                         const st = stateFor(i);
                         if (st.future) continue;
                         const dIso = iso(weekDates[i]);
-                        if (dIso < aStart || (aEnd !== null && dIso > aEnd)) continue;
+                        if ((aStart !== null && dIso < aStart) || (aEnd !== null && dIso > aEnd)) continue;
                         const existing = findEntry(a.id, dIso);
                         if (existing) continue;
                         // eslint-disable-next-line no-await-in-loop
