@@ -184,12 +184,12 @@ describe('TimeMe', () => {
       expect(screen.getByLabelText('Seleccionar semana').textContent).toContain(CURRENT_MONDAY);
     });
 
-    it('clicking outside the picker closes it without changing the week', async () => {
+    it('clicking the pill button a second time closes the picker', async () => {
       mount();
       await screen.findByText('Contrato Alpha');
       fireEvent.click(screen.getByLabelText('Seleccionar semana'));
       expect(screen.getByLabelText('Elegir fecha')).toBeInTheDocument();
-      fireEvent.mouseDown(document.body);
+      fireEvent.click(screen.getByLabelText('Seleccionar semana'));
       expect(screen.queryByLabelText('Elegir fecha')).toBeNull();
       expect(screen.getByLabelText('Seleccionar semana').textContent).toContain(CURRENT_MONDAY);
     });

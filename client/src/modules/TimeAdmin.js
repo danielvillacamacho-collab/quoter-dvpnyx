@@ -5,7 +5,7 @@
  * admin/lead can enter time for any employee. Same weekly grid,
  * same cell states, same POST/PUT/DELETE flow, plus CSV export.
  */
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import FilterableSelect from '../shell/FilterableSelect';
@@ -146,7 +146,6 @@ export default function TimeAdmin() {
   const [saving, setSaving] = useState({});
   const [errorMsg, setErrorMsg] = useState('');
   const [showPicker, setShowPicker] = useState(false);
-  const pickerWrapRef = useRef(null);
 
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const weekFromIso = iso(weekStart);
@@ -160,18 +159,9 @@ export default function TimeAdmin() {
 
   useEffect(() => {
     if (!showPicker) return;
-    const onMouseDown = (e) => {
-      if (pickerWrapRef.current && !pickerWrapRef.current.contains(e.target)) {
-        setShowPicker(false);
-      }
-    };
     const onKeyDown = (e) => { if (e.key === 'Escape') setShowPicker(false); };
-    document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
+    return () => { document.removeEventListener('keydown', onKeyDown); };
   }, [showPicker]);
 
   const handlePickerChange = useCallback((e) => {
@@ -355,7 +345,7 @@ export default function TimeAdmin() {
           <div style={s.metaRow}>
             <div style={s.weekNav}>
               <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Semana anterior">&#8249;</button>
-              <div style={s.weekPickerWrap} ref={pickerWrapRef}>
+              <div style={s.weekPickerWrap}>
                 <button
                   style={{ ...s.btn, ...s.btnSm, ...s.weekPill }}
                   onClick={() => setShowPicker((v) => !v)}

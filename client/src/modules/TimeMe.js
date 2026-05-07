@@ -16,7 +16,7 @@
  *  - Week nav as a compact chevron-pill-chevron with "Hoy" shortcut
  *  - Right-side mini stats (esta semana, cumplimiento 7d)
  */
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 
@@ -112,7 +112,6 @@ export default function TimeMe() {
   const [saving, setSaving] = useState({}); // keyed by `${assignmentId}-${dateIso}`
   const [errorMsg, setErrorMsg] = useState('');
   const [showPicker, setShowPicker] = useState(false);
-  const pickerWrapRef = useRef(null);
 
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const weekFromIso = iso(weekStart);
@@ -127,18 +126,9 @@ export default function TimeMe() {
 
   useEffect(() => {
     if (!showPicker) return;
-    const onMouseDown = (e) => {
-      if (pickerWrapRef.current && !pickerWrapRef.current.contains(e.target)) {
-        setShowPicker(false);
-      }
-    };
     const onKeyDown = (e) => { if (e.key === 'Escape') setShowPicker(false); };
-    document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
+    return () => { document.removeEventListener('keydown', onKeyDown); };
   }, [showPicker]);
 
   const handlePickerChange = useCallback((e) => {
@@ -262,7 +252,7 @@ export default function TimeMe() {
         <div style={s.metaRow}>
           <div style={s.weekNav}>
             <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Semana anterior">‹</button>
-            <div style={s.pickerWrap} ref={pickerWrapRef}>
+            <div style={s.pickerWrap}>
               <button
                 style={{ ...s.btn, ...s.btnSm, ...s.weekPill }}
                 onClick={() => setShowPicker((v) => !v)}
