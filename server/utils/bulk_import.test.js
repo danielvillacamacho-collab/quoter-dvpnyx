@@ -169,11 +169,14 @@ describe('runBulkImport — commit (skills)', () => {
     ];
     const { pool, client } = makePool([
       { rows: [] },                 // BEGIN
-      { rows: [] },                 // existing for React → none
+      { rows: [] },                 // SAVEPOINT row 2
+      { rows: [] },                 // SELECT existing for React → none
       { rows: [{ id: 1 }] },        // INSERT React
-      { rows: [{ id: 2 }] },        // existing for python → found
+      { rows: [] },                 // RELEASE SAVEPOINT row 2
+      { rows: [] },                 // SAVEPOINT row 3
+      { rows: [{ id: 2 }] },        // SELECT existing for python → found
       { rows: [] },                 // UPDATE python
-      { rows: [] },                 // event.emit footer (bulk_import.committed) — caught by the pool mock
+      { rows: [] },                 // RELEASE SAVEPOINT row 3
       { rows: [] },                 // COMMIT
     ]);
 
@@ -193,7 +196,9 @@ describe('runBulkImport — commit (skills)', () => {
     // BEGIN ok, then existing lookup throws
     const { pool, client } = makePool([
       { rows: [] },                       // BEGIN
+      { rows: [] },                       // SAVEPOINT row 2
       new Error('DB exploded'),           // SELECT existing → throws
+      // ROLLBACK TO SAVEPOINT + RELEASE + emitEvent(mocked) + COMMIT → default { rows: [] }
     ]);
     await expect(runBulkImport({ entity: 'skills', rows, pool, userId: 'u1' })).resolves.toBeDefined();
     // The error is caught per-row (committer-level try/catch), so the run
