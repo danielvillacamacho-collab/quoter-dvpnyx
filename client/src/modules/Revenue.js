@@ -259,6 +259,12 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
   );
 }
 
+export {
+  fmtPct, cumplimientoPct, cumplimientoColor, fmtCumplPct,
+  fmtMoney, fmtUSD, monthLabel, todayYYYYMM, offsetMonth,
+  yyyymmToMonthInput, monthInputToYyyymm, formatPctForInput,
+};
+
 export default function Revenue() {
   const [from, setFrom] = useState(() => offsetMonth(todayYYYYMM(), -3));
   const [to, setTo] = useState(() => offsetMonth(todayYYYYMM(), 5));
