@@ -141,4 +141,59 @@ describe('TimeMe', () => {
     fireEvent.click(screen.getByLabelText('Semana anterior'));
     await waitFor(() => expect(screen.getByLabelText('Semana anterior')).toBeInTheDocument());
   });
+
+  // ── SPEC-011: navegación directa por semana (text input al hacer clic) ───────
+
+  describe('SPEC-011: edición de semana por texto', () => {
+    const FIXED_NOW = new Date('2026-04-08T12:00:00'); // Wednesday
+    const CURRENT_MONDAY = '2026-04-06';
+    const CURRENT_RANGE_TEXT = '2026-04-06 – 2026-04-12';
+
+    beforeEach(() => {
+      jest.useFakeTimers({ legacyFakeTimers: false });
+      jest.setSystemTime(FIXED_NOW);
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('shows date range as static text', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      expect(screen.getByText(CURRENT_RANGE_TEXT)).toBeInTheDocument();
+    });
+
+    it('clicking the range opens a text input with current Monday', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByLabelText('Semana actual'));
+      const input = await screen.findByLabelText('Seleccionar semana');
+      expect(input.value).toBe(CURRENT_MONDAY);
+    });
+
+    it('typing a date and pressing Enter navigates to that Monday', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByLabelText('Semana actual'));
+      const input = screen.getByLabelText('Seleccionar semana');
+      fireEvent.change(input, { target: { value: '2026-05-07' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() =>
+        expect(screen.getByText('2026-05-04 – 2026-05-10')).toBeInTheDocument()
+      );
+    });
+
+    it('pressing Escape closes the input without navigating', async () => {
+      mount();
+      await screen.findByText('Contrato Alpha');
+      fireEvent.click(screen.getByLabelText('Semana actual'));
+      const input = screen.getByLabelText('Seleccionar semana');
+      fireEvent.change(input, { target: { value: '2026-05-07' } });
+      fireEvent.keyDown(input, { key: 'Escape' });
+      await waitFor(() =>
+        expect(screen.getByText(CURRENT_RANGE_TEXT)).toBeInTheDocument()
+      );
+    });
+  });
 });
