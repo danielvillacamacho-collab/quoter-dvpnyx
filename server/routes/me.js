@@ -233,14 +233,41 @@ router.delete('/education/:id', async (req, res) => {
 
 /* ── Assignments (read-only) ──────────────────────────────────────── */
 
+const ME_ASSIGNMENT_VALID_STATUSES = ['planned', 'active', 'ended', 'cancelled'];
+
 router.get('/assignments', async (req, res) => {
   try {
     const empId = await getEmployeeId(req.user.id);
     if (!empId) return res.status(404).json({ error: 'No tienes un perfil de empleado vinculado' });
+
     const params = [empId];
-    const statusFilter = req.query.status
-      ? `AND a.status = $${params.push(req.query.status)}`
-      : `AND a.status NOT IN ('cancelled')`;
+    const addParam = (v) => { params.push(v); return `$${params.length}`; };
+
+    // Status filter: support comma-separated values (e.g. status=active,ended).
+    // Default excludes only cancelled so all non-terminal assignments are visible.
+    const rawStatus = req.query.status ? String(req.query.status) : '';
+    const statusList = rawStatus
+      ? rawStatus.split(',').map((s) => s.trim()).filter((s) => ME_ASSIGNMENT_VALID_STATUSES.includes(s))
+      : [];
+    let statusFilter;
+    if (statusList.length === 1) {
+      statusFilter = `AND a.status = ${addParam(statusList[0])}`;
+    } else if (statusList.length > 1) {
+      statusFilter = `AND a.status IN (${statusList.map((s) => addParam(s)).join(', ')})`;
+    } else {
+      statusFilter = `AND a.status NOT IN ('cancelled')`;
+    }
+
+    // Date-range intersection (SPEC-007 / SPEC-012): optional, uses same logic as
+    // buildAssignmentFilters. Open-ended assignments (end_date IS NULL) match any date_from.
+    let dateFilter = '';
+    if (req.query.date_from && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date_from)) {
+      dateFilter += ` AND (a.end_date IS NULL OR a.end_date >= ${addParam(req.query.date_from)}::date)`;
+    }
+    if (req.query.date_to && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date_to)) {
+      dateFilter += ` AND a.start_date <= ${addParam(req.query.date_to)}::date`;
+    }
+
     const { rows } = await pool.query(
       `SELECT a.id, a.employee_id, a.contract_id, a.resource_request_id,
               a.role_title, a.weekly_hours, a.start_date, a.end_date, a.status,
@@ -254,6 +281,7 @@ router.get('/assignments', async (req, res) => {
         WHERE a.employee_id = $1
           AND a.deleted_at IS NULL
           ${statusFilter}
+          ${dateFilter}
         ORDER BY a.start_date DESC`,
       params,
     );

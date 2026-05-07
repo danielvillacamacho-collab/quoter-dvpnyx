@@ -72,16 +72,27 @@ const s = {
   errBox: { padding: '8px 12px', background: 'var(--ds-bad-soft)', color: 'oklch(0.45 0.18 25)', fontSize: 12.5, borderBottom: '1px solid var(--ds-border)' },
 
   rowLabelTd: { padding: '10px 12px', borderBottom: '1px solid var(--ds-border)', verticalAlign: 'middle' },
-  swatch: (hue) => ({ display: 'inline-block', width: 8, height: 20, borderRadius: 2, background: `oklch(0.65 0.14 ${hue})`, marginRight: 9, verticalAlign: 'middle', flexShrink: 0 }),
+  swatch: (hue, ended) => ({
+    display: 'inline-block', width: 8, height: 20, borderRadius: 2,
+    background: ended ? 'oklch(0.7 0 0)' : `oklch(0.65 0.14 ${hue})`,
+    marginRight: 9, verticalAlign: 'middle', flexShrink: 0,
+  }),
+  endedBadge: {
+    fontSize: 10, fontWeight: 500, color: 'oklch(0.55 0 0)',
+    background: 'oklch(0.93 0 0)', border: '1px solid oklch(0.83 0 0)',
+    borderRadius: 4, padding: '1px 5px', marginLeft: 6,
+    verticalAlign: 'middle', letterSpacing: 0.02, flexShrink: 0,
+    display: 'inline-block',
+  },
   contractName: { fontWeight: 500, fontSize: 12.5, color: 'var(--ds-text)' },
   roleHint: { fontSize: 11, color: 'var(--ds-text-dim)' },
 
   cellTd: { padding: 0, borderBottom: '1px solid var(--ds-border)', borderLeft: '1px solid var(--ds-border)', textAlign: 'center', position: 'relative', minWidth: 72, minHeight: 44 },
-  cellInput: (states) => ({
+  cellInput: (blocked) => ({
     width: '100%', height: '100%', minHeight: 44, border: 0, background: 'transparent',
     textAlign: 'center', padding: '10px 8px', fontSize: 13.5,
     color: 'var(--ds-text)', outline: 'none',
-    cursor: states.future ? 'not-allowed' : 'text',
+    cursor: blocked ? 'not-allowed' : 'text',
     fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'",
   }),
   cellBg: {
@@ -90,6 +101,7 @@ const s = {
     miss: { background: 'var(--ds-bad-soft)' },
     weekend: { background: 'var(--ds-bg-soft)' },
     future: { background: 'repeating-linear-gradient(135deg, var(--ds-bg-soft) 0 6px, transparent 6px 12px)', cursor: 'not-allowed' },
+    outOfRange: { background: 'var(--ds-bg-soft)', cursor: 'not-allowed' },
   },
 
   rowTotal: { padding: '10px 12px', textAlign: 'right', background: 'var(--ds-bg-soft)', borderBottom: '1px solid var(--ds-border)', borderLeft: '1px solid var(--ds-border)', fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'", fontWeight: 500 },
@@ -146,7 +158,7 @@ export default function TimeMe() {
     setErrorMsg('');
     try {
       const [ra, re] = await Promise.all([
-        apiGet('/api/me/assignments?status=active'),
+        apiGet(`/api/me/assignments?status=active,ended&date_from=${weekFromIso}&date_to=${weekToIso}`),
         apiGet(`/api/time-entries?from=${weekFromIso}&to=${weekToIso}&limit=500`),
       ]);
       setAssignments(ra?.data || []);
@@ -328,18 +340,24 @@ export default function TimeMe() {
                 )}
                 {!loading && assignments.length === 0 && (
                   <tr><td colSpan={9} style={{ ...dsTd, textAlign: 'center', padding: 40, color: 'var(--ds-text-dim)' }}>
-                    No tienes asignaciones activas para esta semana.
+                    No tienes asignaciones activas o finalizadas para esta semana.
                   </td></tr>
                 )}
                 {assignments.map((a) => {
                   const hue = hueFrom(a.contract_id || a.id);
+                  const isEnded = a.status === 'ended';
+                  const aStart = String(a.start_date).slice(0, 10);
+                  const aEnd = a.end_date ? String(a.end_date).slice(0, 10) : null;
                   return (
                     <tr key={a.id}>
                       <td style={s.rowLabelTd}>
                         <div style={{ display: 'flex', alignItems: 'center' }}>
-                          <span style={s.swatch(hue)} aria-hidden="true" />
+                          <span style={s.swatch(hue, isEnded)} aria-hidden="true" />
                           <div style={{ minWidth: 0 }}>
-                            <div style={s.contractName}>{a.contract_name || '—'}</div>
+                            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
+                              <span style={s.contractName}>{a.contract_name || '—'}</span>
+                              {isEnded && <span style={s.endedBadge} aria-label="Asignación finalizada">Finalizada</span>}
+                            </div>
                             <div style={s.roleHint}>{a.request_role_title || a.role_title || ''}</div>
                           </div>
                         </div>
@@ -349,8 +367,12 @@ export default function TimeMe() {
                         const key = `${a.id}-${dIso}`;
                         const existing = findEntry(a.id, dIso);
                         const st = stateFor(i);
-                        const pastEmpty = !st.future && !st.today && !st.weekend && !existing;
-                        const bg = st.future ? s.cellBg.future
+                        // Cells outside the assignment's active date range are blocked.
+                        const outOfRange = dIso < aStart || (aEnd !== null && dIso > aEnd);
+                        const blocked = st.future || outOfRange;
+                        const pastEmpty = !blocked && !st.today && !st.weekend && !existing;
+                        const bg = outOfRange ? s.cellBg.outOfRange
+                          : st.future ? s.cellBg.future
                           : st.today ? s.cellBg.today
                           : pastEmpty ? s.cellBg.miss
                           : st.weekend ? s.cellBg.weekend
@@ -358,7 +380,7 @@ export default function TimeMe() {
                         return (
                           <td key={dIso} style={{ ...s.cellTd, ...bg }}>
                             <input
-                              style={s.cellInput(st)}
+                              style={s.cellInput(blocked)}
                               type="number"
                               min={0}
                               max={24}
@@ -370,9 +392,9 @@ export default function TimeMe() {
                                 if (String(v) === String(current)) return;
                                 saveCell(a, dIso, v);
                               }}
-                              disabled={!!saving[key] || st.future}
+                              disabled={!!saving[key] || blocked}
                               aria-label={`Horas ${a.contract_name} ${dIso}`}
-                              placeholder={st.future ? '' : '—'}
+                              placeholder={blocked ? '' : '—'}
                             />
                           </td>
                         );
@@ -408,22 +430,27 @@ export default function TimeMe() {
           </div>
         </div>
 
-        {/* Quick-fill 8h row — one chip per assignment, saves Mon-Fri at 8h each. */}
-        {!loading && assignments.length > 0 && (
+        {/* Quick-fill 8h row — one chip per active assignment, saves Mon-Fri at 8h each.
+            Ended assignments are excluded: their date range is bounded and filling en masse
+            rarely makes sense for completed work. */}
+        {!loading && assignments.some((a) => a.status !== 'ended') && (
           <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
-            {assignments.map((a) => {
+            {assignments.filter((a) => a.status !== 'ended').map((a) => {
               const hue = hueFrom(a.contract_id || a.id);
+              const aStart = String(a.start_date).slice(0, 10);
+              const aEnd = a.end_date ? String(a.end_date).slice(0, 10) : null;
               return (
                 <button
                   key={`qf-${a.id}`}
                   style={{ ...s.btn, ...s.btnSm }}
                   onClick={async () => {
                     // Fill Mon–Fri (up to today if current week, full Mon-Fri if past week)
-                    // with 8h. Skip weekends, skip future, skip already-set cells.
+                    // with 8h. Skip weekends, skip future, skip out-of-range, skip already-set.
                     for (let i = 0; i < 5; i += 1) {
                       const st = stateFor(i);
                       if (st.future) continue;
                       const dIso = iso(weekDates[i]);
+                      if (dIso < aStart || (aEnd !== null && dIso > aEnd)) continue;
                       const existing = findEntry(a.id, dIso);
                       if (existing) continue;
                       // eslint-disable-next-line no-await-in-loop
