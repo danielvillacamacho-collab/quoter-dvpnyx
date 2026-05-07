@@ -50,7 +50,8 @@ const s = {
   metaRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' },
   weekNav: { display: 'flex', alignItems: 'center', gap: 6 },
   weekPill: { minWidth: 180, justifyContent: 'center', fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'" },
-  weekDateInput: { padding: '3px 8px', fontSize: 12, fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'", border: '1px solid var(--ds-border)', borderRadius: 6, background: 'var(--ds-surface)', color: 'var(--ds-text)', cursor: 'pointer', minWidth: 140 },
+  weekPillBtn: { cursor: 'pointer', userSelect: 'none' },
+  weekEditInput: { padding: '3px 8px', fontSize: 12, fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'", border: '1px solid var(--ds-accent)', borderRadius: 6, background: 'var(--ds-surface)', color: 'var(--ds-text)', width: 120, outline: 'none' },
 
   statWrap: { marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center' },
   statLabel: { fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 500, color: 'var(--ds-text-dim)' },
@@ -153,6 +154,25 @@ export default function TimeAdmin() {
   const todayIdx = isCurrentWeek ? ((now.getDay() + 6) % 7) : -1;
   const weekIsFuture = weekStart > todayWeekStart;
 
+  const [editingWeek, setEditingWeek] = useState(false);
+  const [editVal, setEditVal] = useState('');
+
+  const openWeekEdit = useCallback(() => {
+    setEditVal(weekFromIso);
+    setEditingWeek(true);
+  }, [weekFromIso]);
+
+  const commitWeekEdit = useCallback(() => {
+    setEditingWeek(false);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(editVal)) {
+      setWeekStart(startOfWeek(new Date(editVal + 'T12:00:00')));
+    }
+  }, [editVal]);
+
+  const onEditKeyDown = useCallback((e) => {
+    if (e.key === 'Enter') commitWeekEdit();
+    if (e.key === 'Escape') setEditingWeek(false);
+  }, [commitWeekEdit]);
 
   /* ---- Load employees once ---- */
   useEffect(() => {
@@ -328,7 +348,28 @@ export default function TimeAdmin() {
           <div style={s.metaRow}>
             <div style={s.weekNav}>
               <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Semana anterior">&#8249;</button>
-              <span style={{ ...s.btn, ...s.btnSm, ...s.weekPill }}>{weekFromIso} – {weekToIso}</span>
+              {editingWeek ? (
+                <input
+                  type="text"
+                  style={s.weekEditInput}
+                  value={editVal}
+                  onChange={(e) => setEditVal(e.target.value)}
+                  onBlur={commitWeekEdit}
+                  onKeyDown={onEditKeyDown}
+                  autoFocus
+                  placeholder="AAAA-MM-DD"
+                  aria-label="Seleccionar semana"
+                />
+              ) : (
+                <span
+                  style={{ ...s.btn, ...s.btnSm, ...s.weekPill, ...s.weekPillBtn }}
+                  onClick={openWeekEdit}
+                  title="Clic para ir a una semana específica"
+                  aria-label="Semana actual"
+                >
+                  {weekFromIso} – {weekToIso}
+                </span>
+              )}
               <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, 7))} aria-label="Semana siguiente">&#8250;</button>
               {!isCurrentWeek && (
                 <button style={{ ...s.btn, ...s.btnSm, ...s.btnGhost }} onClick={() => setWeekStart(startOfWeek(new Date()))}>Hoy</button>
