@@ -77,7 +77,7 @@ const s = {
   sub: { fontSize: 13, color: 'var(--text-light)' },
   filters: { display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap', alignItems: 'center' },
   inp: { padding: '6px 10px', border: '1px solid var(--border)', borderRadius: 6, fontSize: 13, background: '#fff' },
-  tableWrap: { overflowX: 'auto', border: '1px solid var(--border)', borderRadius: 8, background: '#fff' },
+  tableWrap: { overflowX: 'auto', overflowY: 'auto', maxHeight: 'calc(100vh - 220px)', border: '1px solid var(--border)', borderRadius: 8, background: '#fff' },
   table: { borderCollapse: 'separate', borderSpacing: 0, fontSize: 12, width: '100%' },
   thFirst: { position: 'sticky', left: 0, top: 0, background: 'var(--purple-dark)', color: '#fff', padding: '8px 10px', textAlign: 'left', minWidth: 240, zIndex: 3 },
   th: { position: 'sticky', top: 0, background: 'var(--purple-dark)', color: '#fff', padding: '8px 10px', textAlign: 'right', minWidth: 110, zIndex: 2, whiteSpace: 'nowrap' },
@@ -91,6 +91,8 @@ const s = {
   closedBadge: { fontSize: 9, color: '#1f7a3a', fontWeight: 700 },
   totalRow: { background: 'var(--bg)' },
   rowTotalCell: { fontWeight: 700, color: 'var(--purple-dark)', textAlign: 'right', padding: '6px 10px' },
+  stickyFootCell: { position: 'sticky', bottom: 0, background: 'var(--bg)', fontWeight: 700, color: 'var(--purple-dark)', textAlign: 'right', padding: '6px 10px', borderTop: '2px solid var(--purple-dark)', zIndex: 2 },
+  stickyFootFirst: { position: 'sticky', bottom: 0, left: 0, background: 'var(--bg)', fontWeight: 700, padding: '6px 10px', borderTop: '2px solid var(--purple-dark)', borderRight: '1px solid var(--border)', zIndex: 4 },
   contractMeta: { fontSize: 11, color: 'var(--text-light)' },
   banner: { background: '#fffbe6', border: '1px solid #facc15', color: '#92400e', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 12 },
 };
@@ -485,13 +487,13 @@ export default function Revenue() {
             </tbody>
             {rowsToShow.length > 0 && (
               <tfoot>
-                <tr style={s.totalRow}>
-                  <td style={{ ...s.tdFirst, fontWeight: 700 }}>TOTALES</td>
+                <tr>
+                  <td style={s.stickyFootFirst}>TOTALES</td>
                   {data.months.map((m) => {
                     const t = data.col_totals[m] || { projected_amount_display: 0, real_amount_display: 0 };
                     const ratio = cumplimientoPct(t.real_amount_display, t.projected_amount_display);
                     return (
-                      <td key={m} style={s.rowTotalCell}>
+                      <td key={m} style={s.stickyFootCell}>
                         <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--purple-dark)' }}>{fmtMoney(t.real_amount_display, displayCurrency)}</div>
                         <div style={{ fontSize: 10, color: 'var(--text-light)', fontWeight: 400 }}>plan {fmtMoney(t.projected_amount_display, displayCurrency)}</div>
                         {ratio != null && <div style={{ fontSize: 10, fontWeight: 700, color: cumplimientoColor(ratio) }}>{fmtCumplPct(ratio)}</div>}
@@ -503,7 +505,7 @@ export default function Revenue() {
                     const plan = data.global_total.projected_amount_display;
                     const ratio = cumplimientoPct(real, plan);
                     return (
-                      <td style={{ ...s.rowTotalCell, background: 'var(--teal)', color: '#fff' }}>
+                      <td style={{ ...s.stickyFootCell, background: 'var(--teal)', color: '#fff', zIndex: 3 }}>
                         <div style={{ fontSize: 14, fontWeight: 700 }}>{fmtMoney(real, displayCurrency)}</div>
                         <div style={{ fontSize: 10, opacity: 0.85, fontWeight: 400 }}>plan {fmtMoney(plan, displayCurrency)}</div>
                         {ratio != null && (
