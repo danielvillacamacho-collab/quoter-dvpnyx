@@ -158,7 +158,7 @@ export default function TimeMe() {
     setErrorMsg('');
     try {
       const [ra, re] = await Promise.all([
-        apiGet(`/api/me/assignments?status=active,ended&date_from=${weekFromIso}&date_to=${weekToIso}`),
+        apiGet(`/api/me/assignments?status=planned,active,ended&date_from=${weekFromIso}&date_to=${weekToIso}`),
         apiGet(`/api/time-entries?from=${weekFromIso}&to=${weekToIso}&limit=500`),
       ]);
       setAssignments(ra?.data || []);

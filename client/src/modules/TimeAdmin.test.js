@@ -123,24 +123,43 @@ describe('TimeAdmin — core rendering', () => {
 // ── SPEC-012: asignaciones finalizadas visibles y diferenciadas ─────────────
 
 describe('TimeAdmin — SPEC-012: ended assignments', () => {
-  const FIXED_NOW = new Date('2026-05-07T12:00:00'); // Thursday (May 7, 2026)
+  // Module-level "now" used by week boundary helpers in TimeAdmin.js. We mock
+  // the global Date constructor so `new Date()` is deterministic — keeping
+  // timers real so React Testing Library's `findByText`/`waitFor` polling
+  // (and the controlled-select state propagation after `fireEvent.change`)
+  // continues to work. Going with `useFakeTimers` here breaks both: the
+  // SPEC-007 attempt that did so produced flaky CI runs that never settled.
+  let fixedNow = new Date('2026-05-07T12:00:00').getTime(); // Thursday May 7, 2026
+  const RealDate = Date;
+
+  function mockDateNow(now) {
+    fixedNow = now;
+  }
 
   beforeEach(() => {
-    jest.useFakeTimers({ legacyFakeTimers: false });
-    jest.setSystemTime(FIXED_NOW);
+    fixedNow = new Date('2026-05-07T12:00:00').getTime();
+    // eslint-disable-next-line no-global-assign
+    global.Date = class extends RealDate {
+      constructor(...args) {
+        if (args.length === 0) { super(fixedNow); return; }
+        super(...args);
+      }
+      static now() { return fixedNow; }
+    };
   });
 
   afterEach(() => {
-    jest.useRealTimers();
+    // eslint-disable-next-line no-global-assign
+    global.Date = RealDate;
   });
 
-  it('requests status=active,ended with date_from and date_to', async () => {
+  it('requests status=planned,active,ended with date_from and date_to', async () => {
     setupDefaultMocks();
     mount();
     await selectEmployee();
     await screen.findByText('Contrato Alpha');
     const call = apiV2.apiGet.mock.calls.find(([url]) => url.includes('/api/assignments?employee_id'));
-    expect(call[0]).toContain('status=active,ended');
+    expect(call[0]).toContain('status=planned,active,ended');
     expect(call[0]).toContain('date_from=');
     expect(call[0]).toContain('date_to=');
   });
@@ -170,7 +189,7 @@ describe('TimeAdmin — SPEC-012: ended assignments', () => {
     // Mon (idx 0, Apr 27): BEFORE start_date → outOfRange → disabled.
     // Tue(1), Wed(2), Thu(3=today): within range, not future → enabled.
     // Fri(4): within range but future → disabled.
-    jest.setSystemTime(new Date('2026-04-30T12:00:00'));
+    mockDateNow(new RealDate('2026-04-30T12:00:00').getTime());
     setupDefaultMocks([endedAssignment]);
     mount();
     await selectEmployee();

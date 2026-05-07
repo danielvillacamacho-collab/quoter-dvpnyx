@@ -213,7 +213,7 @@ export default function TimeAdmin() {
     setErrorMsg('');
     try {
       const [ra, re] = await Promise.all([
-        apiGet(`/api/assignments?employee_id=${selectedEmpId}&status=active,ended&date_from=${weekFromIso}&date_to=${weekToIso}`),
+        apiGet(`/api/assignments?employee_id=${selectedEmpId}&status=planned,active,ended&date_from=${weekFromIso}&date_to=${weekToIso}`),
         apiGet(`/api/time-entries?employee_id=${selectedEmpId}&from=${weekFromIso}&to=${weekToIso}&limit=500`),
       ]);
       setAssignments(ra?.data || []);

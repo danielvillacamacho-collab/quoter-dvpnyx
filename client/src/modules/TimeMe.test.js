@@ -29,7 +29,7 @@ const sampleEntries = [
 beforeEach(() => {
   jest.resetAllMocks();
   apiV2.apiGet.mockImplementation((url) => {
-    // SPEC-012: URL now includes status=active,ended&date_from=...&date_to=...
+    // SPEC-012: URL now includes status=planned,active,ended&date_from=...&date_to=...
     if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: { page: 1, limit: 50, total: 1, pages: 1 } });
     if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: sampleEntries, pagination: { page: 1, limit: 500, total: 0, pages: 1 } });
     return Promise.resolve({});
@@ -219,11 +219,11 @@ describe('TimeMe', () => {
       jest.useRealTimers();
     });
 
-    it('requests status=active,ended with date_from and date_to', async () => {
+    it('requests status=planned,active,ended with date_from and date_to', async () => {
       mount();
       await waitFor(() => expect(apiV2.apiGet).toHaveBeenCalled());
       const call = apiV2.apiGet.mock.calls.find(([url]) => url.includes('/api/me/assignments'));
-      expect(call[0]).toContain('status=active,ended');
+      expect(call[0]).toContain('status=planned,active,ended');
       expect(call[0]).toContain('date_from=');
       expect(call[0]).toContain('date_to=');
     });
