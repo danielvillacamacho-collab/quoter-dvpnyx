@@ -160,7 +160,9 @@ describe('TimeMe', () => {
       mount();
       await screen.findByText('Contrato Alpha');
       // Pick Thursday 2026-05-07 → Monday 2026-05-04
-      fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-07' } });
+      const input = screen.getByLabelText('Seleccionar semana');
+      fireEvent.change(input, { target: { value: '2026-05-07' } });
+      fireEvent.blur(input);
       await waitFor(() =>
         expect(screen.getByLabelText('Seleccionar semana').value).toBe('2026-05-04')
       );
@@ -170,7 +172,9 @@ describe('TimeMe', () => {
       mount();
       await screen.findByText('Contrato Alpha');
       // Sunday 2026-05-10 belongs to the week Mon 2026-05-04 – Sun 2026-05-10
-      fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-10' } });
+      const input = screen.getByLabelText('Seleccionar semana');
+      fireEvent.change(input, { target: { value: '2026-05-10' } });
+      fireEvent.blur(input);
       await waitFor(() =>
         expect(screen.getByLabelText('Seleccionar semana').value).toBe('2026-05-04')
       );

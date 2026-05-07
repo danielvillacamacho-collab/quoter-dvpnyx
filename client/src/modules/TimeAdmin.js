@@ -153,7 +153,14 @@ export default function TimeAdmin() {
   const todayIdx = isCurrentWeek ? ((now.getDay() + 6) % 7) : -1;
   const weekIsFuture = weekStart > todayWeekStart;
 
+  const [inputVal, setInputVal] = useState(weekFromIso);
+  useEffect(() => { setInputVal(weekFromIso); }, [weekFromIso]);
+
   const handlePickerChange = useCallback((e) => {
+    setInputVal(e.target.value);
+  }, []);
+
+  const handlePickerBlur = useCallback((e) => {
     const val = e.target.value;
     if (!val) return;
     setWeekStart(startOfWeek(new Date(val + 'T12:00:00')));
@@ -334,11 +341,11 @@ export default function TimeAdmin() {
             <div style={s.weekNav}>
               <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Semana anterior">&#8249;</button>
               <input
-                key={weekFromIso}
                 type="date"
                 style={s.weekDateInput}
-                defaultValue={weekFromIso}
+                value={inputVal}
                 onChange={handlePickerChange}
+                onBlur={handlePickerBlur}
                 aria-label="Seleccionar semana"
                 title="Selecciona una fecha para saltar a esa semana"
               />
