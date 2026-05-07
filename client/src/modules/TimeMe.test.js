@@ -254,11 +254,12 @@ describe('TimeMe', () => {
     });
 
     it('cells within the assignment range are enabled (up to today)', async () => {
-      // Wednesday 2026-04-30 is "today"; week is Mon 04-28 to Sun 05-04.
-      // Assignment is active 2026-04-28 to 2026-05-02.
-      // Mon(0), Tue(1), Wed(2) = today => NOT blocked (past/today, within range).
-      // Thu(3), Fri(4) are future => blocked by stateFor, not by outOfRange.
-      jest.setSystemTime(new Date('2026-04-30T12:00:00')); // Wednesday of that week
+      // 2026-04-30 is Thursday (not Wednesday — Apr 28 = Tue, Apr 30 = Thu).
+      // Week: Mon 04-27 to Sun 05-03. Assignment active 04-28 to 05-02.
+      // Mon (idx 0, Apr 27): BEFORE start_date → outOfRange → disabled.
+      // Tue(1), Wed(2), Thu(3=today): within range, not future → enabled.
+      // Fri(4): within range but future → disabled.
+      jest.setSystemTime(new Date('2026-04-30T12:00:00')); // Thursday
       apiV2.apiGet.mockImplementation((url) => {
         if (url.startsWith('/api/me/assignments')) return Promise.resolve({ data: [endedAssignment], pagination: {} });
         if (url.startsWith('/api/time-entries'))   return Promise.resolve({ data: [], pagination: {} });
@@ -267,8 +268,8 @@ describe('TimeMe', () => {
       mount();
       await screen.findByText('Proyecto Beta');
       const cells = screen.getAllByRole('spinbutton', { name: /Horas Proyecto Beta/i });
-      // Only check Mon–Wed (idx 0-2): within range and not future.
-      for (let i = 0; i <= 2; i += 1) {
+      // Tue–Thu (idx 1-3): within range and not future.
+      for (let i = 1; i <= 3; i += 1) {
         expect(cells[i]).not.toBeDisabled();
       }
     });

@@ -160,17 +160,19 @@ describe('TimeAdmin — SPEC-012: ended assignments', () => {
   });
 
   it('cells within the ended assignment range are enabled (up to today)', async () => {
-    // Wednesday 2026-04-30 = today; week Mon 04-28 to Sun 05-04.
-    // Assignment active 04-28 to 05-02. Mon(0), Tue(1), Wed(2) are past/today and in range.
-    // Thu(3), Fri(4) are future → blocked by stateFor (not outOfRange).
+    // 2026-04-30 is Thursday (Apr 28 = Tue, Apr 30 = Thu).
+    // Week: Mon 04-27 to Sun 05-03. Assignment active 04-28 to 05-02.
+    // Mon (idx 0, Apr 27): BEFORE start_date → outOfRange → disabled.
+    // Tue(1), Wed(2), Thu(3=today): within range, not future → enabled.
+    // Fri(4): within range but future → disabled.
     jest.setSystemTime(new Date('2026-04-30T12:00:00'));
     setupDefaultMocks([endedAssignment]);
     mount();
     await selectEmployee();
     await screen.findByText('Proyecto Beta');
     const cells = screen.getAllByRole('spinbutton', { name: /Horas Proyecto Beta/i });
-    // Only Mon–Wed (idx 0–2): within range and not future.
-    for (let i = 0; i <= 2; i += 1) {
+    // Tue–Thu (idx 1-3): within range and not future.
+    for (let i = 1; i <= 3; i += 1) {
       expect(cells[i]).not.toBeDisabled();
     }
   });
