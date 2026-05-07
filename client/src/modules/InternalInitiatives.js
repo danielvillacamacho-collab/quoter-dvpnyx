@@ -226,6 +226,7 @@ export default function InternalInitiatives() {
           value={filter.status}
           onChange={(e) => setFilter((f) => ({ ...f, status: e.target.value }))}
           placeholder="Todos los estados"
+          clearable
           options={[
             { id: 'active', label: 'Activas' },
             { id: 'paused', label: 'En pausa' },
@@ -238,6 +239,7 @@ export default function InternalInitiatives() {
           value={filter.business_area}
           onChange={(e) => setFilter((f) => ({ ...f, business_area: e.target.value }))}
           placeholder="Todas las áreas"
+          clearable
           options={areas.map((a) => ({ id: String(a.id), label: a.label_es }))}
         />
         <input style={ds.input} placeholder="Buscar…" value={filter.search} onChange={(e) => setFilter((f) => ({ ...f, search: e.target.value }))} />

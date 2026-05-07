@@ -225,6 +225,7 @@ export default function Clients() {
               onChange={(e) => setCountry(e.target.value)}
               aria-label="Filtro por país"
               placeholder="Todos"
+              clearable
               options={LATAM_COUNTRIES.map((c) => ({ id: c, label: c }))}
             />
           </div>
@@ -236,6 +237,7 @@ export default function Clients() {
               onChange={(e) => setTier(e.target.value)}
               aria-label="Filtro por tier"
               placeholder="Todos"
+              clearable
               options={TIERS.filter((t) => t.value !== '').map((t) => ({ id: t.value, label: t.label }))}
             />
           </div>

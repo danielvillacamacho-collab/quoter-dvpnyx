@@ -17,6 +17,11 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
  *                    • hint       — línea secundaria (chica, gris)
  *                    • searchText — texto contra el que se filtra (opcional;
  *                      si no, se busca contra `${label} ${hint}`).
+ *   - clearable      — si true (filtros), agrega una fila "Mostrar todos" en
+ *                      la cima del dropdown que llama onChange(''). Útil cuando
+ *                      "vacío" es un estado válido (ej. filtros). Default false
+ *                      para no romper forms donde la selección es obligatoria.
+ *   - clearLabel     — texto del row de limpiar. Default: usa `placeholder`.
  *   - noResultsText  — mensaje cuando no hay coincidencias (default 'Sin coincidencias')
  *   - placeholder, disabled, required, name, id, aria-label, inputStyle
  *
@@ -40,6 +45,8 @@ export default function SearchableSelect({
   placeholder = '— Selecciona —',
   disabled = false,
   required = false,
+  clearable = false,
+  clearLabel,
   noResultsText = 'Sin coincidencias',
   inputStyle,
   id,
@@ -204,6 +211,26 @@ export default function SearchableSelect({
             overflowY: 'auto',
           }}
         >
+          {clearable && value && (
+            <li
+              role="option"
+              aria-selected={false}
+              data-value=""
+              data-testid="searchable-clear"
+              onMouseDown={(e) => { e.preventDefault(); commit(''); }}
+              style={{
+                padding: '8px 12px',
+                fontSize: 13,
+                cursor: 'pointer',
+                color: 'var(--text-light, #888)',
+                fontStyle: 'italic',
+                borderBottom: '1px solid var(--border)',
+                background: 'transparent',
+              }}
+            >
+              {clearLabel || placeholder || 'Mostrar todos'}
+            </li>
+          )}
           {filtered.length === 0 && (
             <li style={{ padding: '8px 12px', fontSize: 13, color: 'var(--text-light)' }}>
               {noResultsText}

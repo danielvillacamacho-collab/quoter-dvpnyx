@@ -330,6 +330,7 @@ export default function Contracts() {
               aria-label="Filtro por cliente"
               inputStyle={s.input}
               placeholder="Cualquiera"
+              clearable
               options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
             />
           </div>
@@ -351,6 +352,7 @@ export default function Contracts() {
               aria-label="Filtro por tipo"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={TYPES.map((t) => ({ id: t.value, label: t.label }))}
             />
           </div>
@@ -362,6 +364,7 @@ export default function Contracts() {
               aria-label="Filtro por subtipo"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={[
                 /* Si hay un type filtrado, mostrar sólo los subtipos de ese type;
                    sin type, mostrar todos. 'none' permite filtrar contratos sin subtipo (legacy). */
@@ -380,6 +383,7 @@ export default function Contracts() {
               aria-label="Filtro por estado"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
             />
           </div>

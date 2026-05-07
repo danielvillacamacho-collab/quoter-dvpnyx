@@ -1369,6 +1369,7 @@ export default function CapacityPlanner() {
           aria-label="Filtro contrato"
           inputStyle={s.select}
           placeholder="Todos los contratos"
+          clearable
           options={contracts.map((c) => ({ id: String(c.id), label: c.name }))}
         />
 
@@ -1378,6 +1379,7 @@ export default function CapacityPlanner() {
           aria-label="Filtro área"
           inputStyle={s.select}
           placeholder="Todas las áreas"
+          clearable
           options={areas.map((a) => ({ id: String(a.id), label: a.name }))}
         />
 
