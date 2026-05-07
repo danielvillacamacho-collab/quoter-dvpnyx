@@ -43,8 +43,8 @@ describe('VALIDATORS.skills', () => {
   it('requires name', () => {
     expect(VALIDATORS.skills({}).ok).toBe(false);
   });
-  it('accepts any of the 8 canonical categories', () => {
-    ['language', 'framework', 'cloud', 'data', 'ai', 'tool', 'methodology', 'soft'].forEach(c => {
+  it('accepts any of the canonical categories', () => {
+    ['language', 'framework', 'cloud', 'data', 'ai', 'tool', 'methodology', 'soft', 'other'].forEach(c => {
       expect(VALIDATORS.skills({ name: 'X', category: c }).ok).toBe(true);
     });
   });
