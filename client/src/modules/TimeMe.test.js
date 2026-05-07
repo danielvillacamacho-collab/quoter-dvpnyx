@@ -20,7 +20,7 @@ jest.mock('../utils/apiV2');
 const mount = () => render(<MemoryRouter><TimeMe /></MemoryRouter>);
 
 const sampleAssignments = [
-  { id: 'a1', employee_id: 'e1', contract_name: 'Contrato Alpha', role_title: 'Senior Dev', request_role_title: 'Backend Lead', status: 'active' },
+  { id: 'a1', employee_id: 'e1', contract_name: 'Contrato Alpha', role_title: 'Senior Dev', request_role_title: 'Backend Lead', status: 'active', start_date: '2026-01-01', end_date: null },
 ];
 const sampleEntries = [
   // An entry on whichever Monday the test runs in — we'll compute it in tests
@@ -29,6 +29,7 @@ const sampleEntries = [
 beforeEach(() => {
   jest.resetAllMocks();
   apiV2.apiGet.mockImplementation((url) => {
+    // SPEC-012: URL now includes status=planned,active,ended&date_from=...&date_to=...
     if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: sampleAssignments, pagination: { page: 1, limit: 50, total: 1, pages: 1 } });
     if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: sampleEntries, pagination: { page: 1, limit: 500, total: 0, pages: 1 } });
     return Promise.resolve({});
@@ -123,14 +124,14 @@ describe('TimeMe', () => {
     confirmSpy.mockRestore();
   });
 
-  it('empty state when the user has no active assignments', async () => {
+  it('empty state when the user has no active or ended assignments', async () => {
     apiV2.apiGet.mockImplementation((url) => {
       if (url.startsWith('/api/me/assignments'))  return Promise.resolve({ data: [], pagination: {} });
       if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: [], pagination: {} });
       return Promise.resolve({});
     });
     mount();
-    await waitFor(() => expect(screen.getByText(/No tienes asignaciones activas/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/No tienes asignaciones activas o finalizadas/i)).toBeInTheDocument());
   });
 
   it('chevron buttons navigate week by week', async () => {
@@ -194,6 +195,112 @@ describe('TimeMe', () => {
       await waitFor(() =>
         expect(screen.getByText(CURRENT_RANGE_TEXT)).toBeInTheDocument()
       );
+    });
+  });
+
+  // ── SPEC-012: asignaciones finalizadas visibles y diferenciadas ─────────────
+
+  describe('SPEC-012: ended assignments', () => {
+    const FIXED_NOW = new Date('2026-05-07T12:00:00'); // Wednesday
+
+    const endedAssignment = {
+      id: 'a-ended', employee_id: 'e1',
+      contract_name: 'Proyecto Beta', role_title: 'Dev', request_role_title: 'Backend',
+      status: 'ended', start_date: '2026-04-28', end_date: '2026-05-02',
+      contract_id: 'ct2',
+    };
+
+    beforeEach(() => {
+      jest.useFakeTimers({ legacyFakeTimers: false });
+      jest.setSystemTime(FIXED_NOW);
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('requests status=planned,active,ended with date_from and date_to', async () => {
+      mount();
+      await waitFor(() => expect(apiV2.apiGet).toHaveBeenCalled());
+      const call = apiV2.apiGet.mock.calls.find(([url]) => url.includes('/api/me/assignments'));
+      expect(call[0]).toContain('status=planned,active,ended');
+      expect(call[0]).toContain('date_from=');
+      expect(call[0]).toContain('date_to=');
+    });
+
+    it('renders ended assignment with "Finalizada" badge', async () => {
+      apiV2.apiGet.mockImplementation((url) => {
+        if (url.startsWith('/api/me/assignments')) return Promise.resolve({ data: [endedAssignment], pagination: {} });
+        if (url.startsWith('/api/time-entries'))   return Promise.resolve({ data: [], pagination: {} });
+        return Promise.resolve({});
+      });
+      mount();
+      await screen.findByText('Proyecto Beta');
+      expect(screen.getByText('Finalizada')).toBeInTheDocument();
+    });
+
+    it('cells outside the assignment date range are disabled', async () => {
+      // Week of 2026-05-04 to 2026-05-10; assignment ends 2026-05-02 (previous week).
+      // All 7 cells should be disabled (out of range for this week).
+      apiV2.apiGet.mockImplementation((url) => {
+        if (url.startsWith('/api/me/assignments')) return Promise.resolve({ data: [endedAssignment], pagination: {} });
+        if (url.startsWith('/api/time-entries'))   return Promise.resolve({ data: [], pagination: {} });
+        return Promise.resolve({});
+      });
+      mount();
+      await screen.findByText('Proyecto Beta');
+      const cells = screen.getAllByRole('spinbutton', { name: /Horas Proyecto Beta/i });
+      cells.forEach((cell) => expect(cell).toBeDisabled());
+    });
+
+    it('cells within the assignment range are enabled (up to today)', async () => {
+      // 2026-04-30 is Thursday (not Wednesday — Apr 28 = Tue, Apr 30 = Thu).
+      // Week: Mon 04-27 to Sun 05-03. Assignment active 04-28 to 05-02.
+      // Mon (idx 0, Apr 27): BEFORE start_date → outOfRange → disabled.
+      // Tue(1), Wed(2), Thu(3=today): within range, not future → enabled.
+      // Fri(4): within range but future → disabled.
+      jest.setSystemTime(new Date('2026-04-30T12:00:00')); // Thursday
+      apiV2.apiGet.mockImplementation((url) => {
+        if (url.startsWith('/api/me/assignments')) return Promise.resolve({ data: [endedAssignment], pagination: {} });
+        if (url.startsWith('/api/time-entries'))   return Promise.resolve({ data: [], pagination: {} });
+        return Promise.resolve({});
+      });
+      mount();
+      await screen.findByText('Proyecto Beta');
+      const cells = screen.getAllByRole('spinbutton', { name: /Horas Proyecto Beta/i });
+      // Tue–Thu (idx 1-3): within range and not future.
+      for (let i = 1; i <= 3; i += 1) {
+        expect(cells[i]).not.toBeDisabled();
+      }
+    });
+
+    it('ended assignment is excluded from quick-fill chips', async () => {
+      apiV2.apiGet.mockImplementation((url) => {
+        if (url.startsWith('/api/me/assignments')) return Promise.resolve({ data: [endedAssignment], pagination: {} });
+        if (url.startsWith('/api/time-entries'))   return Promise.resolve({ data: [], pagination: {} });
+        return Promise.resolve({});
+      });
+      mount();
+      await screen.findByText('Proyecto Beta');
+      // Quick-fill chips only appear for active assignments. "Proyecto Beta" is ended.
+      expect(screen.queryByText(/Rellenar 8h/i)).not.toBeInTheDocument();
+    });
+
+    it('active and ended assignments both render in the same grid', async () => {
+      apiV2.apiGet.mockImplementation((url) => {
+        if (url.startsWith('/api/me/assignments')) return Promise.resolve({
+          data: [sampleAssignments[0], endedAssignment], pagination: {},
+        });
+        if (url.startsWith('/api/time-entries')) return Promise.resolve({ data: [], pagination: {} });
+        return Promise.resolve({});
+      });
+      mount();
+      expect(await screen.findByText('Contrato Alpha')).toBeInTheDocument();
+      expect(await screen.findByText('Proyecto Beta')).toBeInTheDocument();
+      expect(screen.getByText('Finalizada')).toBeInTheDocument();
+      // Quick-fill only for the active assignment
+      expect(screen.getByText(/Rellenar 8h · Contrato Alpha/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Rellenar 8h · Proyecto Beta/i)).not.toBeInTheDocument();
     });
   });
 });

@@ -763,3 +763,62 @@ describe('GET /api/assignments — SPEC-007 filtros combinados', () => {
     expect(res.body.error).toMatch(/date_from/);
   });
 });
+
+/* ---- SPEC-012 — Multi-status filter ---------------------------------- */
+
+describe('SPEC-012 — GET /api/assignments multi-status filter', () => {
+  it('single status still produces a = $N clause', async () => {
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/assignments?status=active');
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /COUNT/.test(r.sql));
+    expect(q.sql).toMatch(/a\.status\s*=\s*\$\d/);
+    expect(q.params).toContain('active');
+  });
+
+  it('comma-separated statuses produce an IN clause', async () => {
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/assignments?status=active,ended');
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /COUNT/.test(r.sql));
+    expect(q.sql).toMatch(/a\.status\s+IN\s*\(/);
+    expect(q.params).toContain('active');
+    expect(q.params).toContain('ended');
+  });
+
+  it('invalid status values are silently dropped (remaining valid ones apply)', async () => {
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/assignments?status=active,unknown_status');
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /COUNT/.test(r.sql));
+    // Only the valid 'active' value should appear; single valid → = clause
+    expect(q.sql).toMatch(/a\.status\s*=\s*\$\d/);
+    expect(q.params).toContain('active');
+    expect(q.params).not.toContain('unknown_status');
+  });
+
+  it('all-invalid status values produce no status clause (returns all)', async () => {
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/assignments?status=bad,nope');
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /COUNT/.test(r.sql));
+    expect(q.sql).not.toMatch(/a\.status/);
+  });
+
+  it('active,ended with date_from+date_to returns intersection-scoped results', async () => {
+    queryQueue.push({ rows: [{ total: 1 }] });
+    queryQueue.push({ rows: [
+      { id: 'a-ended', status: 'ended', employee_id: 'e1', contract_id: 'ct1',
+        contract_name: 'Proyecto Beta', request_role_title: 'Dev',
+        start_date: '2026-04-01', end_date: '2026-05-02' },
+    ] });
+    const res = await client.call('GET', '/api/assignments?status=active,ended&date_from=2026-04-28&date_to=2026-05-04&employee_id=e1');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(res.body.data[0].status).toBe('ended');
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /COUNT/.test(r.sql));
+    expect(q.sql).toMatch(/a\.status\s+IN\s*\(/);
+    expect(q.params).toContain('2026-04-28');
+    expect(q.params).toContain('2026-05-04');
+  });
+});

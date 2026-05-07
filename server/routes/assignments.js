@@ -142,7 +142,15 @@ function buildAssignmentFilters(query) {
 
   if (query.contract_id)         wheres.push(`a.contract_id = ${add(query.contract_id)}`);
   if (query.resource_request_id) wheres.push(`a.resource_request_id = ${add(query.resource_request_id)}`);
-  if (query.status)              wheres.push(`a.status = ${add(query.status)}`);
+  if (query.status) {
+    // Support comma-separated values: ?status=active,ended
+    const statuses = String(query.status).split(',').map((v) => v.trim()).filter((v) => VALID_STATUSES.includes(v));
+    if (statuses.length === 1) {
+      wheres.push(`a.status = ${add(statuses[0])}`);
+    } else if (statuses.length > 1) {
+      wheres.push(`a.status IN (${statuses.map((v) => add(v)).join(', ')})`);
+    }
+  }
 
   const empIds = buildEmployeeIds(query);
   if (empIds.length === 1) {
