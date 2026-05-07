@@ -2,10 +2,11 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import StaffAugEditorUnified from './StaffAugEditorUnified';
+import useQuotationLookups from './hooks/useQuotationLookups';
 import { calcStaffAugLine, formatUSD, formatPct, SPECIALTIES, EMPTY_LINE } from './utils/calc';
 import { TABLE_CLASS } from './shell/tableStyles';
 import FilterableSelect from './shell/FilterableSelect';
-import NewQuotationPreModal from './modules/NewQuotationPreModal';
+import CreateClientOppModal from './modules/CreateClientOppModal';
 
 /**
  * Spec 3 (spec_capacity_editor.docx, Abril 2026) — por defecto renderizamos
@@ -36,7 +37,6 @@ export default function StaffAugEditor({ params, context }) {
 }
 
 /* ========== CLASSIC VIEW (legacy inline table, preserved for fallback) ========== */
-/* Style object copied from App.js' `css` to keep the classic look-and-feel. */
 const css = {
   card: { background: '#fff', borderRadius: 12, padding: 24, marginBottom: 20, border: '1px solid var(--border)' },
   btn: (color = 'var(--purple-dark)') => ({ background: color, color: 'white', border: 'none', borderRadius: 8, padding: '10px 20px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }),
@@ -50,6 +50,7 @@ const css = {
   metric: { textAlign: 'center' },
   metricValue: { fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em', color: 'var(--ds-text, var(--purple-dark))', fontFamily: 'var(--font-ui, inherit)' },
   metricLabel: { fontSize: 11, color: 'var(--text-light)', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 4 },
+  inlineBtn: { background: 'transparent', color: 'var(--teal-mid)', border: 'none', fontSize: 11, fontWeight: 600, cursor: 'pointer', padding: 0, marginTop: 4 },
 };
 
 function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
@@ -58,16 +59,17 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
   const isNew = !!newType;
 
   const [saving, setSaving] = useState(false);
-  // Linker modal: si al guardar falta client_id/opportunity_id, abrimos el
-  // selector y luego reintentamos el save con el contexto resuelto.
-  const [linkerStatus, setLinkerStatus] = useState(null); // null | string status pendiente
+  const [createModal, setCreateModal] = useState(null);
   const [data, setData] = useState({
     type: newType || 'staff_aug',
     client_id: context?.client_id || null,
     opportunity_id: context?.opportunity_id || null,
-    project_name: '', client_name: context?.client_name || '', commercial_name: '', preventa_name: '',
+    project_name: '', client_name: context?.client_name || '',
+    commercial_name: '', commercial_user_id: null, preventa_name: '',
     discount_pct: 0, notes: '', status: 'draft', lines: [{ ...EMPTY_LINE }], metadata: {},
   });
+
+  const lookups = useQuotationLookups(data.client_id);
 
   useEffect(() => {
     if (quotId) {
@@ -76,6 +78,7 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
   }, [quotId, nav]);
 
   const updateField = (field, value) => setData(d => ({ ...d, [field]: value }));
+  const updateMulti = (patch) => setData(d => ({ ...d, ...patch }));
   const updateLine = (idx, field, value) => {
     setData(d => {
       const lines = [...d.lines];
@@ -90,21 +93,20 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
   const totalMonthly = data.lines.reduce((s, l) => s + (l.rate_month || 0) * (l.quantity || 1), 0);
   const totalContract = data.lines.reduce((s, l) => s + (l.total || 0), 0);
 
-  const save = async (status, override = null) => {
-    const merged = override ? { ...data, ...override } : data;
-    // Si falta client_id u opportunity_id, abrimos el linker y reintentamos
-    // cuando el usuario los provee (override).
-    if (!override && (!merged.client_id || !merged.opportunity_id)) {
-      setLinkerStatus(status || data.status || 'draft');
+  const canSave = !!((data.project_name || '').trim() && data.client_id && data.opportunity_id);
+
+  const save = async (status) => {
+    if (!canSave) {
+      // eslint-disable-next-line no-alert
+      alert('Completa el nombre del proyecto, selecciona un cliente y una oportunidad antes de guardar.');
       return;
     }
     setSaving(true);
     try {
-      const payload = { ...merged, status: status || merged.status };
+      const payload = { ...data, status: status || data.status };
       if (quotId) { await api.updateQuotation(quotId, payload); }
       else {
         const q = await api.createQuotation(payload);
-        if (override) setData(merged);
         nav(`/quotation/${q.id}`, { replace: true });
       }
       // eslint-disable-next-line no-alert
@@ -117,10 +119,29 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
     }
   };
 
+  const handleCreated = (result) => {
+    setCreateModal(null);
+    const patch = {};
+    if (result.client_id) {
+      patch.client_id = result.client_id;
+      patch.client_name = result.client_name || '';
+      lookups.addClient({ id: result.client_id, name: result.client_name });
+    }
+    if (result.opportunity_id) {
+      patch.opportunity_id = result.opportunity_id;
+      lookups.addOpportunity({ id: result.opportunity_id, name: result.opportunity_name, status: 'open' });
+    }
+    updateMulti(patch);
+  };
+
   const countries = params?.geo?.map(p => p.key) || [];
   const stacks = params?.stack?.map(p => p.key) || [];
   const modalities = params?.modality?.map(p => p.key) || [];
   const toolsOpts = params?.tools?.map(p => p.key) || [];
+
+  const clientOptions = (lookups.clients || []).map((c) => ({ id: String(c.id), label: c.name }));
+  const oppOptions = (lookups.opportunities || []).map((o) => ({ id: String(o.id), label: `${o.name} (${o.status})` }));
+  const commercialOptions = (lookups.commercials || []).map((u) => ({ id: String(u.id), label: u.name }));
 
   return (
     <div>
@@ -135,25 +156,68 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
           {onSwitchToUnified && (
             <button type="button" style={css.btnOutlineSm} onClick={onSwitchToUnified} title="Cambiar a la vista unificada (nueva)">Vista unificada</button>
           )}
-          <button style={css.btnOutline} onClick={() => save()} disabled={saving}>{saving ? 'Guardando...' : 'Guardar borrador'}</button>
-          <button style={css.btn('var(--teal-mid)')} onClick={() => save('sent')} disabled={saving}>Guardar como Enviada</button>
+          <button style={css.btnOutline} onClick={() => save()} disabled={saving || !canSave}>{saving ? 'Guardando...' : 'Guardar borrador'}</button>
+          <button style={css.btn('var(--teal-mid)')} onClick={() => save('sent')} disabled={saving || !canSave}>Guardar como Enviada</button>
         </div>
       </div>
 
       <div style={css.card}>
         <h3 style={{ fontSize: 13, fontWeight: 600, color: 'var(--ds-text, var(--purple-dark))', marginBottom: 16, textTransform: 'uppercase', letterSpacing: 0.04 }}>Datos del Proyecto</h3>
         <div className="project-info-grid">
-          {[
-            ['project_name', 'Nombre del Proyecto'],
-            ['client_name', 'Cliente'],
-            ['commercial_name', 'Responsable Comercial'],
-            ['preventa_name', 'Ingeniero Pre-venta'],
-          ].map(([field, label]) => (
-            <div key={field}>
-              <label style={css.label}>{label}</label>
-              <input style={css.input} value={data[field] || ''} onChange={e => updateField(field, e.target.value)} />
-            </div>
-          ))}
+          <div>
+            <label style={css.label}>Nombre del Proyecto *</label>
+            <input style={css.input} value={data.project_name || ''} onChange={e => updateField('project_name', e.target.value)} />
+          </div>
+          <div>
+            <label style={css.label}>Cliente *</label>
+            <FilterableSelect
+              aria-label="Cliente"
+              inputStyle={css.input}
+              value={data.client_id ? String(data.client_id) : ''}
+              onChange={(e) => {
+                const cid = e.target.value || null;
+                const cl = lookups.clients.find((c) => String(c.id) === cid);
+                updateMulti({ client_id: cid, client_name: cl?.name || '', opportunity_id: null });
+              }}
+              placeholder="— Buscar cliente —"
+              options={clientOptions}
+            />
+            <button type="button" style={css.inlineBtn} onClick={() => setCreateModal('client')}>+ Crear cliente</button>
+          </div>
+          <div>
+            <label style={css.label}>Oportunidad *</label>
+            <FilterableSelect
+              aria-label="Oportunidad"
+              inputStyle={css.input}
+              value={data.opportunity_id ? String(data.opportunity_id) : ''}
+              onChange={(e) => updateField('opportunity_id', e.target.value || null)}
+              placeholder={data.client_id ? '— Buscar oportunidad —' : '— Primero selecciona un cliente —'}
+              disabled={!data.client_id}
+              options={oppOptions}
+            />
+            {data.client_id && (
+              <button type="button" style={css.inlineBtn} onClick={() => setCreateModal('opportunity')}>+ Crear oportunidad</button>
+            )}
+          </div>
+          <div>
+            <label style={css.label}>Responsable Comercial</label>
+            <FilterableSelect
+              aria-label="Responsable Comercial"
+              inputStyle={css.input}
+              value={data.commercial_user_id ? String(data.commercial_user_id) : ''}
+              onChange={(e) => {
+                const uid = e.target.value || null;
+                const u = lookups.commercials.find((c) => String(c.id) === uid);
+                updateMulti({ commercial_user_id: uid, commercial_name: u?.name || '' });
+              }}
+              placeholder="— Seleccionar —"
+              options={commercialOptions}
+            />
+          </div>
+          <div>
+            <label style={css.label}>Ingeniero Pre-venta</label>
+            <input style={css.input} value={data.preventa_name || ''} onChange={e => updateField('preventa_name', e.target.value)} />
+          </div>
           <div>
             <label style={css.label}>Estado</label>
             <FilterableSelect
@@ -222,23 +286,17 @@ function StaffAugEditorClassic({ params, context, onSwitchToUnified }) {
           <div style={{ ...css.metricValue, color: 'var(--teal-mid)' }}>{formatUSD(totalContract * (1 - (data.discount_pct || 0)))}</div>
           <div style={css.metricLabel}>Con descuento ({formatPct(data.discount_pct)})</div>
         </div>
+      </div>
 
-      {linkerStatus && (
-        <NewQuotationPreModal
-          type={data.type}
-          onContext={(ctx) => {
-            const status = linkerStatus;
-            setLinkerStatus(null);
-            save(status, {
-              client_id: ctx.client_id,
-              opportunity_id: ctx.opportunity_id,
-              client_name: data.client_name || ctx.client_name,
-            });
-          }}
-          onCancel={() => setLinkerStatus(null)}
+      {createModal && (
+        <CreateClientOppModal
+          mode={createModal}
+          clientId={data.client_id}
+          clientName={data.client_name}
+          onCreated={handleCreated}
+          onCancel={() => setCreateModal(null)}
         />
       )}
-      </div>
     </div>
   );
 }

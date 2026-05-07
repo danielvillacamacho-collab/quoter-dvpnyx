@@ -9,18 +9,10 @@ jest.mock('./utils/api');
 jest.mock('./utils/apiV2');
 
 /**
- * El linker de cliente+oportunidad ahora aparece AL GUARDAR (no al
- * entrar al editor). Este helper lo despacha cuando el modal está abierto.
+ * mockLookupData — mock para los dropdowns inline de cliente, oportunidad
+ * y comercial que ahora viven directamente en el editor (via useQuotationLookups).
  */
-async function walkPastLinker() {
-  // El modal expone el FilterableSelect "Cliente" como combobox
-  await screen.findByLabelText('Cliente');
-  await changeSelect('Cliente', 'c-pre');
-  await changeSelect('Oportunidad', 'o-pre');
-  fireEvent.click(screen.getByRole('button', { name: /Continuar/i }));
-}
-
-function mockLinkerData() {
+function mockLookupData() {
   apiV2.apiGet.mockImplementation((url) => {
     if (url.startsWith('/api/clients')) {
       return Promise.resolve({ data: [{ id: 'c-pre', name: 'Acme Test', active: true }], pagination: {} });
@@ -28,8 +20,20 @@ function mockLinkerData() {
     if (url.startsWith('/api/opportunities')) {
       return Promise.resolve({ data: [{ id: 'o-pre', name: 'Deal Test', client_id: 'c-pre', status: 'open' }], pagination: {} });
     }
+    if (url.startsWith('/api/users/lookup')) {
+      return Promise.resolve([{ id: 'com-1', name: 'Juan Comercial' }]);
+    }
     return Promise.resolve({ data: [], pagination: {} });
   });
+}
+
+/**
+ * Helper: selecciona cliente + oportunidad en los dropdowns inline del editor.
+ * Requiere que mockLookupData esté activo.
+ */
+async function selectClientAndOpp() {
+  await changeSelect('Cliente', 'c-pre');
+  await changeSelect('Oportunidad', 'o-pre');
 }
 
 /* ===== fixtures ===== */
@@ -251,7 +255,7 @@ describe('ProjectEditor — fixed_scope stepper', () => {
     api.getMe.mockResolvedValue(mockUser);
     api.getParams.mockResolvedValue(mockParams);
     api.getQuotations.mockResolvedValue([]);
-    mockLinkerData();
+    mockLookupData();
     window.history.pushState({}, '', '/quotation/new/fixed_scope');
   });
 
@@ -273,39 +277,41 @@ describe('ProjectEditor — fixed_scope stepper', () => {
     render(<App />);
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     expect(screen.getByPlaceholderText(/Plataforma de analítica/i)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Acme SA/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Cliente')).toBeInTheDocument();
   });
 
-  it('disables Next button until project name and client are filled', async () => {
+  it('disables Next button until project name, client and opportunity are filled', async () => {
     render(<App />);
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     const next = screen.getByRole('button', { name: /Siguiente paso/i });
     expect(next).toBeDisabled();
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Proyecto Alpha' } });
-    expect(next).toBeDisabled(); // todavía falta client_name
-    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
+    expect(next).toBeDisabled(); // falta client_id + opportunity_id
+    await changeSelect('Cliente', 'c-pre');
+    expect(next).toBeDisabled(); // falta opportunity_id
+    await changeSelect('Oportunidad', 'o-pre');
     expect(next).toBeEnabled();
   });
 
-  it('navigates to Step 2 (Team) once name and client are provided', async () => {
+  it('navigates to Step 2 (Team) once name, client and opportunity are provided', async () => {
     render(<App />);
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Proyecto Alpha' } });
-    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'Acme' } });
+    await selectClientAndOpp();
     fireEvent.click(screen.getByRole('button', { name: /Siguiente paso/i }));
     await waitFor(() => expect(screen.getByText(/Composición del Equipo/i)).toBeInTheDocument());
   });
 
-  it('"Guardar borrador" abre linker y POST incluye client_id + opportunity_id', async () => {
+  it('"Guardar borrador" POST incluye client_id + opportunity_id', async () => {
     api.createQuotation.mockResolvedValue({ id: 'new-q-1' });
-    api.getQuotation.mockResolvedValue({ id: 'new-q-1', type: 'fixed_scope', project_name: 'Draft P', client_name: 'Acme', lines: [], phases: [], epics: [], milestones: [], metadata: {} });
+    api.getQuotation.mockResolvedValue({ id: 'new-q-1', type: 'fixed_scope', project_name: 'Draft P', client_name: 'Acme Test', lines: [], phases: [], epics: [], milestones: [], metadata: {} });
     const alertSpy = jest.spyOn(window, 'alert').mockImplementation(() => {});
     render(<App />);
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'Draft P' } });
-    // Clic en Guardar dispara el linker (faltan client_id+opportunity_id).
+    // Seleccionar cliente + oportunidad inline (requeridos para guardar).
+    await selectClientAndOpp();
     fireEvent.click(screen.getByRole('button', { name: /Guardar borrador/i }));
-    await walkPastLinker();
     await waitFor(() => expect(api.createQuotation).toHaveBeenCalled());
     const payload = api.createQuotation.mock.calls[0][0];
     expect(payload.type).toBe('fixed_scope');
@@ -320,7 +326,7 @@ describe('ProjectEditor — fixed_scope stepper', () => {
     render(<App />);
     await waitFor(() => screen.getByText(/📝 Datos del Proyecto/));
     fireEvent.change(screen.getByPlaceholderText(/Plataforma de analítica/i), { target: { value: 'P' } });
-    fireEvent.change(screen.getByPlaceholderText(/Acme SA/i), { target: { value: 'A' } });
+    await selectClientAndOpp();
     fireEvent.click(screen.getByRole('button', { name: /Siguiente paso/i }));
     await waitFor(() => screen.getByText(/Composición del Equipo/i));
     fireEvent.click(screen.getByRole('button', { name: /Anterior/i }));
