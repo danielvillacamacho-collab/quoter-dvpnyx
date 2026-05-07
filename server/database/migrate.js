@@ -2389,20 +2389,36 @@ END
 $do_deal_type_v2$;
 
 -- Extend contract_subtype CHECK to include resell subtypes (aws, azure, gcp, other).
--- Drop + re-add so new subtypes are recognized.
+--
+-- The original migration (line ~1062) created the constraint as
+-- contracts_subtype_check, but the v2 block below was checking for a
+-- constraint named contracts_subtype_valid — a different name that never
+-- existed. The result: the stale contracts_subtype_check (only 6 values,
+-- no resell subtypes) was never dropped, a new contracts_subtype_valid
+-- was added on top, and inserts with aws/azure/gcp/other failed
+-- against the legacy constraint. We now drop the legacy constraint
+-- explicitly and (re)create the v2 constraint only if it doesn't already
+-- exist, so the migration is convergent regardless of starting state and
+-- doesn't re-validate the table on every boot.
 DO $do_subtype_v2$
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contracts_subtype_valid') THEN
-    ALTER TABLE contracts DROP CONSTRAINT contracts_subtype_valid;
+  -- Drop the stale legacy constraint if it survived the first v2 attempt.
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contracts_subtype_check') THEN
+    ALTER TABLE contracts DROP CONSTRAINT contracts_subtype_check;
   END IF;
-  ALTER TABLE contracts ADD CONSTRAINT contracts_subtype_valid
-    CHECK (
-      contract_subtype IS NULL OR contract_subtype IN (
-        'staff_augmentation','mission_driven_squad','managed_service','time_and_materials',
-        'fixed_scope','hour_pool',
-        'aws','azure','gcp','other'
-      )
-    );
+
+  -- Create the v2 constraint if absent. We don't drop+re-add when it
+  -- already matches — re-adding triggers a full table scan.
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contracts_subtype_valid') THEN
+    ALTER TABLE contracts ADD CONSTRAINT contracts_subtype_valid
+      CHECK (
+        contract_subtype IS NULL OR contract_subtype IN (
+          'staff_augmentation','mission_driven_squad','managed_service','time_and_materials',
+          'fixed_scope','hour_pool',
+          'aws','azure','gcp','other'
+        )
+      );
+  END IF;
 END
 $do_subtype_v2$;
 
