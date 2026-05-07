@@ -615,6 +615,7 @@ export default function Assignments() {
               onChange={(e) => setStatusFilter(e.target.value)}
               aria-label="Filtro por estado"
               placeholder="Todos"
+              clearable
               options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
             />
           </div>

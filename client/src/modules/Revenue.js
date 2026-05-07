@@ -388,6 +388,7 @@ export default function Revenue() {
           inputStyle={s.inp}
           aria-label="Tipo"
           placeholder="Todos los tipos"
+          clearable
           options={[
             { id: 'capacity', label: 'Capacity' },
             { id: 'project', label: 'Proyectos' },
@@ -400,6 +401,7 @@ export default function Revenue() {
           inputStyle={s.inp}
           aria-label="Owner"
           placeholder="Todos los owners"
+          clearable
           options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
         />
         <input type="text" placeholder="País (CO, MX, …)" maxLength={3}

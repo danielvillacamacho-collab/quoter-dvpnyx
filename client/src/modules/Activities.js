@@ -300,6 +300,7 @@ export default function Activities() {
               aria-label="Filtro por tipo"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={ACTIVITY_TYPES.map((t) => ({ id: t.value, label: t.label }))}
             />
           </div>

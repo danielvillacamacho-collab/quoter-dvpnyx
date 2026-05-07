@@ -558,6 +558,7 @@ export default function Employees() {
               aria-label="Filtro por área"
               inputStyle={s.input}
               placeholder="Cualquiera"
+              clearable
               options={areas.map((a) => ({ id: String(a.id), label: a.name }))}
             />
           </div>
@@ -569,6 +570,7 @@ export default function Employees() {
               aria-label="Filtro por level"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={LEVELS.map((l) => ({ id: l, label: l }))}
             />
           </div>
@@ -580,6 +582,7 @@ export default function Employees() {
               aria-label="Filtro por estado"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={STATUSES.map((st) => ({ id: st.value, label: st.label }))}
             />
           </div>

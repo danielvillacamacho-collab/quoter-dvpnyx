@@ -714,6 +714,7 @@ export default function Opportunities() {
               aria-label="Filtro por cliente"
               inputStyle={s.input}
               placeholder="Cualquiera"
+              clearable
               options={clients.map((c) => ({ id: String(c.id), label: c.name }))}
             />
           </div>
@@ -725,6 +726,7 @@ export default function Opportunities() {
               aria-label="Filtro por estado"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={STAGES.map((st) => ({ id: st.id, label: st.label }))}
             />
           </div>
@@ -736,6 +738,7 @@ export default function Opportunities() {
               aria-label="Filtro por tipo de deal"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={DEAL_TYPES.map((dt) => ({ id: dt.value, label: dt.label }))}
             />
           </div>

@@ -291,6 +291,7 @@ export default function Budgets() {
               aria-label="Filtro por estado"
               inputStyle={s.input}
               placeholder="Todos"
+              clearable
               options={[
                 { id: 'draft', label: 'Borrador' },
                 { id: 'active', label: 'Activo' },

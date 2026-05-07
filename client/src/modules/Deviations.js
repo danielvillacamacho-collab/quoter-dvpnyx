@@ -273,6 +273,7 @@ export default function Deviations() {
             onChange={(e) => setAreaId(e.target.value)}
             options={[{ id: '', label: 'Todas las areas' }, ...areas]}
             placeholder="Todas las areas"
+            clearable
           />
         </div>
         <button style={ds.btnGhost} onClick={() => exportCSV(rows, groupBy)} disabled={!rows.length}>

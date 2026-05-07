@@ -237,6 +237,7 @@ export default function Novelties() {
           value={filter.status}
           onChange={(e) => setFilter((f) => ({ ...f, status: e.target.value }))}
           placeholder="Todos"
+          clearable
           options={[
             { id: 'approved', label: 'Aprobadas' },
             { id: 'cancelled', label: 'Canceladas' },
@@ -247,6 +248,7 @@ export default function Novelties() {
           value={filter.novelty_type_id}
           onChange={(e) => setFilter((f) => ({ ...f, novelty_type_id: e.target.value }))}
           placeholder="Todos los tipos"
+          clearable
           options={types.map((t) => ({ id: String(t.id), label: `${TYPE_ICONS[t.id] || ''} ${t.label_es}` }))}
         />
         <input style={ds.input} type="date" value={filter.from_date} onChange={(e) => setFilter((f) => ({ ...f, from_date: e.target.value }))} />
