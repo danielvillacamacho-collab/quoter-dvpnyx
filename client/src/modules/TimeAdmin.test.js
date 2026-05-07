@@ -28,8 +28,6 @@ jest.mock('../shell/FilterableSelect', () => {
   };
 });
 
-const FIXED_NOW = new Date('2026-05-07T12:00:00'); // Wednesday
-
 const sampleEmployees = [
   { id: 'e1', first_name: 'Ana', last_name: 'García', area_name: 'Eng', full_name: 'Ana García' },
 ];
@@ -61,12 +59,6 @@ function setupDefaultMocks(assignments = [activeAssignment]) {
 
 beforeEach(() => {
   jest.resetAllMocks();
-  jest.useFakeTimers({ legacyFakeTimers: false });
-  jest.setSystemTime(FIXED_NOW);
-});
-
-afterEach(() => {
-  jest.useRealTimers();
 });
 
 async function selectEmployee() {
@@ -128,7 +120,20 @@ describe('TimeAdmin — core rendering', () => {
   });
 });
 
+// ── SPEC-012: asignaciones finalizadas visibles y diferenciadas ─────────────
+
 describe('TimeAdmin — SPEC-012: ended assignments', () => {
+  const FIXED_NOW = new Date('2026-05-07T12:00:00'); // Thursday (May 7, 2026)
+
+  beforeEach(() => {
+    jest.useFakeTimers({ legacyFakeTimers: false });
+    jest.setSystemTime(FIXED_NOW);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('requests status=active,ended with date_from and date_to', async () => {
     setupDefaultMocks();
     mount();
