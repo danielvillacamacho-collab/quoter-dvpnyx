@@ -266,8 +266,8 @@ export {
 };
 
 export default function Revenue() {
-  const [from, setFrom] = useState(() => offsetMonth(todayYYYYMM(), -3));
-  const [to, setTo] = useState(() => offsetMonth(todayYYYYMM(), 5));
+  const [from, setFrom] = useState(() => { const y = new Date().getFullYear(); return `${y}01`; });
+  const [to, setTo]     = useState(() => { const y = new Date().getFullYear(); return `${y}12`; });
   const [filters, setFilters] = useState({ type: '', owner_id: '', country: '' });
   // RR-MVP-00.6: moneda en la que el usuario quiere ver totales y celdas.
   const [displayCurrency, setDisplayCurrency] = useState('USD');
