@@ -5,7 +5,7 @@
  * admin/lead can enter time for any employee. Same weekly grid,
  * same cell states, same POST/PUT/DELETE flow, plus CSV export.
  */
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import FilterableSelect from '../shell/FilterableSelect';
@@ -50,9 +50,8 @@ const s = {
   metaRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' },
   weekNav: { display: 'flex', alignItems: 'center', gap: 6 },
   weekPill: { minWidth: 180, justifyContent: 'center', fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'" },
-  weekPickerWrap: { position: 'relative' },
-  weekPickerDropdown: { position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', marginTop: 4, background: 'var(--ds-surface)', border: '1px solid var(--ds-border)', borderRadius: 8, padding: 8, zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.12)' },
-  weekPickerInput: { display: 'block', padding: '6px 10px', border: '1px solid var(--ds-border)', borderRadius: 6, fontSize: 13, background: 'var(--ds-surface)', color: 'var(--ds-text)', cursor: 'pointer' },
+  weekPickerWrap: { position: 'relative', display: 'inline-flex' },
+  hiddenDateInput: { position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' },
 
   statWrap: { marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center' },
   statLabel: { fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 500, color: 'var(--ds-text-dim)' },
@@ -145,7 +144,7 @@ export default function TimeAdmin() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState({});
   const [errorMsg, setErrorMsg] = useState('');
-  const [showPicker, setShowPicker] = useState(false);
+  const dateInputRef = useRef(null);
 
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const weekFromIso = iso(weekStart);
@@ -157,18 +156,16 @@ export default function TimeAdmin() {
   const todayIdx = isCurrentWeek ? ((now.getDay() + 6) % 7) : -1;
   const weekIsFuture = weekStart > todayWeekStart;
 
-  useEffect(() => {
-    if (!showPicker) return;
-    const onKeyDown = (e) => { if (e.key === 'Escape') setShowPicker(false); };
-    document.addEventListener('keydown', onKeyDown);
-    return () => { document.removeEventListener('keydown', onKeyDown); };
-  }, [showPicker]);
-
   const handlePickerChange = useCallback((e) => {
     const val = e.target.value;
     if (!val) return;
     setWeekStart(startOfWeek(new Date(val + 'T12:00:00')));
-    setShowPicker(false);
+  }, []);
+
+  const openDatePicker = useCallback(() => {
+    if (dateInputRef.current) {
+      dateInputRef.current.showPicker();
+    }
   }, []);
 
   /* ---- Load employees once ---- */
@@ -348,24 +345,21 @@ export default function TimeAdmin() {
               <div style={s.weekPickerWrap}>
                 <button
                   style={{ ...s.btn, ...s.btnSm, ...s.weekPill }}
-                  onClick={() => setShowPicker((v) => !v)}
+                  onClick={openDatePicker}
                   aria-label="Seleccionar semana"
                   title="Haz clic para saltar a una semana específica"
                 >
                   {weekFromIso} &mdash; {weekToIso} 📅
                 </button>
-                {showPicker && (
-                  <div style={s.weekPickerDropdown}>
-                    <input
-                      type="date"
-                      style={s.weekPickerInput}
-                      defaultValue={weekFromIso}
-                      onChange={handlePickerChange}
-                      autoFocus
-                      aria-label="Elegir fecha"
-                    />
-                  </div>
-                )}
+                <input
+                  ref={dateInputRef}
+                  type="date"
+                  style={s.hiddenDateInput}
+                  value={weekFromIso}
+                  onChange={handlePickerChange}
+                  aria-label="Elegir fecha"
+                  tabIndex={-1}
+                />
               </div>
               <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, 7))} aria-label="Semana siguiente">&#8250;</button>
               {!isCurrentWeek && (

@@ -16,7 +16,7 @@
  *  - Week nav as a compact chevron-pill-chevron with "Hoy" shortcut
  *  - Right-side mini stats (esta semana, cumplimiento 7d)
  */
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 
@@ -60,9 +60,8 @@ const s = {
   metaRow: { display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' },
   weekNav: { display: 'flex', alignItems: 'center', gap: 6 },
   weekPill: { minWidth: 180, justifyContent: 'center', fontFamily: 'var(--font-mono)', fontFeatureSettings: "'tnum'" },
-  pickerWrap: { position: 'relative' },
-  pickerDropdown: { position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)', marginTop: 4, background: 'var(--ds-surface)', border: '1px solid var(--ds-border)', borderRadius: 8, padding: 8, zIndex: 100, boxShadow: '0 4px 16px rgba(0,0,0,0.12)' },
-  pickerInput: { display: 'block', padding: '6px 10px', border: '1px solid var(--ds-border)', borderRadius: 6, fontSize: 13, background: 'var(--ds-surface)', color: 'var(--ds-text)', cursor: 'pointer' },
+  pickerWrap: { position: 'relative', display: 'inline-flex' },
+  hiddenDateInput: { position: 'absolute', opacity: 0, width: 0, height: 0, pointerEvents: 'none' },
 
   statWrap: { marginLeft: 'auto', display: 'flex', gap: 18, alignItems: 'center' },
   statLabel: { fontSize: 10.5, textTransform: 'uppercase', letterSpacing: 0.04, fontWeight: 500, color: 'var(--ds-text-dim)' },
@@ -111,7 +110,7 @@ export default function TimeMe() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState({}); // keyed by `${assignmentId}-${dateIso}`
   const [errorMsg, setErrorMsg] = useState('');
-  const [showPicker, setShowPicker] = useState(false);
+  const dateInputRef = useRef(null);
 
   const weekDates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
   const weekFromIso = iso(weekStart);
@@ -124,19 +123,16 @@ export default function TimeMe() {
   const todayIdx = isCurrentWeek ? ((now.getDay() + 6) % 7) : -1; // Mon=0..Sun=6, -1 if not current week
   const weekIsFuture = weekStart > todayWeekStart;
 
-  useEffect(() => {
-    if (!showPicker) return;
-    const onKeyDown = (e) => { if (e.key === 'Escape') setShowPicker(false); };
-    document.addEventListener('keydown', onKeyDown);
-    return () => { document.removeEventListener('keydown', onKeyDown); };
-  }, [showPicker]);
-
   const handlePickerChange = useCallback((e) => {
     const val = e.target.value;
     if (!val) return;
-    // Use noon local time to avoid UTC date boundary shifts
     setWeekStart(startOfWeek(new Date(val + 'T12:00:00')));
-    setShowPicker(false);
+  }, []);
+
+  const openDatePicker = useCallback(() => {
+    if (dateInputRef.current) {
+      dateInputRef.current.showPicker();
+    }
   }, []);
 
   const load = useCallback(async () => {
@@ -255,24 +251,21 @@ export default function TimeMe() {
             <div style={s.pickerWrap}>
               <button
                 style={{ ...s.btn, ...s.btnSm, ...s.weekPill }}
-                onClick={() => setShowPicker((v) => !v)}
+                onClick={openDatePicker}
                 aria-label="Seleccionar semana"
                 title="Haz clic para saltar a una semana específica"
               >
                 {weekFromIso} — {weekToIso} 📅
               </button>
-              {showPicker && (
-                <div style={s.pickerDropdown}>
-                  <input
-                    type="date"
-                    style={s.pickerInput}
-                    defaultValue={weekFromIso}
-                    onChange={handlePickerChange}
-                    autoFocus
-                    aria-label="Elegir fecha"
-                  />
-                </div>
-              )}
+              <input
+                ref={dateInputRef}
+                type="date"
+                style={s.hiddenDateInput}
+                value={weekFromIso}
+                onChange={handlePickerChange}
+                aria-label="Elegir fecha"
+                tabIndex={-1}
+              />
             </div>
             <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, 7))} aria-label="Semana siguiente">›</button>
             {!isCurrentWeek && (
