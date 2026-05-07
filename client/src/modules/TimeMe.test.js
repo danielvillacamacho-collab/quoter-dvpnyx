@@ -170,13 +170,21 @@ describe('TimeMe', () => {
       mount();
       await screen.findByText('Contrato Alpha');
 
+      // Pick Monday 2026-05-04 — weekStart → 2026-05-04
       fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-04' } });
-      const afterMonday = screen.getByLabelText('Seleccionar semana').value;
+      await waitFor(() => {
+        const calls = apiV2.apiGet.mock.calls.map((c) => c[0]);
+        expect(calls.some((u) => u.includes('from=2026-05-04'))).toBe(true);
+      });
 
+      apiV2.apiGet.mockClear();
+
+      // Pick Sunday 2026-05-10 — same ISO week → weekStart stays 2026-05-04
       fireEvent.change(screen.getByLabelText('Seleccionar semana'), { target: { value: '2026-05-10' } });
-      const afterSunday = screen.getByLabelText('Seleccionar semana').value;
-
-      expect(afterMonday).toBe(afterSunday);
+      await waitFor(() => {
+        const calls = apiV2.apiGet.mock.calls.map((c) => c[0]);
+        expect(calls.some((u) => u.includes('from=2026-05-04'))).toBe(true);
+      });
     });
 
     it('chevron buttons navigate week by week', async () => {
