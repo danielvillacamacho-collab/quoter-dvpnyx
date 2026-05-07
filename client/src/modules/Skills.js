@@ -24,7 +24,7 @@ const s = {
 
 /** Predefined categories per spec (UI hint — backend stores the free-form string). */
 const CATEGORY_OPTIONS = [
-  '', 'language', 'framework', 'database', 'cloud', 'tool', 'methodology', 'soft', 'other',
+  '', 'language', 'framework', 'database', 'cloud', 'ai', 'tool', 'methodology', 'soft', 'other',
 ];
 
 const EMPTY = { name: '', category: '', description: '' };
