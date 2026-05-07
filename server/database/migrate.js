@@ -1050,14 +1050,17 @@ const V2_ALTERS = `
   --   resell   → NULL siempre (sin subtipos por ahora)
   ALTER TABLE contracts ADD COLUMN IF NOT EXISTS contract_subtype VARCHAR(50) NULL;
 
-  -- CHECK constraint con los 6 valores válidos (NULL siempre permitido).
-  -- La coherencia subtype↔type se valida en el server (depende de otra columna,
-  -- expresable con CHECK pero más legible en código).
+  -- CHECK constraint — legacy block creates the base 6-value constraint
+  -- ONLY if neither the original (contracts_subtype_check) nor the v2
+  -- replacement (contracts_subtype_valid, adds resell subtypes) exist.
+  -- Once do_subtype_v2 (in SPEC_CRM_01) runs, contracts_subtype_valid
+  -- is the single source of truth and this block becomes a no-op.
   DO $$
   BEGIN
     IF NOT EXISTS (
       SELECT 1 FROM pg_constraint
-      WHERE conrelid = 'contracts'::regclass AND conname = 'contracts_subtype_check'
+      WHERE conrelid = 'contracts'::regclass
+        AND conname IN ('contracts_subtype_check', 'contracts_subtype_valid')
     ) THEN
       ALTER TABLE contracts ADD CONSTRAINT contracts_subtype_check
         CHECK (
