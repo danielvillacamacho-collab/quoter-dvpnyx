@@ -240,9 +240,10 @@ export default function TimeMe() {
           <div style={s.weekNav}>
             <button style={{ ...s.btn, ...s.btnSm }} onClick={() => setWeekStart(addDays(weekStart, -7))} aria-label="Semana anterior">‹</button>
               <input
+                key={weekFromIso}
                 type="date"
                 style={s.weekDateInput}
-                value={weekFromIso}
+                defaultValue={weekFromIso}
                 onChange={handlePickerChange}
                 aria-label="Seleccionar semana"
                 title="Selecciona una fecha para saltar a esa semana"
