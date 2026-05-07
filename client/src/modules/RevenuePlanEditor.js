@@ -76,6 +76,11 @@ const s = {
   btnGhost: { background: '#fff', color: 'var(--text)', border: '1px solid var(--border)' },
 };
 
+export {
+  fmtUSD, fmtPct, monthLabel, todayYYYYMM,
+  yyyymmFromDate, yyyymmToMonthInput, monthInputToYyyymm, expandMonths,
+};
+
 export default function RevenuePlanEditor() {
   const nav = useNavigate();
   const { contract_id } = useParams();
