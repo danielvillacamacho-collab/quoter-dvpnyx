@@ -43,7 +43,6 @@ import ClientDetail from './modules/ClientDetail';
 import OpportunityDetail from './modules/OpportunityDetail';
 import ContractDetail from './modules/ContractDetail';
 import EmployeeDetail from './modules/EmployeeDetail';
-import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import QuickQuote from './modules/QuickQuote';
 import BulkImport from './modules/BulkImport';
 import Users from './modules/Users';
@@ -570,9 +569,8 @@ function QuotationHistory() {
 
 /* ========== QUOTATION ROUTER ========== */
 // Dispatches to the correct editor based on type (fixed_scope → stepper, staff_aug → linear).
-// EX-1: when creating a NEW quotation, intercepts with a pre-modal that forces
-// the user to pick cliente + oportunidad before the editor loads — the server
-// now rejects POST /api/quotations without both IDs.
+// El usuario va directo al editor; el linker de cliente+oportunidad
+// ahora se gatilla al guardar (cada editor lo dispara si faltan).
 function QuotationRouter() {
   const { params } = useAuth();
   const nav = useNavigate();
@@ -581,7 +579,6 @@ function QuotationRouter() {
 
   const [loading, setLoading] = useState(!!quotId);
   const [type, setType] = useState(newType || 'staff_aug');
-  const [linkingContext, setLinkingContext] = useState(null); // { client_id, opportunity_id, client_name, opportunity_name }
 
   useEffect(() => {
     if (isNew) { setType(newType); setLoading(false); return; }
@@ -592,19 +589,8 @@ function QuotationRouter() {
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-light)' }}>Cargando...</div>;
 
-  // New-quotation flow: show the cliente+opp selector first
-  if (isNew && !linkingContext) {
-    return (
-      <NewQuotationPreModal
-        type={newType}
-        onContext={setLinkingContext}
-        onCancel={() => nav('/quotations')}
-      />
-    );
-  }
-
-  if (type === 'fixed_scope') return <ProjectEditor params={params} context={linkingContext} />;
-  return <StaffAugEditor params={params} context={linkingContext} />;
+  if (type === 'fixed_scope') return <ProjectEditor params={params} context={null} />;
+  return <StaffAugEditor params={params} context={null} />;
 }
 
 

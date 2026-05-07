@@ -4,6 +4,7 @@ import * as api from './utils/api';
 import useAutosave from './hooks/useAutosave';
 import AutosaveIndicator from './AutosaveIndicator';
 import FilterableSelect from './shell/FilterableSelect';
+import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import {
   calcProjectProfile,
   calcProjectSummary,
@@ -786,6 +787,9 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
   const [dirty, setDirty] = useState(false);
   const [infoCollapsed, setInfoCollapsed] = useState(false);
   const [epicsOpen, setEpicsOpen] = useState(false);
+  // Linker modal: si al guardar falta client_id/opportunity_id, lo abrimos
+  // y reintentamos el save con override cuando el usuario los provee.
+  const [linkerStatus, setLinkerStatus] = useState(null);
   const [data, setData] = useState({
     type: 'fixed_scope',
     client_id: context?.client_id || null,
@@ -846,7 +850,9 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
     [data.lines, data.phases, data.metadata?.allocation, data.discount_pct, effectiveParams]
   );
 
-  const canSave = !!((data.project_name || '').trim() && (data.client_name || '').trim());
+  // canSave ya no exige client_name escrito a mano: el linker (modal en
+  // save) garantiza client_id + opportunity_id reales.
+  const canSave = !!(data.project_name || '').trim();
   // Export ya NO depende de !dirty: con autosave activo, los cambios se
   // persisten solos; con autosave inactivo, doExport hace flush manual al
   // PUT antes de generar el archivo. La condición de export queda sólo
@@ -873,24 +879,30 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
   // right after fetch completes.
   autosaveRef.current = autosave;
 
-  const save = async (status) => {
+  const save = async (status, override = null) => {
     if (!canSave) {
       // eslint-disable-next-line no-alert
-      alert('Completa al menos el nombre del proyecto y el cliente antes de guardar.');
+      alert('Completa al menos el nombre del proyecto antes de guardar.');
+      return;
+    }
+    const merged = override ? { ...data, ...override } : data;
+    if (!override && (!merged.client_id || !merged.opportunity_id)) {
+      setLinkerStatus(status || data.status || 'draft');
       return;
     }
     setSaving(true);
     try {
-      const payload = { ...data, status: status || data.status };
+      const payload = { ...merged, status: status || merged.status };
       let resp;
       if (quotId) {
         resp = await api.updateQuotation(quotId, payload);
-        const nextData = { ...data, ...resp, metadata: { allocation: {}, financial_overrides: {}, ...(data.metadata || {}) } };
+        const nextData = { ...merged, ...resp, metadata: { allocation: {}, financial_overrides: {}, ...(merged.metadata || {}) } };
         setData(nextData);
         autosave.resetBaseline(nextData);
         setDirty(false);
       } else {
         resp = await api.createQuotation(payload);
+        if (override) setData(merged);
         nav(`/quotation/${resp.id}`, { replace: true });
       }
     } catch (e) {
@@ -977,6 +989,22 @@ export default function ProjectEditorUnified({ params, context, onSwitchToClassi
       </div>
 
       <MobileFooter summary={summary} />
+
+      {linkerStatus && (
+        <NewQuotationPreModal
+          type={data.type}
+          onContext={(ctx) => {
+            const status = linkerStatus;
+            setLinkerStatus(null);
+            save(status, {
+              client_id: ctx.client_id,
+              opportunity_id: ctx.opportunity_id,
+              client_name: data.client_name || ctx.client_name,
+            });
+          }}
+          onCancel={() => setLinkerStatus(null)}
+        />
+      )}
     </div>
   );
 }

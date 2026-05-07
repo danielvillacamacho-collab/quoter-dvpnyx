@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import * as api from './utils/api';
 import ProjectEditorUnified from './ProjectEditorUnified';
 import FilterableSelect from './shell/FilterableSelect';
+import NewQuotationPreModal from './modules/NewQuotationPreModal';
 import {
   calcProjectProfile,
   calcAllocation,
@@ -703,10 +704,13 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
 
   const [current, setCurrent] = useState(0);
   const [saving, setSaving] = useState(false);
+  // Linker modal: si al guardar falta client_id/opportunity_id, lo abrimos
+  // y reintentamos el save con override cuando el usuario los provee.
+  const [linkerStatus, setLinkerStatus] = useState(null);
   const [data, setData] = useState({
     type: 'fixed_scope',
-    // EX-1: cliente+opp IDs from the pre-modal's context (new) or from the
-    // GET response (edit). Both flow through to POST/PUT payloads below.
+    // client_id+opportunity_id se resuelven al guardar (deferred linker).
+    // Si la cotización ya existe, vienen del GET.
     client_id: context?.client_id || null,
     opportunity_id: context?.opportunity_id || null,
     project_name: '', client_name: context?.client_name || '', commercial_name: '', preventa_name: '',
@@ -757,14 +761,20 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
     return set;
   }, [data]);
 
-  const save = async (status) => {
+  const save = async (status, override = null) => {
+    const merged = override ? { ...data, ...override } : data;
+    if (!override && (!merged.client_id || !merged.opportunity_id)) {
+      setLinkerStatus(status || data.status || 'draft');
+      return;
+    }
     setSaving(true);
     try {
-      const payload = { ...data, status: status || data.status };
+      const payload = { ...merged, status: status || merged.status };
       if (quotId) {
         await api.updateQuotation(quotId, payload);
       } else {
         const q = await api.createQuotation(payload);
+        if (override) setData(merged);
         nav(`/quotation/${q.id}`, { replace: true });
       }
       // eslint-disable-next-line no-alert
@@ -828,6 +838,22 @@ function ProjectEditorClassic({ params, context, onSwitchToUnified }) {
             aria-label="Siguiente paso"
           >Siguiente →</button>
         </div>
+      )}
+
+      {linkerStatus && (
+        <NewQuotationPreModal
+          type={data.type}
+          onContext={(ctx) => {
+            const status = linkerStatus;
+            setLinkerStatus(null);
+            save(status, {
+              client_id: ctx.client_id,
+              opportunity_id: ctx.opportunity_id,
+              client_name: data.client_name || ctx.client_name,
+            });
+          }}
+          onCancel={() => setLinkerStatus(null)}
+        />
       )}
     </div>
   );
