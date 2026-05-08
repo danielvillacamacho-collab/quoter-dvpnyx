@@ -80,52 +80,110 @@ async function buildCostMap(conn, employeeIds, cutoffDate) {
  * Returns { totalCost, costProtected } where costProtected includes contingency.
  */
 async function computeQuotationCost(conn, quotationId) {
-  // Load quotation type + parameters
+  const calc = require('../utils/calc');
+
+  // Load quotation type, metadata (allocation JSONB), and parameters
   const { rows: [quot] } = await conn.query(
-    'SELECT type, parameters_snapshot FROM quotations WHERE id = $1',
+    'SELECT type, metadata, parameters_snapshot FROM quotations WHERE id = $1',
     [quotationId],
   );
   if (!quot) return { totalCost: 0, costProtected: 0 };
 
-  // --- Fixed-scope: V2 allocation matrix ---
+  // Load parameters (snapshot frozen at quotation time, or current)
+  let params = quot.parameters_snapshot;
+  if (typeof params === 'string') try { params = JSON.parse(params); } catch { params = null; }
+  if (!params) {
+    const { rows: pRows } = await conn.query('SELECT category, key, value FROM parameters');
+    params = {};
+    for (const r of pRows) {
+      if (!params[r.category]) params[r.category] = [];
+      params[r.category].push({ key: r.key, value: Number(r.value) });
+    }
+  }
+
+  // --- Fixed-scope: allocation matrix ---
   if (quot.type === 'project' || quot.type === 'fixed_scope') {
-    const { rows: allocCost } = await conn.query(
-      `SELECT COALESCE(SUM(
-         qa.weekly_hours * COALESCE(qp.weeks, 0) * COALESCE(ql.cost_hour, 0)
-       ), 0)::numeric AS total_cost
+    // Load lines (profiles) with full data to (re)compute cost_hour if needed
+    const { rows: lines } = await conn.query(
+      `SELECT sort_order, level, country, bilingual, stack, modality, cost_hour,
+              hours_per_week, duration_months, quantity
+       FROM quotation_lines WHERE quotation_id = $1 ORDER BY sort_order`,
+      [quotationId],
+    );
+    // Load phases
+    const { rows: phases } = await conn.query(
+      'SELECT id, sort_order, weeks FROM quotation_phases WHERE quotation_id = $1 ORDER BY sort_order',
+      [quotationId],
+    );
+
+    // Enrich lines: recalculate cost_hour from params if it's 0
+    for (const line of lines) {
+      if (!Number(line.cost_hour)) {
+        line.cost_hour = calc.calcCostHour(
+          line.level, line.country, line.bilingual, line.stack, params,
+        );
+      }
+    }
+
+    // Build allocation matrix: try relational table first, then metadata JSONB
+    // Shape: array of { lineIdx, phaseIdx, weeklyHours }
+    let allocEntries = [];
+
+    // Strategy A: relational table (quotation_allocations)
+    const { rows: relAllocs } = await conn.query(
+      `SELECT qa.line_sort_order, qp.sort_order AS phase_sort, qa.weekly_hours
        FROM quotation_allocations qa
        JOIN quotation_phases qp ON qp.id = qa.phase_id
-       JOIN quotation_lines ql ON ql.quotation_id = qa.quotation_id
-                               AND ql.sort_order = qa.line_sort_order
        WHERE qa.quotation_id = $1`,
       [quotationId],
     );
-    let totalCost = Number(allocCost[0].total_cost || 0);
-
-    // Fallback to V1 if no allocations exist
-    if (totalCost <= 0) {
-      const { rows: v1 } = await conn.query(
-        `SELECT COALESCE(SUM(
-           COALESCE(cost_hour, 0) * COALESCE(hours_per_week, 0) * 4.333
-           * COALESCE(duration_months, 1) * COALESCE(quantity, 1)
-         ), 0)::numeric AS total_cost
-         FROM quotation_lines WHERE quotation_id = $1`,
-        [quotationId],
-      );
-      totalCost = Number(v1[0].total_cost || 0);
+    if (relAllocs.length > 0) {
+      allocEntries = relAllocs.map(r => ({
+        lineIdx: r.line_sort_order,
+        phaseIdx: r.phase_sort,
+        weeklyHours: Number(r.weekly_hours || 0),
+      }));
     }
 
-    // Apply buffer + warranty from parameters → costProtected
-    let params = quot.parameters_snapshot;
-    if (!params) {
-      const { rows: pRows } = await conn.query('SELECT category, key, value FROM parameters');
-      params = {};
-      for (const r of pRows) {
-        if (!params[r.category]) params[r.category] = [];
-        params[r.category].push({ key: r.key, value: r.value });
+    // Strategy B: metadata.allocation JSONB
+    if (allocEntries.length === 0) {
+      const meta = typeof quot.metadata === 'string' ? JSON.parse(quot.metadata) : (quot.metadata || {});
+      const alloc = meta.allocation;
+      if (alloc && typeof alloc === 'object') {
+        for (const [lineIdxStr, phaseMap] of Object.entries(alloc)) {
+          if (!phaseMap || typeof phaseMap !== 'object') continue;
+          for (const [phaseIdxStr, hoursRaw] of Object.entries(phaseMap)) {
+            const hrs = Number(hoursRaw || 0);
+            if (hrs > 0) {
+              allocEntries.push({
+                lineIdx: Number(lineIdxStr),
+                phaseIdx: Number(phaseIdxStr),
+                weeklyHours: hrs,
+              });
+            }
+          }
+        }
       }
     }
-    const calc = require('../utils/calc');
+
+    // Compute totalCost from allocation: weeklyHours × weeks × cost_hour
+    let totalCost = 0;
+    for (const entry of allocEntries) {
+      const line = lines.find(l => l.sort_order === entry.lineIdx);
+      const phase = phases.find(p => p.sort_order === entry.phaseIdx);
+      if (!line || !phase) continue;
+      totalCost += entry.weeklyHours * Number(phase.weeks || 0) * Number(line.cost_hour || 0);
+    }
+
+    // Strategy C: V1 staff-aug-style formula as last resort
+    if (totalCost <= 0) {
+      for (const line of lines) {
+        totalCost += Number(line.cost_hour || 0) * Number(line.hours_per_week || 0) * 4.333
+          * Number(line.duration_months || 1) * Number(line.quantity || 1);
+      }
+    }
+
+    // Apply buffer + warranty → costProtected
     const fin = calc.calcProjectFinancials(totalCost, params);
     return { totalCost, costProtected: fin.costProtected };
   }
