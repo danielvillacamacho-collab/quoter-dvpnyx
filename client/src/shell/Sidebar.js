@@ -9,7 +9,7 @@ import {
   Contact, MessageSquare, Target, ChevronRight,
   Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
   GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
-  UserCircle, ClipboardCheck, Zap,
+  UserCircle, ClipboardCheck, Zap, HeartPulse,
 } from 'lucide-react';
 import cx from './Sidebar.module.css';
 
@@ -55,6 +55,7 @@ const ICONS = {
   '/dashboard/me':              LayoutDashboard,
   '/time/admin':                ClipboardCheck,
   '/deviations':                Activity,
+  '/project-health':            HeartPulse,
 };
 
 /** Build the grouped nav model. */
@@ -109,6 +110,7 @@ export function buildGroups(isAdmin, hasEmployee = false, isStaff = false, isLea
         { path: '/resource-requests', label: 'Solicitudes' },
         { path: '/assignments',       label: 'Asignaciones' },
         { path: '/capacity/planner',  label: 'Planner' },
+        { path: '/project-health',   label: 'Salud de proyectos' },
       ],
     },
     {
