@@ -429,7 +429,7 @@ router.post('/:contract_id/status-reports', requireRole('superadmin', 'admin', '
          FROM time_entries te
          JOIN assignments a ON a.id = te.assignment_id
         WHERE a.contract_id = $1
-          AND te.entry_date <= $2
+          AND te.work_date <= $2
           AND te.deleted_at IS NULL
         GROUP BY te.employee_id`,
       [contract_id, cutoff],
