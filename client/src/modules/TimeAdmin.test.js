@@ -9,6 +9,9 @@ import TimeAdmin from './TimeAdmin';
 import * as apiV2 from '../utils/apiV2';
 
 jest.mock('../utils/apiV2');
+jest.mock('../AuthContext', () => ({
+  useAuth: () => ({ isAdmin: true }),
+}));
 jest.mock('../shell/FilterableSelect', () => {
   const React = require('react');
   return function FilterableSelect({ value, onChange, options, placeholder }) {
