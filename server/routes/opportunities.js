@@ -894,6 +894,7 @@ router.post('/:id/status', async (req, res) => {
     }
 
     let quotationSideEffects = null;
+    let wonQuotationTotalUsd = null;
     if (new_status === 'closed_won') {
       const { rows: qrows } = await connection.query(
         `SELECT id, status, type, project_name, currency FROM quotations WHERE id=$1 AND opportunity_id=$2`,
@@ -919,16 +920,25 @@ router.post('/:id/status', async (req, res) => {
         `SELECT id FROM contracts WHERE opportunity_id=$1 AND deleted_at IS NULL`,
         [req.params.id],
       );
+
+      // El total de la cotización ganadora se calcula con GREATEST de
+      // quotation_lines.total (staff_aug) y quotation_milestones.amount
+      // (fixed_scope) — mismo criterio que GET /:id (ver fix #cb92b9f).
+      // Usamos este total tanto para crear el contrato como para
+      // sobrescribir booking_amount_usd / weighted_amount_usd (el monto
+      // inicial era solo de referencia: lo que vale es la cotización).
+      const { rows: totalRow } = await connection.query(
+        `SELECT GREATEST(
+                  COALESCE((SELECT SUM(total) FROM quotation_lines
+                             WHERE quotation_id = $1), 0),
+                  COALESCE((SELECT SUM(amount) FROM quotation_milestones
+                             WHERE quotation_id = $1 AND deleted_at IS NULL), 0)
+                )::numeric AS total`,
+        [winning.id],
+      );
+      wonQuotationTotalUsd = Number(totalRow[0].total || 0);
+
       if (!existingContract.length) {
-        // total_value_usd = SUM(quotation_lines.total) — quotations no tiene
-        // total_usd como columna (ver fix #61). Si la cotización no tiene
-        // líneas, queda en 0 y el operations_owner lo edita después.
-        const { rows: totalRow } = await connection.query(
-          `SELECT COALESCE(SUM(total), 0)::numeric AS total
-             FROM quotation_lines WHERE quotation_id=$1`,
-          [winning.id],
-        );
-        const totalValueUsd = Number(totalRow[0].total || 0);
         // Mapeo: si la oportunidad tiene contract_type, úsalo. Sino, inferir
         // del type de la cotización ganadora (legacy behavior).
         const contractType = current.contract_type || (winning.type === 'fixed_scope' ? 'project' : 'capacity');
@@ -949,7 +959,7 @@ router.post('/:id/status', async (req, res) => {
             startDate,
             current.account_owner_id,
             current.squad_id,
-            totalValueUsd,
+            wonQuotationTotalUsd,
             winning.currency || 'USD',
             req.user.id,
             JSON.stringify({ source_system: 'opportunity_won', auto_generated: true }),
@@ -1003,6 +1013,8 @@ router.post('/:id/status', async (req, res) => {
                                  END,
           loss_reason          = COALESCE($11, loss_reason),
           loss_reason_detail   = COALESCE($12, loss_reason_detail),
+          booking_amount_usd   = COALESCE($13::numeric, booking_amount_usd),
+          weighted_amount_usd  = COALESCE($13::numeric, weighted_amount_usd),
           updated_at           = NOW()
         WHERE id=$10 RETURNING *`,
       [
@@ -1018,6 +1030,11 @@ router.post('/:id/status', async (req, res) => {
         req.params.id,
         new_status === 'closed_lost' && loss_reason ? loss_reason : null,
         new_status === 'closed_lost' && loss_reason_detail ? String(loss_reason_detail).trim() : null,
+        // Al ganar, sobrescribimos booking_amount_usd y weighted_amount_usd
+        // con el total real de la cotización ganadora. El valor inicial
+        // ingresado al crear la oportunidad era solo de referencia comercial.
+        // En closed_won probability=100, así que weighted = booking.
+        new_status === 'closed_won' ? wonQuotationTotalUsd : null,
       ],
     );
 
