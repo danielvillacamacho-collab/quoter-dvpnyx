@@ -126,16 +126,12 @@ router.get('/', async (req, res) => {
       });
     }
 
-    // ── Capacity auto-REAL: sum prorated client_rate per month ──
-    // For capacity contracts, the REAL revenue is derived automatically
-    // from actual assignments and their rate history. The manually
-    // declared plan stays as the Projected/Plan value.
-    // When rate history exists, it uses the applicable rate per day based
-    // on effective_date. Falls back to assignment.client_rate if no history.
+    // ── Capacity: query assignments + rate history (before FX load) ──
     const capacityIds = contracts.filter((c) => c.type === 'capacity').map((c) => c.id);
-    const capacityReals = new Map(); // contract_id → { yyyymm → amount }
+    let capAsg = [];
+    let rateHistoryByAsg = new Map();
     if (capacityIds.length) {
-      const { rows: capAsg } = await pool.query(
+      const { rows } = await pool.query(
         `SELECT a.id, a.contract_id, a.start_date, a.end_date, a.client_rate,
                 a.client_rate_currency
            FROM assignments a
@@ -145,9 +141,8 @@ router.get('/', async (req, res) => {
             AND a.client_rate IS NOT NULL`,
         [capacityIds],
       );
-      // Load rate history for all these assignments in one query.
+      capAsg = rows;
       const asgIds = capAsg.map((a) => a.id);
-      let rateHistoryByAsg = new Map();
       if (asgIds.length) {
         const { rows: rateRows } = await pool.query(
           `SELECT assignment_id, effective_date, client_rate, client_rate_currency
@@ -164,69 +159,18 @@ router.get('/', async (req, res) => {
           });
         }
       }
-
-      // Build month-by-month proration for each capacity assignment.
-      for (const a of capAsg) {
-        const fallbackRate = Number(a.client_rate);
-        if (!fallbackRate) continue;
-        const history = rateHistoryByAsg.get(a.id);
-        const hasHistory = history && history.length > 0;
-        const aStart = new Date(a.start_date);
-        const aEnd = a.end_date ? new Date(a.end_date) : null;
-
-        for (const m of months) {
-          const year = Number(m.slice(0, 4));
-          const month = Number(m.slice(4)); // 1-indexed
-          const dim = new Date(year, month, 0).getDate();
-          const monthStart = new Date(year, month - 1, 1);
-          const monthEnd = new Date(year, month - 1, dim);
-          // Overlap check
-          if (aStart > monthEnd) continue;
-          if (aEnd && aEnd < monthStart) continue;
-          const activeStart = aStart > monthStart ? aStart : monthStart;
-          const activeEnd = aEnd && aEnd < monthEnd ? aEnd : monthEnd;
-
-          let monthAmount = 0;
-          if (hasHistory && history.length > 1) {
-            // Day-by-day calculation when multiple rates exist.
-            // Group consecutive days with same rate for efficiency.
-            let curDay = new Date(activeStart);
-            while (curDay <= activeEnd) {
-              const dayRate = rateForDate(history, curDay) || fallbackRate;
-              // Find how many consecutive days have this same rate.
-              let streak = 1;
-              const nextDay = new Date(curDay);
-              nextDay.setDate(nextDay.getDate() + 1);
-              while (nextDay <= activeEnd) {
-                const nr = rateForDate(history, nextDay) || fallbackRate;
-                if (nr !== dayRate) break;
-                streak++;
-                nextDay.setDate(nextDay.getDate() + 1);
-              }
-              monthAmount += dayRate * streak / dim;
-              curDay.setDate(curDay.getDate() + streak);
-            }
-          } else {
-            // Single rate (or no history) — simple proration.
-            const rate = hasHistory ? history[0].rate : fallbackRate;
-            const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
-            monthAmount = rate * daysActive / dim;
-          }
-
-          const prorated = parseFloat(monthAmount.toFixed(4));
-          if (!capacityReals.has(a.contract_id)) capacityReals.set(a.contract_id, {});
-          const byMonth = capacityReals.get(a.contract_id);
-          byMonth[m] = (byMonth[m] || 0) + prorated;
-        }
-      }
     }
 
-    // Cargar TODOS los rates relevantes — todas las monedas que aparecen
-    // en los contratos + display_currency. Carga una sola query y el
-    // helper buildRatesMap maneja fallback al rate más reciente disponible.
+    // ── Load ALL FX rates (contracts + assignment rate currencies + display) ──
+    // Must happen BEFORE capacity proration so we can convert assignment
+    // rates (e.g. COP) to the contract's original_currency before summing.
     const ratesNeeded = new Set([displayCurrency]);
     contracts.forEach((c) => {
       const ccy = String(c.original_currency || 'USD').toUpperCase();
+      if (ccy !== 'USD') ratesNeeded.add(ccy);
+    });
+    capAsg.forEach((a) => {
+      const ccy = String(a.client_rate_currency || 'USD').toUpperCase();
       if (ccy !== 'USD') ratesNeeded.add(ccy);
     });
     const fxList = ratesNeeded.size > 0
@@ -236,6 +180,82 @@ router.get('/', async (req, res) => {
         )).rows
       : [];
     const rates = fxUtils.buildRatesMap(fxList);
+
+    // ── Capacity auto-REAL: sum prorated client_rate per month ──
+    // For capacity contracts, the REAL revenue is derived automatically
+    // from actual assignments and their rate history. The manually
+    // declared plan stays as the Projected/Plan value.
+    // When rate history exists, it uses the applicable rate per day based
+    // on effective_date. Falls back to assignment.client_rate if no history.
+    // IMPORTANT: rates are in client_rate_currency (e.g. COP). We convert
+    // to the contract's original_currency before accumulating so the
+    // downstream display-currency conversion works correctly.
+    const contractCcyMap = new Map();
+    contracts.forEach((c) => contractCcyMap.set(c.id, String(c.original_currency || 'USD').toUpperCase()));
+    const capacityReals = new Map(); // contract_id → { yyyymm → amount in contract currency }
+    for (const a of capAsg) {
+      const fallbackRate = Number(a.client_rate);
+      if (!fallbackRate) continue;
+      const history = rateHistoryByAsg.get(a.id);
+      const hasHistory = history && history.length > 0;
+      const aStart = new Date(a.start_date);
+      const aEnd = a.end_date ? new Date(a.end_date) : null;
+      const rateCcy = String(a.client_rate_currency || 'USD').toUpperCase();
+      const contractCcy = contractCcyMap.get(a.contract_id) || 'USD';
+
+      for (const m of months) {
+        const year = Number(m.slice(0, 4));
+        const month = Number(m.slice(4)); // 1-indexed
+        const dim = new Date(year, month, 0).getDate();
+        const monthStart = new Date(year, month - 1, 1);
+        const monthEnd = new Date(year, month - 1, dim);
+        // Overlap check
+        if (aStart > monthEnd) continue;
+        if (aEnd && aEnd < monthStart) continue;
+        const activeStart = aStart > monthStart ? aStart : monthStart;
+        const activeEnd = aEnd && aEnd < monthEnd ? aEnd : monthEnd;
+
+        let monthAmount = 0;
+        if (hasHistory && history.length > 1) {
+          // Day-by-day calculation when multiple rates exist.
+          // Group consecutive days with same rate for efficiency.
+          let curDay = new Date(activeStart);
+          while (curDay <= activeEnd) {
+            const dayRate = rateForDate(history, curDay) || fallbackRate;
+            // Find how many consecutive days have this same rate.
+            let streak = 1;
+            const nextDay = new Date(curDay);
+            nextDay.setDate(nextDay.getDate() + 1);
+            while (nextDay <= activeEnd) {
+              const nr = rateForDate(history, nextDay) || fallbackRate;
+              if (nr !== dayRate) break;
+              streak++;
+              nextDay.setDate(nextDay.getDate() + 1);
+            }
+            monthAmount += dayRate * streak / dim;
+            curDay.setDate(curDay.getDate() + streak);
+          }
+        } else {
+          // Single rate (or no history) — simple proration.
+          const rate = hasHistory ? history[0].rate : fallbackRate;
+          const daysActive = Math.round((activeEnd - activeStart) / 86400000) + 1;
+          monthAmount = rate * daysActive / dim;
+        }
+
+        // Convert from assignment's rate currency to contract's original
+        // currency so downstream FX (contract→display) works correctly.
+        // e.g. COP 11,993,520 → USD 2,999 (if 1 USD = 4,000 COP).
+        let prorated = parseFloat(monthAmount.toFixed(4));
+        if (rateCcy !== contractCcy) {
+          const conv = fxUtils.convert(prorated, rateCcy, contractCcy, m, rates);
+          prorated = conv.amount != null ? parseFloat(conv.amount.toFixed(4)) : prorated;
+        }
+
+        if (!capacityReals.has(a.contract_id)) capacityReals.set(a.contract_id, {});
+        const byMonth = capacityReals.get(a.contract_id);
+        byMonth[m] = (byMonth[m] || 0) + prorated;
+      }
+    }
 
     // Para cada celda construimos:
     //   amount_original (en contract.original_currency)

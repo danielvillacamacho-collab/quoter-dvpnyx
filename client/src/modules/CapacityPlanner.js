@@ -345,7 +345,7 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
           role_title:           data.role_title   || '',
           notes:                data.notes        || '',
           status:               data.status       || 'planned',
-          client_rate:          data.client_rate  != null ? String(data.client_rate) : '',
+          client_rate:          data.client_rate  != null ? String(Number(data.client_rate)) : '',
           client_rate_currency: data.client_rate_currency || data.contract_currency || 'USD',
         });
       })
