@@ -585,7 +585,7 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
   try {
     await conn.query('BEGIN');
     const { rows: cRows } = await conn.query(
-      `SELECT id, type, total_value_usd FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT id, type, total_value_usd, original_currency FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
       [contract_id],
     );
     if (!cRows.length) {
@@ -688,9 +688,36 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
         }
       }
     } else {
-      // No-project: real_usd directo.
+      // No-project: real_usd directo (in original currency), OR real_display
+      // (in the UI's display currency) which gets converted to original.
+      const realDisplayProvided = Object.prototype.hasOwnProperty.call(body, 'real_display');
       const realUsdProvided = Object.prototype.hasOwnProperty.call(body, 'real_usd');
-      if (realUsdProvided) {
+      if (realDisplayProvided && body.display_currency) {
+        // Convert from display currency → original currency via FX rates.
+        if (body.real_display == null) {
+          finalRealUsd = null;
+        } else {
+          const fxUtils = require('../utils/fx');
+          const ccyOrig = String(contract.original_currency || 'USD').toUpperCase();
+          const ccyDisp = String(body.display_currency).toUpperCase();
+          if (ccyOrig === ccyDisp) {
+            finalRealUsd = Number(body.real_display);
+          } else {
+            const { rows: rateRows } = await conn.query(
+              `SELECT yyyymm, currency, usd_rate FROM exchange_rates
+                WHERE currency IN ($1, $2) ORDER BY yyyymm ASC`,
+              [ccyOrig, ccyDisp],
+            );
+            const rates = fxUtils.buildRatesMap(rateRows);
+            const converted = fxUtils.convert(Number(body.real_display), ccyDisp, ccyOrig, yyyymm, rates);
+            if (converted.amount == null) {
+              await conn.query('ROLLBACK');
+              return res.status(400).json({ error: `No hay tasa de cambio configurada para convertir ${ccyDisp} → ${ccyOrig} en ${yyyymm}. Configúrala en Parámetros.` });
+            }
+            finalRealUsd = converted.amount;
+          }
+        }
+      } else if (realUsdProvided) {
         finalRealUsd = body.real_usd == null ? null : Number(body.real_usd);
       }
     }
@@ -740,7 +767,7 @@ router.post('/:contract_id/:yyyymm/close', async (req, res) => {
     await conn.query('BEGIN');
     // Necesitamos el contract para saber si es project (ahí real viene en pct).
     const { rows: cRows } = await conn.query(
-      `SELECT id, type, total_value_usd FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
+      `SELECT id, type, total_value_usd, original_currency FROM contracts WHERE id=$1 AND deleted_at IS NULL`,
       [contract_id],
     );
     if (!cRows.length) {
