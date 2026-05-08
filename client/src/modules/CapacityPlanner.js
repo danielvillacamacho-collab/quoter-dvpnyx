@@ -4,6 +4,7 @@ import { apiGet, apiPost, apiPut } from '../utils/apiV2';
 import CandidatesModal from './CandidatesModal';
 import BulkAssignModal from './BulkAssignModal';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 
 /**
  * Capacity Planner — US-PLN-1 (timeline) + US-PLN-2 (metric cards).
@@ -487,7 +488,7 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                   </div>
                   <div>
                     <label style={ms.label}>Tarifa actual</label>
-                    <input style={ms.input} type="number" min="0" step="0.01" value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Tarifa mensual" />
+                    <NumberInput style={ms.input} value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Tarifa mensual" />
                   </div>
                 </div>
                 {/* Agregar nueva tarifa futura */}
@@ -506,7 +507,7 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                       </div>
                       <div>
                         <label style={ms.label}>Tarifa</label>
-                        <input style={ms.input} type="number" min="0" step="0.01" value={newRate.client_rate} onChange={(e) => setNewRate((r) => ({ ...r, client_rate: e.target.value }))} />
+                        <NumberInput style={ms.input} value={newRate.client_rate} onChange={(e) => setNewRate((r) => ({ ...r, client_rate: e.target.value }))} />
                       </div>
                     </div>
                     <div style={{ marginBottom: 6 }}>
