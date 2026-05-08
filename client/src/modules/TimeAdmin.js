@@ -269,7 +269,7 @@ export default function TimeAdmin() {
     try {
       if (!selectedEmpId) { setErrorMsg('Selecciona un empleado primero'); return; }
       const r = await apiPost('/api/time-entries/copy-week', {
-        employee_id: Number(selectedEmpId),
+        employee_id: selectedEmpId,
         source_week_start: iso(prev),
       });
       if (r?.skipped?.length) {
