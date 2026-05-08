@@ -143,15 +143,17 @@ router.get('/planner', async (req, res) => {
 
     const { rows: employeeRows } = await pool.query(
       `SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
-              e.end_date, e.weekly_capacity_hours, a.name AS area_name,
-              (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE)) AS inactive
+              e.start_date, e.end_date, e.weekly_capacity_hours, a.name AS area_name,
+              (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE)) AS inactive,
+              (e.start_date IS NOT NULL AND e.start_date > CURRENT_DATE) AS pending_start
          FROM employees e
          LEFT JOIN areas a ON a.id = e.area_id
          WHERE ${activeWhere.join(' AND ')}
        UNION
        SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
-              e.end_date, e.weekly_capacity_hours, a.name AS area_name,
-              true AS inactive
+              e.start_date, e.end_date, e.weekly_capacity_hours, a.name AS area_name,
+              true AS inactive,
+              false AS pending_start
          FROM employees e
          LEFT JOIN areas a ON a.id = e.area_id
          WHERE e.deleted_at IS NULL
@@ -321,8 +323,10 @@ router.get('/planner', async (req, res) => {
         area_id: e.area_id,
         area_name: e.area_name,
         status: e.status,
+        start_date: e.start_date instanceof Date ? formatDateUTC(e.start_date) : (e.start_date ? String(e.start_date).slice(0, 10) : null),
         end_date: e.end_date instanceof Date ? formatDateUTC(e.end_date) : (e.end_date || null),
         inactive: !!e.inactive,
+        pending_start: !!e.pending_start,
         weekly_capacity_hours: Number(e.weekly_capacity_hours),
         assignments: as,
         weekly: actual_weekly,
@@ -440,15 +444,17 @@ router.get('/planner/export', async (req, res) => {
     }
     const { rows: employeeRows } = await pool.query(
       `SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
-              e.end_date, e.weekly_capacity_hours, a.name AS area_name,
-              (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE)) AS inactive
+              e.start_date, e.end_date, e.weekly_capacity_hours, a.name AS area_name,
+              (e.status = 'terminated' OR (e.end_date IS NOT NULL AND e.end_date < CURRENT_DATE)) AS inactive,
+              (e.start_date IS NOT NULL AND e.start_date > CURRENT_DATE) AS pending_start
          FROM employees e
          LEFT JOIN areas a ON a.id = e.area_id
          WHERE ${activeWhere.join(' AND ')}
        UNION
        SELECT e.id, e.first_name, e.last_name, e.level, e.area_id, e.status,
-              e.end_date, e.weekly_capacity_hours, a.name AS area_name,
-              true AS inactive
+              e.start_date, e.end_date, e.weekly_capacity_hours, a.name AS area_name,
+              true AS inactive,
+              false AS pending_start
          FROM employees e
          LEFT JOIN areas a ON a.id = e.area_id
          WHERE e.deleted_at IS NULL

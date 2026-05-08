@@ -635,7 +635,13 @@ function UnassignedBar({ r }) {
   );
 }
 
-function EmployeeRow({ emp, weeks, onOpen, inactive }) {
+function fmtDDMM(isoDate) {
+  if (!isoDate) return '';
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+function EmployeeRow({ emp, weeks, onOpen, inactive, pending }) {
   // Index assignments by week for O(1) lookup when rendering.
   const byWeek = useMemo(() => {
     const map = new Map();
@@ -671,6 +677,15 @@ function EmployeeRow({ emp, weeks, onOpen, inactive }) {
               Inactivo
             </span>
           )}
+          {pending && emp.start_date && (
+            <span style={{
+              fontSize: 9.5, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+              background: 'var(--ds-accent, #6B5B95)', color: '#fff',
+              textTransform: 'uppercase', letterSpacing: 0.4, flexShrink: 0,
+            }}>
+              Ingresa {fmtDDMM(emp.start_date)}
+            </span>
+          )}
         </div>
         <div style={s.empMeta}>{emp.level} · {emp.area_name || '—'}</div>
         <div style={s.empCap}>{emp.weekly_capacity_hours}h/sem</div>
@@ -678,13 +693,21 @@ function EmployeeRow({ emp, weeks, onOpen, inactive }) {
       {weeks.map((w, i) => {
         const weekInfo = emp.weekly[i] || { hours: 0, utilization_pct: 0, bucket: 'idle' };
         const asgs = byWeek.get(i) || [];
-        const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : (inactive ? 'var(--ds-bg-soft, #f9f9f9)' : '#fff');
+        // For pending employees, weeks before their start_date are grayed out (no capacity yet).
+        const beforeStart = pending && emp.start_date && w.start_date < emp.start_date;
+        const cellBg = weekInfo.bucket === 'overbooked'
+          ? 'rgba(251, 220, 220, 0.25)'
+          : (inactive || beforeStart)
+          ? 'var(--ds-bg-soft, #f9f9f9)'
+          : '#fff';
         return (
           <div key={w.index} style={s.weekCell(cellBg)} data-testid={`cell-${emp.id}-${i}`}>
             {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} weekIndex={i} />)}
-            <div style={s.chip(weekInfo.bucket)}>
-              {weekInfo.hours > 0 ? `${weekInfo.utilization_pct}%` : '—'}
-            </div>
+            {!beforeStart && (
+              <div style={s.chip(weekInfo.bucket)}>
+                {weekInfo.hours > 0 ? `${weekInfo.utilization_pct}%` : '—'}
+              </div>
+            )}
             {weekInfo.actual_hours > 0 && (
               <div style={{ fontSize: 9, color: 'var(--ds-text-dim, #888)', fontStyle: 'italic', marginTop: 1, fontFamily: 'var(--font-mono, inherit)' }}>
                 real: {weekInfo.actual_hours}h
@@ -1321,7 +1344,8 @@ export default function CapacityPlanner() {
   const projects = useMemo(() => buildProjectsView(data), [data]);
 
   // Empleados separados en activos e inactivos (terminated O con end_date pasado).
-  // Los inactivos siempre van al fondo en su propia sección sombreada, nunca se mezclan con el sort.
+  // Los inactivos siempre van al fondo en su propia sección sombreada.
+  // Los pendientes (start_date futuro) quedan en la lista activa; sus celdas pre-ingreso se bloquean en EmployeeRow.
   const { sortedEmployees, inactiveEmployees } = useMemo(() => {
     const all = data?.employees || [];
     const active   = all.filter((e) => !e.inactive);
@@ -1534,7 +1558,7 @@ export default function CapacityPlanner() {
                     <div style={s.empty}>No hay empleados que cumplan los filtros.</div>
                   )}
                   {sortedEmployees.map((emp) => (
-                    <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />
+                    <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} pending={!!emp.pending_start} />
                   ))}
 
                   {/* Separador + empleados inactivos (terminated con historial en el viewport) */}
