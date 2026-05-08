@@ -530,7 +530,16 @@ router.post('/copy-week', async (req, res) => {
     const created = [];
     const skipped = [];
     for (const e of source) {
-      const newDate = new Date(asDate(String(e.work_date).slice(0, 10)).getTime() + 7 * 86400000);
+      // Handle work_date as either a Date object (some pg driver configs) or a "YYYY-MM-DD" string.
+      const workDateStr = e.work_date instanceof Date
+        ? e.work_date.toISOString().slice(0, 10)
+        : String(e.work_date).slice(0, 10);
+      const baseDate = asDate(workDateStr);
+      if (!baseDate || isNaN(baseDate.getTime())) {
+        skipped.push({ source_id: e.id, reason: 'invalid_work_date' });
+        continue;
+      }
+      const newDate = new Date(baseDate.getTime() + 7 * 86400000);
       const newDateIso = isoDay(newDate);
 
       // Guard rails: future date, authorization, cap, valid assignment
@@ -558,12 +567,16 @@ router.post('/copy-week', async (req, res) => {
       created.push(rows[0].id);
     }
 
+    const srcBase = asDate(source_week_start);
+    const targetWeekStartIso = (srcBase && !isNaN(srcBase.getTime()))
+      ? isoDay(new Date(srcBase.getTime() + 7 * 86400000))
+      : null;
     await emitEvent(conn, {
       event_type: 'time_entry.copied_week', entity_type: 'employee', entity_id: employee_id,
       actor_user_id: req.user.id,
       payload: {
         source_week_start,
-        target_week_start: isoDay(new Date(asDate(source_week_start).getTime() + 7 * 86400000)),
+        target_week_start: targetWeekStartIso,
         copied: created.length, skipped: skipped.length,
       },
       req,
