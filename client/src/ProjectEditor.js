@@ -210,7 +210,7 @@ function StepTeam({ data, onChange, params }) {
                   <FilterableSelect inputStyle={{ ...s.select, fontSize: 11, minWidth: 130 }} value={p.specialty || ''} onChange={e => updateProfile(i, 'specialty', e.target.value)} placeholder="—" options={SPECIALTIES.map(sp => ({ id: sp, label: sp }))} />
                 </td>
                 <td style={s.td}>
-                  <FilterableSelect inputStyle={{ ...s.select, fontSize: 11, width: 60 }} value={p.level || ''} onChange={e => updateProfile(i, 'level', Number(e.target.value))} placeholder="—" options={[1,2,3,4,5,6,7,8,9,10,11].map(n => ({ id: String(n), label: `L${n}` }))} />
+                  <FilterableSelect inputStyle={{ ...s.select, fontSize: 11, width: 60 }} value={p.level ? String(p.level) : ''} onChange={e => updateProfile(i, 'level', Number(e.target.value))} placeholder="—" options={[1,2,3,4,5,6,7,8,9,10,11].map(n => ({ id: String(n), label: `L${n}` }))} />
                 </td>
                 <td style={s.td}>
                   <FilterableSelect inputStyle={{ ...s.select, fontSize: 11, minWidth: 110 }} value={p.country || 'Colombia'} onChange={e => updateProfile(i, 'country', e.target.value)} placeholder="—" options={countries.map(c => ({ id: c, label: c }))} />

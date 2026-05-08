@@ -233,7 +233,7 @@ function ResourceTable({ data, onChange, params, marginOverride }) {
                 <td style={s.td}>
                   <FilterableSelect
                     inputStyle={{ ...s.select, width: 60 }}
-                    value={line.level || ''}
+                    value={line.level ? String(line.level) : ''}
                     onChange={(e) => updateLine(idx, 'level', Number(e.target.value))}
                     aria-label={`Nivel recurso ${idx + 1}`}
                     placeholder="—"
