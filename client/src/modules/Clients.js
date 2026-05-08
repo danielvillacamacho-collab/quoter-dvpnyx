@@ -5,6 +5,7 @@ import FilterableSelect from '../shell/FilterableSelect';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
+import { LATAM_COUNTRIES } from '../utils/countries';
 
 /* ========== styles ========== */
 const s = {
@@ -33,13 +34,6 @@ const TIERS = [
   { value: 'smb',        label: 'SMB' },
 ];
 
-// Países de Latinoamérica en orden alfabético (incluye Caribe hispano + Brasil).
-const LATAM_COUNTRIES = [
-  'Argentina', 'Belice', 'Bolivia', 'Brasil', 'Chile', 'Colombia', 'Costa Rica',
-  'Cuba', 'Ecuador', 'El Salvador', 'Guatemala', 'Guyana', 'Haití', 'Honduras',
-  'México', 'Nicaragua', 'Panamá', 'Paraguay', 'Perú', 'Puerto Rico',
-  'República Dominicana', 'Surinam', 'Uruguay', 'Venezuela',
-];
 
 const EMPTY = {
   name: '', legal_name: '', country: '', industry: '', tier: '',

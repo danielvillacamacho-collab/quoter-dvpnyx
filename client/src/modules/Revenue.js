@@ -23,6 +23,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom';
 import { apiGet, apiPut, apiPost } from '../utils/apiV2';
 import FilterableSelect from '../shell/FilterableSelect';
+import { COUNTRY_OPTIONS } from '../utils/countries';
 
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`);
 
@@ -413,9 +414,15 @@ export default function Revenue() {
           clearable
           options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
         />
-        <input type="text" placeholder="País (CO, MX, …)" maxLength={3}
-               value={filters.country} onChange={(e) => setFilter('country', e.target.value)}
-               style={{ ...s.inp, width: 110 }} aria-label="País" />
+        <FilterableSelect
+          value={filters.country}
+          onChange={(e) => setFilter('country', e.target.value)}
+          inputStyle={{ ...s.inp, width: 160 }}
+          aria-label="País"
+          placeholder="Todos los países"
+          clearable
+          options={COUNTRY_OPTIONS}
+        />
         {(filters.type || filters.owner_id || filters.country) && (
           <button type="button" onClick={() => setFilters({ type: '', owner_id: '', country: '' })}
                   style={{ ...s.inp, cursor: 'pointer', color: 'var(--purple-dark)', fontWeight: 600 }}>
