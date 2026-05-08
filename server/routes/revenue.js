@@ -246,6 +246,7 @@ router.get('/', async (req, res) => {
       const cells = {};
       const ccyOrig = String(c.original_currency || 'USD').toUpperCase();
       const isCapacity = c.type === 'capacity';
+      const isResell = c.type === 'resell';
       const capReal = isCapacity ? (capacityReals.get(c.id) || {}) : null;
       let row_proj_disp = 0; let row_real_disp = 0;
       let row_proj_orig = 0; let row_real_orig = 0;
@@ -263,7 +264,8 @@ router.get('/', async (req, res) => {
           : (cell?.real_usd != null ? Number(cell.real_usd) : null);
 
         // Skip empty cells (no plan AND no real).
-        if (!cell && !isCapacity) { cells[m] = null; return; }
+        // Capacity and resell always show cells so users can enter data.
+        if (!cell && !isCapacity && !isResell) { cells[m] = null; return; }
         if (!cell && isCapacity && autoRealOrig === 0) { cells[m] = null; return; }
 
         const projConv = fxUtils.convert(projOrig, ccyOrig, displayCurrency, m, rates);
@@ -597,9 +599,10 @@ router.put('/:contract_id/:yyyymm', async (req, res) => {
       `SELECT * FROM revenue_periods WHERE contract_id=$1 AND yyyymm=$2 FOR UPDATE`,
       [contract_id, yyyymm],
     );
-    // For capacity contracts, auto-create the row if it doesn't exist
-    // (projected is computed from assignments, so no manual plan needed).
-    if (!existing.length && contract.type === 'capacity') {
+    // For capacity and resell contracts, auto-create the row if it doesn't exist.
+    // Capacity: projected is computed from assignments, so no manual plan needed.
+    // Resell: revenue depends on client consumption; plan is optional.
+    if (!existing.length && (contract.type === 'capacity' || contract.type === 'resell')) {
       const { rows: created } = await conn.query(
         `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, created_by, updated_by)
            VALUES ($1, $2, 0, $3, $3)

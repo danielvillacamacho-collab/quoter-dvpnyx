@@ -105,6 +105,7 @@ const formatPctForInput = (pctFraction) => pctFraction == null
 function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onCloseMonth }) {
   const isClosed = cell?.status === 'closed';
   const isProject = contract?.type === 'project';
+  const isResell = contract?.type === 'resell';
   const isAutoReal = !!cell?.auto_real;
   const planExists = cell != null;
   const totalValueUsd = Number(contract?.total_value_usd || 0);
@@ -217,16 +218,16 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
                 min="0" max={isProject ? '100' : undefined}
                 style={s.cellInput}
                 value={real}
-                disabled={isClosed || !planExists}
+                disabled={isClosed || (!planExists && !isResell)}
                 onChange={(e) => setReal(e.target.value)}
                 onBlur={flushReal}
-                placeholder={planExists ? (isProject ? '0' : '—') : 'declara plan'}
+                placeholder={isResell ? '—' : (planExists ? (isProject ? '0' : '—') : 'declara plan')}
                 aria-label={`Real ${yyyymm}`}
-                title={!planExists
+                title={(!planExists && !isResell)
                   ? 'Declara primero el plan de reconocimiento del contrato'
                   : (isProject ? 'Avance acumulado del proyecto a fin de mes (0-100%). El revenue del mes se calcula como (este % − % del mes anterior) × valor del contrato.' : `Monto real en ${ccyOrig}`)}
               />
-              {planExists && (
+              {(planExists || isResell) && (
                 <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
                   {isProject
                     ? (liveLocalUsd != null ? fmtMoney(liveLocalUsd, ccyOrig) : (realOrig != null ? fmtMoney(realOrig, ccyOrig) : '—'))
@@ -246,7 +247,7 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
         )}
         {!isAutoReal && (isClosed ? (
           <span style={s.closedBadge}>✓ Cerrado</span>
-        ) : (real !== '' && real === realInitial.current && planExists && (
+        ) : (real !== '' && real === realInitial.current && (planExists || isResell) && (
           <button type="button"
                   onClick={() => onCloseMonth(contract.id, yyyymm, real, isProject)}
                   style={{ fontSize: 10, color: 'var(--purple-dark)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0, textAlign: 'right' }}>
