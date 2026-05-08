@@ -226,7 +226,7 @@ function TeamPanel({ data, onChange, params }) {
                   <FilterableSelect inputStyle={{ ...s.select, minWidth: 120 }} value={p.specialty || ''} onChange={e => updateProfile(i, 'specialty', e.target.value)} aria-label={`Especialidad perfil ${i + 1}`} placeholder="—" options={SPECIALTIES.map(sp => ({ id: sp, label: sp }))} />
                 </td>
                 <td style={s.td}>
-                  <FilterableSelect inputStyle={{ ...s.select, width: 56 }} value={p.level || ''} onChange={e => updateProfile(i, 'level', Number(e.target.value))} aria-label={`Nivel perfil ${i + 1}`} placeholder="—" options={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(n => ({ id: String(n), label: `L${n}` }))} />
+                  <FilterableSelect inputStyle={{ ...s.select, width: 56 }} value={p.level ? String(p.level) : ''} onChange={e => updateProfile(i, 'level', Number(e.target.value))} aria-label={`Nivel perfil ${i + 1}`} placeholder="—" options={[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(n => ({ id: String(n), label: `L${n}` }))} />
                 </td>
                 <td style={s.td}>
                   <FilterableSelect inputStyle={{ ...s.select, minWidth: 100 }} value={p.country || 'Colombia'} onChange={e => updateProfile(i, 'country', e.target.value)} aria-label={`País perfil ${i + 1}`} placeholder="—" options={countries.map(c => ({ id: c, label: c }))} />
