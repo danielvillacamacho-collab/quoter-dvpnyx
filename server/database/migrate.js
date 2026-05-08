@@ -2693,6 +2693,35 @@ const migrate = async () => {
           OR last_name  <> initcap(lower(last_name))
     `);
 
+    // Backfill: para oportunidades ganadas, sobrescribir
+    // booking_amount_usd y weighted_amount_usd con el total de la
+    // cotización ganadora (GREATEST de quotation_lines.total para
+    // staff_aug y quotation_milestones.amount para fixed_scope). El
+    // monto inicial del proceso comercial era solo de referencia: lo
+    // que vale es la cotización ganadora. Idempotente: el WHERE filtra
+    // por diferencia, así que correr dos veces da el mismo resultado.
+    await client.query(`
+      UPDATE opportunities o
+         SET booking_amount_usd  = qt.total_usd,
+             weighted_amount_usd = qt.total_usd,
+             updated_at          = NOW()
+        FROM (
+          SELECT q.id AS quotation_id,
+                 GREATEST(
+                   COALESCE((SELECT SUM(total) FROM quotation_lines
+                              WHERE quotation_id = q.id), 0),
+                   COALESCE((SELECT SUM(amount) FROM quotation_milestones
+                              WHERE quotation_id = q.id AND deleted_at IS NULL), 0)
+                 )::numeric AS total_usd
+            FROM quotations q
+        ) qt
+       WHERE o.status = 'closed_won'
+         AND o.winning_quotation_id IS NOT NULL
+         AND o.winning_quotation_id = qt.quotation_id
+         AND o.deleted_at IS NULL
+         AND ABS(COALESCE(o.booking_amount_usd, 0) - qt.total_usd) > 0.01
+    `);
+
     await client.query('COMMIT');
 
     // Embeddings se aplican fuera de la transacción principal: si fallan
