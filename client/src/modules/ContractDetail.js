@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPut, apiPost } from '../utils/apiV2';
 import { useAuth } from '../AuthContext';
-import { formatSubtype, typeRequiresSubtype } from '../utils/contractSubtype';
+import { formatSubtype, typeRequiresSubtype, subtypesFor } from '../utils/contractSubtype';
 import FilterableSelect from '../shell/FilterableSelect';
 
 const s = {
@@ -43,6 +43,11 @@ export default function ContractDetail() {
   // Pickers para admin: lista de usuarios con rol admin/lead para roles del contrato.
   const [userCandidates, setUserCandidates] = useState([]);
   const [savingDM, setSavingDM] = useState(false);
+  // Inline edit state for Resumen card.
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [editErr, setEditErr] = useState('');
   // Kick-off form state.
   const [kickOffDate, setKickOffDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [kickOffBusy, setKickOffBusy] = useState(false);
@@ -87,6 +92,44 @@ export default function ContractDetail() {
       // eslint-disable-next-line no-alert
       alert('Error guardando delivery manager: ' + (e.message || ''));
     } finally { setSavingDM(false); }
+  };
+
+  const startEdit = () => {
+    setEditForm({
+      contract_subtype: contract.contract_subtype || '',
+      account_owner_id: contract.account_owner_id || '',
+      delivery_manager_id: contract.delivery_manager_id || '',
+      capacity_manager_id: contract.capacity_manager_id || '',
+      start_date: contract.start_date ? String(contract.start_date).slice(0, 10) : '',
+      end_date: contract.end_date ? String(contract.end_date).slice(0, 10) : '',
+      notes: contract.notes || '',
+    });
+    setEditErr('');
+    setEditing(true);
+  };
+
+  const cancelEdit = () => { setEditing(false); setEditErr(''); };
+
+  const setField = (k, v) => setEditForm((prev) => ({ ...prev, [k]: v }));
+
+  const saveEdit = async () => {
+    setSavingEdit(true);
+    setEditErr('');
+    try {
+      const payload = {};
+      if (editForm.contract_subtype !== (contract.contract_subtype || '')) payload.contract_subtype = editForm.contract_subtype || null;
+      if (editForm.account_owner_id !== (contract.account_owner_id || '')) payload.account_owner_id = editForm.account_owner_id || null;
+      if (editForm.delivery_manager_id !== (contract.delivery_manager_id || '')) payload.delivery_manager_id = editForm.delivery_manager_id || null;
+      if (editForm.capacity_manager_id !== (contract.capacity_manager_id || '')) payload.capacity_manager_id = editForm.capacity_manager_id || null;
+      if (editForm.start_date !== (contract.start_date ? String(contract.start_date).slice(0, 10) : '')) payload.start_date = editForm.start_date || null;
+      if (editForm.end_date !== (contract.end_date ? String(contract.end_date).slice(0, 10) : '')) payload.end_date = editForm.end_date || null;
+      if (editForm.notes !== (contract.notes || '')) payload.notes = editForm.notes || null;
+      if (Object.keys(payload).length === 0) { setEditing(false); return; }
+      await apiPut(`/api/contracts/${id}`, payload);
+      await reload();
+      setEditing(false);
+    } catch (e) { setEditErr(e.body?.error || e.message || 'Error al guardar'); }
+    finally { setSavingEdit(false); }
   };
 
   const runKickOff = async (force = false) => {
@@ -155,59 +198,129 @@ export default function ContractDetail() {
       )}
 
       <div style={s.card}>
-        <h2 style={s.h2}>Resumen</h2>
-        <div style={s.grid}>
-          <Field label="Subtipo">
-            {contract.contract_subtype
-              ? formatSubtype(contract.contract_subtype)
-              : (typeRequiresSubtype(contract.type) ? '— Sin especificar —' : null)}
-          </Field>
-          <Field label="Oportunidad">
-            {contract.opportunity_id
-              ? <Link to={`/opportunities/${contract.opportunity_id}`} style={s.link}>{contract.opportunity_name || 'ver'}</Link>
-              : null}
-          </Field>
-          <Field label="Cotización ganadora">
-            {contract.winning_quotation_id
-              ? <Link to={`/quotation/${contract.winning_quotation_id}`} style={s.link}>{contract.winning_quotation_name || 'ver'}</Link>
-              : null}
-          </Field>
-          <Field label="Account owner">{contract.account_owner_name || contract.account_owner_email || contract.account_owner_id}</Field>
-          <Field label="Delivery manager">{contract.delivery_manager_name || contract.delivery_manager_email || (contract.delivery_manager_id ? contract.delivery_manager_id : '— sin asignar —')}</Field>
-          <Field label="Capacity manager">{contract.capacity_manager_name || contract.capacity_manager_email || contract.capacity_manager_id}</Field>
-          <Field label="Solicitudes abiertas">{contract.open_requests_count ?? 0}</Field>
-          <Field label="Asignaciones activas">{contract.active_assignments_count ?? 0}</Field>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <h2 style={{ ...s.h2, margin: 0 }}>Resumen</h2>
+          {isAdmin && !editing && (
+            <button type="button" onClick={startEdit} style={s.btnOutline}>✏️ Editar</button>
+          )}
         </div>
-        {contract.notes && (
-          <div style={{ marginTop: 16 }}>
-            <div style={s.label}>Notas</div>
-            <div style={{ marginTop: 4, fontSize: 13, whiteSpace: 'pre-wrap' }}>{contract.notes}</div>
-          </div>
+
+        {!editing ? (
+          /* ── Read-only view ── */
+          <>
+            <div style={s.grid}>
+              <Field label="Subtipo">
+                {contract.contract_subtype
+                  ? formatSubtype(contract.contract_subtype)
+                  : (typeRequiresSubtype(contract.type) ? '— Sin especificar —' : null)}
+              </Field>
+              <Field label="Oportunidad">
+                {contract.opportunity_id
+                  ? <Link to={`/opportunities/${contract.opportunity_id}`} style={s.link}>{contract.opportunity_name || 'ver'}</Link>
+                  : null}
+              </Field>
+              <Field label="Cotización ganadora">
+                {contract.winning_quotation_id
+                  ? <Link to={`/quotation/${contract.winning_quotation_id}`} style={s.link}>{contract.winning_quotation_name || 'ver'}</Link>
+                  : null}
+              </Field>
+              <Field label="Account owner">{contract.account_owner_name || contract.account_owner_email || contract.account_owner_id}</Field>
+              <Field label="Delivery manager">{contract.delivery_manager_name || contract.delivery_manager_email || (contract.delivery_manager_id ? contract.delivery_manager_id : '— sin asignar —')}</Field>
+              <Field label="Capacity manager">{contract.capacity_manager_name || contract.capacity_manager_email || contract.capacity_manager_id}</Field>
+              <Field label="Fecha inicio">{contract.start_date ? String(contract.start_date).slice(0, 10) : '—'}</Field>
+              <Field label="Fecha fin">{contract.end_date ? String(contract.end_date).slice(0, 10) : '— sin fin —'}</Field>
+              <Field label="Solicitudes abiertas">{contract.open_requests_count ?? 0}</Field>
+              <Field label="Asignaciones activas">{contract.active_assignments_count ?? 0}</Field>
+            </div>
+            {contract.notes && (
+              <div style={{ marginTop: 16 }}>
+                <div style={s.label}>Notas</div>
+                <div style={{ marginTop: 4, fontSize: 13, whiteSpace: 'pre-wrap' }}>{contract.notes}</div>
+              </div>
+            )}
+          </>
+        ) : (
+          /* ── Edit view (admin only) ── */
+          <>
+            <div style={s.grid}>
+              <div>
+                <div style={s.label}>Subtipo</div>
+                <select
+                  value={editForm.contract_subtype}
+                  onChange={(e) => setField('contract_subtype', e.target.value)}
+                  style={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%', marginTop: 4 }}
+                >
+                  <option value="">— Sin especificar —</option>
+                  {subtypesFor(contract.type).map((st) => (
+                    <option key={st.value} value={st.value}>{st.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div style={s.label}>Account owner</div>
+                <FilterableSelect
+                  value={editForm.account_owner_id ? String(editForm.account_owner_id) : ''}
+                  onChange={(e) => setField('account_owner_id', e.target.value || '')}
+                  inputStyle={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
+                  aria-label="Account owner"
+                  placeholder="— Sin asignar —"
+                  options={userCandidates.map((u) => ({ id: String(u.id), label: `${u.name || u.email} (${u.role})` }))}
+                />
+              </div>
+              <div>
+                <div style={s.label}>Delivery manager</div>
+                <FilterableSelect
+                  value={editForm.delivery_manager_id ? String(editForm.delivery_manager_id) : ''}
+                  onChange={(e) => setField('delivery_manager_id', e.target.value || '')}
+                  inputStyle={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
+                  aria-label="Delivery manager"
+                  placeholder="— Sin asignar —"
+                  options={userCandidates.map((u) => ({ id: String(u.id), label: `${u.name || u.email} (${u.role})` }))}
+                />
+              </div>
+              <div>
+                <div style={s.label}>Capacity manager</div>
+                <FilterableSelect
+                  value={editForm.capacity_manager_id ? String(editForm.capacity_manager_id) : ''}
+                  onChange={(e) => setField('capacity_manager_id', e.target.value || '')}
+                  inputStyle={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13 }}
+                  aria-label="Capacity manager"
+                  placeholder="— Sin asignar —"
+                  options={userCandidates.map((u) => ({ id: String(u.id), label: `${u.name || u.email} (${u.role})` }))}
+                />
+              </div>
+              <div>
+                <div style={s.label}>Fecha inicio</div>
+                <input type="date" value={editForm.start_date} onChange={(e) => setField('start_date', e.target.value)}
+                  style={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%', marginTop: 4 }} />
+              </div>
+              <div>
+                <div style={s.label}>Fecha fin</div>
+                <input type="date" value={editForm.end_date} onChange={(e) => setField('end_date', e.target.value)}
+                  style={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%', marginTop: 4 }} />
+              </div>
+            </div>
+            <div style={{ marginTop: 16 }}>
+              <div style={s.label}>Notas</div>
+              <textarea
+                value={editForm.notes}
+                onChange={(e) => setField('notes', e.target.value)}
+                rows={3}
+                style={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%', marginTop: 4, resize: 'vertical', boxSizing: 'border-box' }}
+                placeholder="Notas del contrato…"
+              />
+            </div>
+            {editErr && <div style={{ color: 'var(--danger, #dc2626)', fontSize: 13, marginTop: 8 }}>{editErr}</div>}
+            <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+              <button type="button" onClick={saveEdit} disabled={savingEdit}
+                style={{ background: 'var(--purple-dark)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', opacity: savingEdit ? 0.6 : 1 }}>
+                {savingEdit ? 'Guardando…' : 'Guardar cambios'}
+              </button>
+              <button type="button" onClick={cancelEdit} disabled={savingEdit} style={s.btnOutline}>Cancelar</button>
+            </div>
+          </>
         )}
       </div>
-
-      {/* Admin: asignar delivery manager. */}
-      {isAdmin && (
-        <div style={s.card}>
-          <h2 style={s.h2}>Delivery manager</h2>
-          <div style={{ fontSize: 12, color: 'var(--text-light)', marginBottom: 8 }}>
-            El delivery manager es quien hace el kick-off (sembrar solicitudes desde la cotización) y administra los recursos del contrato.
-          </div>
-          <FilterableSelect
-            value={contract.delivery_manager_id || ''}
-            onChange={(e) => updateDeliveryManager(e.target.value || null)}
-            disabled={savingDM}
-            inputStyle={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, minWidth: 320 }}
-            aria-label="Delivery manager"
-            placeholder="— Sin delivery manager asignado —"
-            options={userCandidates.map((u) => ({
-              id: String(u.id),
-              label: `${u.name || u.email} ${u.role !== 'lead' ? `(${u.role})` : ''}`,
-            }))}
-          />
-          {savingDM && <span style={{ fontSize: 12, color: 'var(--text-light)', marginLeft: 10 }}>Guardando…</span>}
-        </div>
-      )}
 
       {/* Kick-off panel: visible si el contrato tiene cotización ganadora y el
           caller es admin / DM / account_owner / capacity_manager. */}
