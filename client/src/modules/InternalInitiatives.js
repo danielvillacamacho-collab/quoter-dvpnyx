@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 import { useAuth } from '../AuthContext';
 
 /**
@@ -122,7 +123,7 @@ function CreateModal({ areas, onClose, onSaved }) {
           <div style={{ display: 'flex', gap: 8 }}>
             <div style={{ flex: 1 }}>
               <label style={ds.label}>Presupuesto USD *</label>
-              <input style={ds.input} type="number" min="0" step="1" value={form.budget_usd} onChange={(e) => set('budget_usd', e.target.value)} required />
+              <NumberInput style={ds.input} value={form.budget_usd} onChange={(e) => set('budget_usd', e.target.value)} required />
             </div>
             <div style={{ flex: 1 }}>
               <label style={ds.label}>Horas estimadas</label>

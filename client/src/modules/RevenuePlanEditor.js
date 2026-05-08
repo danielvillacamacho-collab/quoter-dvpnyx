@@ -14,6 +14,7 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPut } from '../utils/apiV2';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 
 const fmtUSD = (n) => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n)));
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(2)}%`);
@@ -261,8 +262,7 @@ export default function RevenuePlanEditor() {
         <div style={s.metaGrid}>
           <div style={s.metaLabel}>Valor del contrato</div>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <input
-              type="number" step="any" min="0"
+            <NumberInput
               value={contractValue}
               onChange={(e) => setContractValue(e.target.value)}
               placeholder="0"
@@ -380,8 +380,7 @@ export default function RevenuePlanEditor() {
                     </>
                   ) : (
                     <td style={s.td}>
-                      <input
-                        type="number" step="any" min="0"
+                      <NumberInput
                         value={e.usd ?? ''}
                         onChange={(ev) => setEntryField(m, 'usd', ev.target.value)}
                         placeholder="0"

@@ -16,6 +16,7 @@ import {
 } from '@dnd-kit/core';
 import { apiGet, apiPost } from '../utils/apiV2';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 import { STAGES, STAGE_BY_ID, computeTransitionWarnings } from '../utils/pipeline';
 
 const fmtUSD = (n) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(Number(n || 0));
@@ -408,13 +409,13 @@ export default function PipelineKanban() {
           clearable
           options={users.map((u) => ({ id: String(u.id), label: u.name || u.email }))}
         />
-        <input
-          type="number" min={0} step={1000}
+        <NumberInput
           placeholder="Monto mínimo USD"
           aria-label="Monto mínimo USD"
           value={filters.min_amount_usd}
           onChange={(e) => setFilter('min_amount_usd', e.target.value)}
           style={{ ...s.filterInput, width: 130 }}
+          decimals={false}
         />
         <input
           type="date" aria-label="Cierre desde" value={filters.from_expected_close}

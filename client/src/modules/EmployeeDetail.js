@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { apiGet, apiPut, apiPost, apiDelete } from '../utils/apiV2';
 import StatusBadge from '../shell/StatusBadge';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 import { useAuth } from '../AuthContext';
 import {
   VALID_CURRENCIES, formatPeriod, normalizePeriod, currentPeriod,
@@ -365,14 +366,11 @@ export default function EmployeeDetail() {
             </div>
             <div>
               <label style={s.label}>Costo bruto *</label>
-              <input
-                type="number"
-                min="0"
-                step="any"
+              <NumberInput
                 style={{ padding: '8px 12px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%' }}
                 value={costForm.gross_cost}
                 onChange={(e) => setCostForm({ ...costForm, gross_cost: e.target.value })}
-                placeholder="Ej: 12500000"
+                placeholder="Ej: 12,500,000"
                 aria-label="Costo bruto"
                 required
               />
