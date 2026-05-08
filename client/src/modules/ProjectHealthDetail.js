@@ -231,6 +231,11 @@ function BaselineForm({ contractId, onCreated }) {
           <option value="percent_complete">Percent Complete</option>
           <option value="level_of_effort">Level of Effort</option>
         </select>
+        <p style={{ fontSize: 12, color: 'var(--ds-text-soft)', marginTop: 6, lineHeight: 1.5 }}>
+          {method === 'weighted_milestones' && '🎯 Weighted Milestones — El avance se calcula según el peso asignado a cada fase/hito del proyecto. Ideal para proyectos con entregables claros y diferenciados en complejidad.'}
+          {method === 'percent_complete' && '📊 Percent Complete — El PM estima directamente el porcentaje de avance de cada paquete de trabajo. Más flexible pero depende del criterio subjetivo del equipo.'}
+          {method === 'level_of_effort' && '⏱️ Level of Effort — El avance se mide proporcionalmente al tiempo transcurrido. Útil para actividades de soporte continuo (QA, PM, soporte) donde no hay entregables discretos.'}
+        </p>
       </div>
       {error && <p style={{ color: 'red', fontSize: 13, marginBottom: 8 }}>{error}</p>}
       <button style={ds.btn} onClick={handleCreate} disabled={saving}>
