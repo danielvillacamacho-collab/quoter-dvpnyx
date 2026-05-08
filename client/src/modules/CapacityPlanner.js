@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { apiGet, apiPost, apiPut } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import CandidatesModal from './CandidatesModal';
 import BulkAssignModal from './BulkAssignModal';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 
 /**
  * Capacity Planner — US-PLN-1 (timeline) + US-PLN-2 (metric cards).
@@ -195,6 +196,29 @@ const s = {
     gap: 6,
   },
 
+  // Empleados con ingreso futuro (start_date > hoy) — separador + fila tintada
+  pendingSeparator: (weeksLen) => ({
+    display: 'grid',
+    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
+    borderTop: '2px solid var(--ds-border, #ddd)',
+    background: 'var(--ds-accent-soft, #f0f4ff)',
+    minHeight: 32,
+  }),
+  pendingSeparatorCell: {
+    padding: '6px 12px',
+    fontSize: 11,
+    fontWeight: 600,
+    color: 'var(--ds-accent-text, #4338ca)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    position: 'sticky',
+    left: 0,
+    background: 'var(--ds-accent-soft, #f0f4ff)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+  },
+
   empty: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))', fontSize: 14 },
   error: { padding: 16, background: 'var(--ds-bad-soft, #fff0f0)', color: 'oklch(0.45 0.18 25)', borderRadius: 'var(--ds-radius, 8px)', fontSize: 13 },
   loading: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))' },
@@ -344,7 +368,7 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
           role_title:           data.role_title   || '',
           notes:                data.notes        || '',
           status:               data.status       || 'planned',
-          client_rate:          data.client_rate  != null ? String(data.client_rate) : '',
+          client_rate:          data.client_rate  != null ? String(Number(data.client_rate)) : '',
           client_rate_currency: data.client_rate_currency || data.contract_currency || 'USD',
         });
       })
@@ -466,6 +490,21 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                           </span>
                           {r.reason && <span style={{ color: 'var(--ds-text-soft)', marginLeft: 6, fontStyle: 'italic' }}>({r.reason})</span>}
                         </div>
+                        <button type="button" title="Eliminar esta tarifa"
+                          onClick={async () => {
+                            // eslint-disable-next-line no-alert
+                            if (!window.confirm(`¿Eliminar tarifa ${new Intl.NumberFormat('en-US', { style: 'currency', currency: r.client_rate_currency || 'USD', maximumFractionDigits: 0 }).format(r.client_rate)} desde ${r.effective_date?.slice(0, 10)}?`)) return;
+                            try {
+                              await apiDelete(`/api/assignments/${assignmentId}/rate-history/${r.id}`);
+                              loadRateHistory();
+                              // Refresh assignment data so client_rate reflects the latest remaining entry.
+                              const updated = await apiGet(`/api/assignments/${assignmentId}`);
+                              set('client_rate', updated.client_rate != null ? String(Number(updated.client_rate)) : '');
+                            } catch (ex) { setErr(ex.message); }
+                          }}
+                          style={{ background: 'none', border: 'none', color: 'var(--danger, #dc2626)', cursor: 'pointer', fontSize: 14, padding: '2px 6px', lineHeight: 1 }}>
+                          ×
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -487,26 +526,59 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                   </div>
                   <div>
                     <label style={ms.label}>Tarifa actual</label>
-                    <input style={ms.input} type="number" min="0" step="0.01" value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Tarifa mensual" />
+                    <NumberInput style={ms.input} value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Tarifa mensual" />
                   </div>
                 </div>
                 {/* Agregar nueva tarifa futura */}
                 {!showAddRate ? (
-                  <button type="button" onClick={() => { setShowAddRate(true); setNewRate({ effective_date: '', client_rate: '', reason: '' }); }}
+                  <button type="button" onClick={() => {
+                    // Auto-suggest next day after the latest entry to avoid gaps.
+                    let suggestedDate = '';
+                    if (rateHistory.length > 0) {
+                      const lastDate = rateHistory[rateHistory.length - 1].effective_date?.slice(0, 10);
+                      if (lastDate) {
+                        const d = new Date(lastDate + 'T12:00:00');
+                        d.setDate(d.getDate() + 1);
+                        suggestedDate = d.toISOString().slice(0, 10);
+                      }
+                    }
+                    setShowAddRate(true);
+                    setNewRate({ effective_date: suggestedDate, client_rate: '', reason: '' });
+                  }}
                     style={{ fontSize: 11, color: 'var(--ds-accent, var(--purple-dark))', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0', fontWeight: 600 }}>
                     + Agregar cambio de tarifa
                   </button>
                 ) : (
                   <div style={{ background: '#fff', borderRadius: 6, padding: 10, marginTop: 6, border: '1px solid var(--ds-border, #ddd)' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Nueva tarifa</div>
+                    {(() => {
+                      // Client-side validation: detect duplicate date or gap.
+                      const dateVal = newRate.effective_date;
+                      const existingDates = rateHistory.map((r) => r.effective_date?.slice(0, 10));
+                      const isDuplicate = dateVal && existingDates.includes(dateVal);
+                      const lastDate = existingDates.length > 0 ? existingDates[existingDates.length - 1] : null;
+                      let hasGap = false;
+                      if (dateVal && lastDate) {
+                        const nextDay = new Date(lastDate + 'T12:00:00');
+                        nextDay.setDate(nextDay.getDate() + 1);
+                        const expected = nextDay.toISOString().slice(0, 10);
+                        hasGap = dateVal !== expected && dateVal > lastDate;
+                      }
+                      const dateError = isDuplicate
+                        ? 'Ya existe una tarifa en esta fecha. Elimínala primero.'
+                        : hasGap
+                          ? `La fecha debe ser el día siguiente a la última tarifa (${(() => { const d = new Date(lastDate + 'T12:00:00'); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })()}).`
+                          : null;
+                      return (<>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 6 }}>
                       <div>
                         <label style={ms.label}>Desde</label>
-                        <input style={ms.input} type="date" value={newRate.effective_date} onChange={(e) => setNewRate((r) => ({ ...r, effective_date: e.target.value }))} />
+                        <input style={{ ...ms.input, ...(dateError ? { borderColor: 'var(--danger, #dc2626)' } : {}) }} type="date" value={newRate.effective_date} onChange={(e) => setNewRate((r) => ({ ...r, effective_date: e.target.value }))} />
+                        {dateError && <div style={{ fontSize: 10, color: 'var(--danger, #dc2626)', marginTop: 2 }}>{dateError}</div>}
                       </div>
                       <div>
                         <label style={ms.label}>Tarifa</label>
-                        <input style={ms.input} type="number" min="0" step="0.01" value={newRate.client_rate} onChange={(e) => setNewRate((r) => ({ ...r, client_rate: e.target.value }))} />
+                        <NumberInput style={ms.input} value={newRate.client_rate} onChange={(e) => setNewRate((r) => ({ ...r, client_rate: e.target.value }))} />
                       </div>
                     </div>
                     <div style={{ marginBottom: 6 }}>
@@ -514,7 +586,7 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                       <input style={ms.input} type="text" value={newRate.reason} onChange={(e) => setNewRate((r) => ({ ...r, reason: e.target.value }))} placeholder="Ej: Ascenso a L7, Incremento anual" />
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button type="button" disabled={savingRate || !newRate.effective_date || !newRate.client_rate}
+                      <button type="button" disabled={savingRate || !newRate.effective_date || !newRate.client_rate || !!dateError}
                         onClick={async () => {
                           setSavingRate(true);
                           try {
@@ -535,6 +607,8 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                       </button>
                       <button type="button" onClick={() => setShowAddRate(false)} style={{ ...ms.btnGhost, fontSize: 11, padding: '5px 12px' }}>Cancelar</button>
                     </div>
+                      </>);
+                    })()}
                   </div>
                 )}
                 <div style={{ fontSize: 10, color: 'var(--ds-text-soft, var(--text-light))', marginTop: 6 }}>
@@ -584,7 +658,13 @@ function UnassignedBar({ r }) {
   );
 }
 
-function EmployeeRow({ emp, weeks, onOpen, inactive }) {
+function fmtDDMM(isoDate) {
+  if (!isoDate) return '';
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+function EmployeeRow({ emp, weeks, onOpen, inactive, pending }) {
   // Index assignments by week for O(1) lookup when rendering.
   const byWeek = useMemo(() => {
     const map = new Map();
@@ -600,10 +680,14 @@ function EmployeeRow({ emp, weeks, onOpen, inactive }) {
 
   const rowStyle = inactive
     ? { ...s.row(weeks.length), opacity: 0.6, background: 'var(--ds-bg-soft, #f9f9f9)' }
+    : pending
+    ? { ...s.row(weeks.length), background: 'var(--ds-accent-soft, #f5f3ff)' }
     : s.row(weeks.length);
 
   const empCellStyle = inactive
     ? { ...s.empCell, background: 'var(--ds-bg-soft, #f4f4f4)' }
+    : pending
+    ? { ...s.empCell, background: 'var(--ds-accent-soft, #ede9fe)' }
     : s.empCell;
 
   return (
@@ -620,6 +704,15 @@ function EmployeeRow({ emp, weeks, onOpen, inactive }) {
               Inactivo
             </span>
           )}
+          {pending && emp.start_date && (
+            <span style={{
+              fontSize: 9.5, fontWeight: 700, padding: '1px 5px', borderRadius: 4,
+              background: 'var(--ds-accent, #6B5B95)', color: '#fff',
+              textTransform: 'uppercase', letterSpacing: 0.4, flexShrink: 0,
+            }}>
+              Ingresa {fmtDDMM(emp.start_date)}
+            </span>
+          )}
         </div>
         <div style={s.empMeta}>{emp.level} · {emp.area_name || '—'}</div>
         <div style={s.empCap}>{emp.weekly_capacity_hours}h/sem</div>
@@ -627,13 +720,21 @@ function EmployeeRow({ emp, weeks, onOpen, inactive }) {
       {weeks.map((w, i) => {
         const weekInfo = emp.weekly[i] || { hours: 0, utilization_pct: 0, bucket: 'idle' };
         const asgs = byWeek.get(i) || [];
-        const cellBg = weekInfo.bucket === 'overbooked' ? 'rgba(251, 220, 220, 0.25)' : (inactive ? 'var(--ds-bg-soft, #f9f9f9)' : '#fff');
+        // For pending employees, weeks before their start_date are grayed out (no capacity yet).
+        const beforeStart = pending && emp.start_date && w.start_date < emp.start_date;
+        const cellBg = weekInfo.bucket === 'overbooked'
+          ? 'rgba(251, 220, 220, 0.25)'
+          : (inactive || beforeStart)
+          ? 'var(--ds-bg-soft, #f9f9f9)'
+          : '#fff';
         return (
           <div key={w.index} style={s.weekCell(cellBg)} data-testid={`cell-${emp.id}-${i}`}>
             {asgs.map((a) => <AssignmentBar key={a.id} a={a} onOpen={onOpen} capacity={emp.weekly_capacity_hours} weekIndex={i} />)}
-            <div style={s.chip(weekInfo.bucket)}>
-              {weekInfo.hours > 0 ? `${weekInfo.utilization_pct}%` : '—'}
-            </div>
+            {!beforeStart && (
+              <div style={s.chip(weekInfo.bucket)}>
+                {weekInfo.hours > 0 ? `${weekInfo.utilization_pct}%` : '—'}
+              </div>
+            )}
             {weekInfo.actual_hours > 0 && (
               <div style={{ fontSize: 9, color: 'var(--ds-text-dim, #888)', fontStyle: 'italic', marginTop: 1, fontFamily: 'var(--font-mono, inherit)' }}>
                 real: {weekInfo.actual_hours}h
@@ -1269,13 +1370,18 @@ export default function CapacityPlanner() {
   const wks = data?.weeks || [];
   const projects = useMemo(() => buildProjectsView(data), [data]);
 
-  // Empleados separados en activos e inactivos (terminated O con end_date pasado).
-  // Los inactivos siempre van al fondo en su propia sección sombreada, nunca se mezclan con el sort.
-  const { sortedEmployees, inactiveEmployees } = useMemo(() => {
+  // Empleados separados en tres grupos:
+  //   active:   ni inactivos ni con ingreso futuro → sort normal
+  //   pending:  start_date en el futuro → sección "Próximo ingreso", ordenada por fecha
+  //   inactive: terminated o end_date pasado → siempre al fondo
+  const { sortedEmployees, pendingEmployees, inactiveEmployees } = useMemo(() => {
     const all = data?.employees || [];
-    const active   = all.filter((e) => !e.inactive);
     const inactive = all.filter((e) => e.inactive)
                         .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
+    const pending  = all.filter((e) => !e.inactive && e.pending_start)
+                        .sort((a, b) => (a.start_date || '').localeCompare(b.start_date || '') ||
+                                        (a.full_name  || '').localeCompare(b.full_name  || ''));
+    const active   = all.filter((e) => !e.inactive && !e.pending_start);
 
     const sorted = (sortWeek === null || sortWeek === undefined)
       ? active
@@ -1285,7 +1391,7 @@ export default function CapacityPlanner() {
           return sortDir === 'asc' ? pctA - pctB : pctB - pctA;
         });
 
-    return { sortedEmployees: sorted, inactiveEmployees: inactive };
+    return { sortedEmployees: sorted, pendingEmployees: pending, inactiveEmployees: inactive };
   }, [data, sortWeek, sortDir]);
 
   return (
@@ -1485,6 +1591,24 @@ export default function CapacityPlanner() {
                   {sortedEmployees.map((emp) => (
                     <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />
                   ))}
+
+                  {/* Separador + empleados con ingreso futuro */}
+                  {pendingEmployees.length > 0 && (
+                    <>
+                      <div style={s.pendingSeparator(wks.length)}>
+                        <div style={s.pendingSeparatorCell}>
+                          <span>🕐 Próximo ingreso</span>
+                          <span style={{ fontWeight: 400, fontSize: 10.5 }}>({pendingEmployees.length})</span>
+                        </div>
+                        {wks.map((w) => (
+                          <div key={w.index} style={{ borderLeft: '1px solid var(--ds-border, #eee)' }} />
+                        ))}
+                      </div>
+                      {pendingEmployees.map((emp) => (
+                        <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} pending />
+                      ))}
+                    </>
+                  )}
 
                   {/* Separador + empleados inactivos (terminated con historial en el viewport) */}
                   {inactiveEmployees.length > 0 && (
