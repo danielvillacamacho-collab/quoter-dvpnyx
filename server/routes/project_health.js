@@ -117,6 +117,30 @@ async function syncRevenueFromProgress(conn, contractId, yyyymm, realPct, totalV
   }
 }
 
+// ──────────── GET /baseline-preview ────────────
+// Returns pre-computed BAC values so the frontend can show them before creation.
+
+router.get('/:contract_id/baseline-preview', requireRole('superadmin', 'admin', 'lead'), async (req, res) => {
+  try {
+    const contract = await loadContract(pool, req.params.contract_id);
+    if (!contract) return res.status(404).json({ error: 'Contrato no encontrado' });
+
+    const bacRevenue = Number(contract.total_value_usd || 0);
+    let bacCostAuto = 0;
+    if (contract.winning_quotation_id) {
+      bacCostAuto = await computeQuotationCost(pool, contract.winning_quotation_id);
+    }
+
+    res.json({
+      bac_revenue: bacRevenue,
+      bac_cost_auto: bacCostAuto,
+      original_currency: contract.original_currency || 'USD',
+      has_winning_quotation: !!contract.winning_quotation_id,
+      needs_manual_cost: bacCostAuto <= 0,
+    });
+  } catch (err) { serverError(res, 'GET /projects/:contract_id/baseline-preview', err); }
+});
+
 // ──────────── POST /baseline ────────────
 
 router.post('/:contract_id/baseline', requireRole('superadmin', 'admin', 'lead'), async (req, res) => {

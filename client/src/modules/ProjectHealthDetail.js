@@ -200,26 +200,35 @@ function BaselineForm({ contractId, onCreated }) {
   const [method, setMethod] = useState('weighted_milestones');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [contractInfo, setContractInfo] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [manualCost, setManualCost] = useState('');
 
-  // Load contract info to show BAC preview
+  // Load baseline preview (BAC Revenue + BAC Cost auto-calc)
   useEffect(() => {
-    apiGet(`/api/contracts/${contractId}`)
-      .then(c => setContractInfo(c))
+    apiGet(`/api/projects/${contractId}/baseline-preview`)
+      .then(p => setPreview(p))
       .catch(() => {});
   }, [contractId]);
 
-  const contractValue = contractInfo ? Number(contractInfo.total_value_usd || 0) : 0;
-  const currency = contractInfo?.original_currency || 'USD';
+  const bacRevenue = preview ? Number(preview.bac_revenue || 0) : 0;
+  const bacCostAuto = preview ? Number(preview.bac_cost_auto || 0) : 0;
+  const currency = preview?.original_currency || 'USD';
+  const needsManualCost = preview?.needs_manual_cost;
+
+  // Effective BAC cost: auto if available, else manual input
+  const effectiveCost = bacCostAuto > 0 ? bacCostAuto : Number(manualCost || 0);
+  const canSubmit = bacRevenue > 0 && effectiveCost > 0;
 
   const handleCreate = async () => {
     try {
       setSaving(true);
       setError('');
-      await apiPost(`/api/projects/${contractId}/baseline`, {
-        reason,
-        measurement_method: method,
-      });
+      const payload = { reason, measurement_method: method };
+      // Send manual BAC cost only if auto-calc failed
+      if (needsManualCost && Number(manualCost) > 0) {
+        payload.bac_cost_usd = Number(manualCost);
+      }
+      await apiPost(`/api/projects/${contractId}/baseline`, payload);
       if (onCreated) onCreated();
     } catch (e) { setError(e.body?.error || e.message); }
     finally { setSaving(false); }
@@ -232,29 +241,55 @@ function BaselineForm({ contractId, onCreated }) {
         Este proyecto no tiene baseline activo. Crea uno a partir de la cotización ganadora para comenzar a medir EVM.
       </p>
 
-      {contractInfo && (
+      {preview && (
         <div style={{ marginBottom: 16, padding: '12px 16px', background: '#f8fafc', border: '1px solid var(--ds-border)', borderRadius: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ds-text-soft)', textTransform: 'uppercase', marginBottom: 8 }}>Valores del baseline</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div>
               <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>BAC Revenue (valor contrato)</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: contractValue > 0 ? 'var(--ds-accent)' : '#dc2626' }}>
-                {contractValue > 0 ? `${contractValue.toLocaleString()} ${currency}` : 'Sin definir'}
+              <div style={{ fontSize: 16, fontWeight: 700, color: bacRevenue > 0 ? 'var(--ds-accent)' : '#dc2626' }}>
+                {bacRevenue > 0 ? `${bacRevenue.toLocaleString()} ${currency}` : 'Sin definir'}
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>BAC Cost (nómina de la cotización)</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ds-accent)' }}>
-                Se calcula automáticamente
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>cost_hour x horas x meses x cantidad</div>
+              <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>BAC Cost (nómina del proyecto)</div>
+              {bacCostAuto > 0 ? (
+                <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ds-accent)' }}>
+                  {bacCostAuto.toLocaleString()} {currency}
+                  <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--ds-text-soft)' }}>Calculado de la cotización</div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#d97706' }}>
+                  Requiere entrada manual
+                  <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--ds-text-soft)' }}>La cotización no tiene cost_hour en sus líneas</div>
+                </div>
+              )}
             </div>
           </div>
-          {contractValue <= 0 && (
+          {bacRevenue <= 0 && (
             <div style={{ marginTop: 8, fontSize: 12, color: '#dc2626' }}>
               Edita el contrato para definir el valor antes de crear el baseline.
             </div>
           )}
+        </div>
+      )}
+
+      {/* Manual BAC Cost input when auto-calc fails */}
+      {needsManualCost && (
+        <div style={{ marginBottom: 12 }}>
+          <label style={ds.label}>BAC Cost (USD) — costo total autorizado del proyecto</label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={manualCost}
+            onChange={e => setManualCost(e.target.value)}
+            placeholder="Ej: 12000"
+            style={ds.input}
+          />
+          <div style={{ fontSize: 11, color: 'var(--ds-text-soft)', marginTop: 4 }}>
+            Presupuesto total de nómina que se espera gastar en este proyecto. Se usa como referencia para medir eficiencia (CPI).
+          </div>
         </div>
       )}
 
@@ -276,7 +311,7 @@ function BaselineForm({ contractId, onCreated }) {
         </div>
       </div>
       {error && <p style={{ color: 'red', fontSize: 13, marginBottom: 8 }}>{error}</p>}
-      <button style={ds.btn} onClick={handleCreate} disabled={saving || contractValue <= 0}>
+      <button style={ds.btn} onClick={handleCreate} disabled={saving || !canSubmit}>
         {saving ? 'Creando…' : 'Congelar baseline'}
       </button>
     </div>
