@@ -500,6 +500,18 @@ router.put('/:id', adminOnly, async (req, res) => {
       resolvedSubtype = check.value;
     }
 
+    // Validar total_value_usd / original_currency si se envían.
+    if (body.total_value_usd !== undefined) {
+      const v = Number(body.total_value_usd);
+      if (Number.isNaN(v) || v < 0) {
+        return res.status(400).json({ error: 'total_value_usd debe ser un número >= 0' });
+      }
+    }
+    const VALID_CURRENCIES = ['USD', 'COP', 'MXN', 'GTQ', 'EUR'];
+    if (body.original_currency !== undefined && !VALID_CURRENCIES.includes(body.original_currency)) {
+      return res.status(400).json({ error: `original_currency debe ser uno de: ${VALID_CURRENCIES.join(', ')}` });
+    }
+
     const { rows } = await pool.query(
       `UPDATE contracts SET
           name                 = COALESCE($1, name),
@@ -516,8 +528,10 @@ router.put('/:id', adminOnly, async (req, res) => {
           notes                = COALESCE($12, notes),
           tags                 = COALESCE($13, tags),
           metadata             = COALESCE($14::jsonb, metadata),
+          total_value_usd      = COALESCE($15, total_value_usd),
+          original_currency    = COALESCE($16, original_currency),
           updated_at           = NOW()
-        WHERE id=$15 AND deleted_at IS NULL
+        WHERE id=$17 AND deleted_at IS NULL
         RETURNING *`,
       [
         body.name ? String(body.name).trim() : null,
@@ -534,6 +548,8 @@ router.put('/:id', adminOnly, async (req, res) => {
         body.notes ?? null,
         body.tags ?? null,
         body.metadata ? JSON.stringify(body.metadata) : null,
+        body.total_value_usd !== undefined ? Number(body.total_value_usd) : null,
+        body.original_currency ?? null,
         req.params.id,
       ]
     );

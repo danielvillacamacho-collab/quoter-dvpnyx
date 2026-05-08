@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 /**
  * SearchableSelect — combobox que reemplaza a `<select>` cuando hay
@@ -25,8 +25,8 @@ import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
  *   - noResultsText  — mensaje cuando no hay coincidencias (default 'Sin coincidencias')
  *   - placeholder, disabled, required, name, id, aria-label, inputStyle
  *
- * No usa portal: el popover se posiciona con `absolute` debajo del input
- * (limitado a 240px de alto + scroll) — funciona dentro de modales.
+ * No usa portal: el popover se posiciona con `fixed` + getBoundingClientRect
+ * para escapar contenedores con overflow (limitado a 240px de alto + scroll).
  */
 
 // Lowercase + strip diacritics so "banco" == "bánco" == "Banco" (U+0300–U+036F block).
@@ -64,11 +64,32 @@ export default function SearchableSelect({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [highlight, setHighlight] = useState(-1);
+  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 0 });
 
   const selected = useMemo(
     () => options.find((o) => o.id === value) || null,
     [options, value],
   );
+
+  // Calcula posición fixed del dropdown a partir del input.
+  const recalcPos = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setDropPos({ top: r.bottom + 4, left: r.left, width: r.width });
+  }, []);
+
+  // Reposicionar al abrir y al hacer scroll/resize.
+  useEffect(() => {
+    if (!open) return undefined;
+    recalcPos();
+    window.addEventListener('scroll', recalcPos, true);   // capture para scrolls internos
+    window.addEventListener('resize', recalcPos);
+    return () => {
+      window.removeEventListener('scroll', recalcPos, true);
+      window.removeEventListener('resize', recalcPos);
+    };
+  }, [open, recalcPos]);
 
   // Cuando está abierto mostramos lo que el usuario tipea; cuando está
   // cerrado mostramos la etiqueta de la opción seleccionada.
@@ -199,9 +220,12 @@ export default function SearchableSelect({
           id={listId}
           role="listbox"
           style={{
-            position: 'absolute', top: '100%', left: 0, right: 0,
-            zIndex: 50,
-            margin: '4px 0 0',
+            position: 'fixed',
+            top: dropPos.top,
+            left: dropPos.left,
+            width: dropPos.width,
+            zIndex: 9999,
+            margin: 0,
             padding: 0, listStyle: 'none',
             background: '#fff',
             border: '1px solid var(--border)',

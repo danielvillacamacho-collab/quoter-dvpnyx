@@ -894,7 +894,7 @@ router.post('/:id/status', async (req, res) => {
     let quotationSideEffects = null;
     if (new_status === 'closed_won') {
       const { rows: qrows } = await connection.query(
-        `SELECT id, status, type, project_name FROM quotations WHERE id=$1 AND opportunity_id=$2`,
+        `SELECT id, status, type, project_name, currency FROM quotations WHERE id=$1 AND opportunity_id=$2`,
         [winning_quotation_id, req.params.id],
       );
       if (!qrows.length) {
@@ -935,9 +935,9 @@ router.post('/:id/status', async (req, res) => {
           `INSERT INTO contracts (
               name, client_id, opportunity_id, winning_quotation_id,
               type, status, start_date, account_owner_id, squad_id,
-              total_value_usd, created_by, metadata
-            ) VALUES ($1,$2,$3,$4,$5,'planned',$6,$7,$8,$9,$10,$11)
-           RETURNING id, name, type, total_value_usd`,
+              total_value_usd, original_currency, created_by, metadata
+            ) VALUES ($1,$2,$3,$4,$5,'planned',$6,$7,$8,$9,$10,$11,$12)
+           RETURNING id, name, type, total_value_usd, original_currency`,
           [
             winning.project_name || current.name,
             current.client_id,
@@ -948,6 +948,7 @@ router.post('/:id/status', async (req, res) => {
             current.account_owner_id,
             current.squad_id,
             totalValueUsd,
+            winning.currency || 'USD',
             req.user.id,
             JSON.stringify({ source_system: 'opportunity_won', auto_generated: true }),
           ],

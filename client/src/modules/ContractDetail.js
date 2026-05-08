@@ -102,6 +102,8 @@ export default function ContractDetail() {
       capacity_manager_id: contract.capacity_manager_id || '',
       start_date: contract.start_date ? String(contract.start_date).slice(0, 10) : '',
       end_date: contract.end_date ? String(contract.end_date).slice(0, 10) : '',
+      total_value_usd: contract.total_value_usd != null ? String(Number(contract.total_value_usd)) : '',
+      original_currency: contract.original_currency || 'USD',
       notes: contract.notes || '',
     });
     setEditErr('');
@@ -124,6 +126,9 @@ export default function ContractDetail() {
       if (editForm.start_date !== (contract.start_date ? String(contract.start_date).slice(0, 10) : '')) payload.start_date = editForm.start_date || null;
       if (editForm.end_date !== (contract.end_date ? String(contract.end_date).slice(0, 10) : '')) payload.end_date = editForm.end_date || null;
       if (editForm.notes !== (contract.notes || '')) payload.notes = editForm.notes || null;
+      const currentVal = contract.total_value_usd != null ? String(Number(contract.total_value_usd)) : '';
+      if (editForm.total_value_usd !== currentVal) payload.total_value_usd = editForm.total_value_usd ? Number(editForm.total_value_usd) : 0;
+      if (editForm.original_currency !== (contract.original_currency || 'USD')) payload.original_currency = editForm.original_currency;
       if (Object.keys(payload).length === 0) { setEditing(false); return; }
       await apiPut(`/api/contracts/${id}`, payload);
       await reload();
@@ -229,6 +234,12 @@ export default function ContractDetail() {
               <Field label="Capacity manager">{contract.capacity_manager_name || contract.capacity_manager_email || contract.capacity_manager_id}</Field>
               <Field label="Fecha inicio">{contract.start_date ? String(contract.start_date).slice(0, 10) : '—'}</Field>
               <Field label="Fecha fin">{contract.end_date ? String(contract.end_date).slice(0, 10) : '— sin fin —'}</Field>
+              <Field label="Valor del contrato">
+                {Number(contract.total_value_usd) > 0
+                  ? `${Number(contract.total_value_usd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${contract.original_currency || 'USD'}`
+                  : '— Sin definir —'}
+              </Field>
+              <Field label="Moneda">{contract.original_currency || 'USD'}</Field>
               <Field label="Solicitudes abiertas">{contract.open_requests_count ?? 0}</Field>
               <Field label="Asignaciones activas">{contract.active_assignments_count ?? 0}</Field>
             </div>
@@ -288,6 +299,28 @@ export default function ContractDetail() {
                   placeholder="— Sin asignar —"
                   options={userCandidates.map((u) => ({ id: String(u.id), label: `${u.name || u.email} (${u.role})` }))}
                 />
+              </div>
+              <div>
+                <div style={s.label}>Valor del contrato</div>
+                <input type="number" min="0" step="0.01"
+                  value={editForm.total_value_usd}
+                  onChange={(e) => setField('total_value_usd', e.target.value)}
+                  placeholder="0.00"
+                  style={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%', marginTop: 4 }} />
+              </div>
+              <div>
+                <div style={s.label}>Moneda</div>
+                <select
+                  value={editForm.original_currency}
+                  onChange={(e) => setField('original_currency', e.target.value)}
+                  style={{ padding: '7px 10px', border: '1px solid var(--border)', borderRadius: 8, fontSize: 13, width: '100%', marginTop: 4 }}
+                >
+                  <option value="USD">USD</option>
+                  <option value="COP">COP</option>
+                  <option value="MXN">MXN</option>
+                  <option value="GTQ">GTQ</option>
+                  <option value="EUR">EUR</option>
+                </select>
               </div>
               <div>
                 <div style={s.label}>Fecha inicio</div>
