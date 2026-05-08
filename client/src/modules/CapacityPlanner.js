@@ -196,29 +196,6 @@ const s = {
     gap: 6,
   },
 
-  // Empleados con ingreso futuro (start_date > hoy) — separador + fila tintada
-  pendingSeparator: (weeksLen) => ({
-    display: 'grid',
-    gridTemplateColumns: `${LEFT_COL_WIDTH}px repeat(${weeksLen}, minmax(${WEEK_COL_WIDTH}px, 1fr))`,
-    borderTop: '2px solid var(--ds-border, #ddd)',
-    background: 'var(--ds-accent-soft, #f0f4ff)',
-    minHeight: 32,
-  }),
-  pendingSeparatorCell: {
-    padding: '6px 12px',
-    fontSize: 11,
-    fontWeight: 600,
-    color: 'var(--ds-accent-text, #4338ca)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    position: 'sticky',
-    left: 0,
-    background: 'var(--ds-accent-soft, #f0f4ff)',
-    display: 'flex',
-    alignItems: 'center',
-    gap: 6,
-  },
-
   empty: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))', fontSize: 14 },
   error: { padding: 16, background: 'var(--ds-bad-soft, #fff0f0)', color: 'oklch(0.45 0.18 25)', borderRadius: 'var(--ds-radius, 8px)', fontSize: 13 },
   loading: { padding: 40, textAlign: 'center', color: 'var(--ds-text-dim, var(--text-light))' },
@@ -680,14 +657,10 @@ function EmployeeRow({ emp, weeks, onOpen, inactive, pending }) {
 
   const rowStyle = inactive
     ? { ...s.row(weeks.length), opacity: 0.6, background: 'var(--ds-bg-soft, #f9f9f9)' }
-    : pending
-    ? { ...s.row(weeks.length), background: 'var(--ds-accent-soft, #f5f3ff)' }
     : s.row(weeks.length);
 
   const empCellStyle = inactive
     ? { ...s.empCell, background: 'var(--ds-bg-soft, #f4f4f4)' }
-    : pending
-    ? { ...s.empCell, background: 'var(--ds-accent-soft, #ede9fe)' }
     : s.empCell;
 
   return (
@@ -1370,18 +1343,14 @@ export default function CapacityPlanner() {
   const wks = data?.weeks || [];
   const projects = useMemo(() => buildProjectsView(data), [data]);
 
-  // Empleados separados en tres grupos:
-  //   active:   ni inactivos ni con ingreso futuro → sort normal
-  //   pending:  start_date en el futuro → sección "Próximo ingreso", ordenada por fecha
-  //   inactive: terminated o end_date pasado → siempre al fondo
-  const { sortedEmployees, pendingEmployees, inactiveEmployees } = useMemo(() => {
+  // Empleados separados en activos e inactivos (terminated O con end_date pasado).
+  // Los inactivos siempre van al fondo en su propia sección sombreada.
+  // Los pendientes (start_date futuro) quedan en la lista activa; sus celdas pre-ingreso se bloquean en EmployeeRow.
+  const { sortedEmployees, inactiveEmployees } = useMemo(() => {
     const all = data?.employees || [];
+    const active   = all.filter((e) => !e.inactive);
     const inactive = all.filter((e) => e.inactive)
                         .sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
-    const pending  = all.filter((e) => !e.inactive && e.pending_start)
-                        .sort((a, b) => (a.start_date || '').localeCompare(b.start_date || '') ||
-                                        (a.full_name  || '').localeCompare(b.full_name  || ''));
-    const active   = all.filter((e) => !e.inactive && !e.pending_start);
 
     const sorted = (sortWeek === null || sortWeek === undefined)
       ? active
@@ -1391,7 +1360,7 @@ export default function CapacityPlanner() {
           return sortDir === 'asc' ? pctA - pctB : pctB - pctA;
         });
 
-    return { sortedEmployees: sorted, pendingEmployees: pending, inactiveEmployees: inactive };
+    return { sortedEmployees: sorted, inactiveEmployees: inactive };
   }, [data, sortWeek, sortDir]);
 
   return (
@@ -1589,26 +1558,8 @@ export default function CapacityPlanner() {
                     <div style={s.empty}>No hay empleados que cumplan los filtros.</div>
                   )}
                   {sortedEmployees.map((emp) => (
-                    <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} />
+                    <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} pending={!!emp.pending_start} />
                   ))}
-
-                  {/* Separador + empleados con ingreso futuro */}
-                  {pendingEmployees.length > 0 && (
-                    <>
-                      <div style={s.pendingSeparator(wks.length)}>
-                        <div style={s.pendingSeparatorCell}>
-                          <span>🕐 Próximo ingreso</span>
-                          <span style={{ fontWeight: 400, fontSize: 10.5 }}>({pendingEmployees.length})</span>
-                        </div>
-                        {wks.map((w) => (
-                          <div key={w.index} style={{ borderLeft: '1px solid var(--ds-border, #eee)' }} />
-                        ))}
-                      </div>
-                      {pendingEmployees.map((emp) => (
-                        <EmployeeRow key={emp.id} emp={emp} weeks={wks} onOpen={setEditingAssignmentId} pending />
-                      ))}
-                    </>
-                  )}
 
                   {/* Separador + empleados inactivos (terminated con historial en el viewport) */}
                   {inactiveEmployees.length > 0 && (
