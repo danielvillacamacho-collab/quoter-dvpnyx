@@ -623,12 +623,9 @@ router.get('/:contract_id/health', async (req, res) => {
 
 router.get('/portfolio-health', async (req, res) => {
   try {
-    // RBAC scoping: SEE_ALL_ROLES see everything, others see their contracts
-    const seeAll = SEE_ALL_ROLES.has(req.user.role);
-    const whereClause = seeAll
-      ? "c.contract_subtype = 'fixed_scope' AND c.deleted_at IS NULL AND c.status != 'completed'"
-      : "c.contract_subtype = 'fixed_scope' AND c.deleted_at IS NULL AND c.status != 'completed' AND c.account_owner_id = $1";
-    const params = seeAll ? [] : [req.user.id];
+    // All authenticated users can see the portfolio (same visibility as /contracts).
+    const whereClause = "c.contract_subtype = 'fixed_scope' AND c.deleted_at IS NULL AND c.status != 'completed'";
+    const params = [];
 
     const { rows } = await pool.query(
       `SELECT c.id AS contract_id, c.name AS contract_name, c.status,
