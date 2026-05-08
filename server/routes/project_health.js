@@ -67,8 +67,70 @@ async function buildCostMap(conn, employeeIds, cutoffDate) {
   return map;
 }
 
-/** Derive total cost from quotation_lines (cost_hour × hours × months × qty). */
+/**
+ * Derive the "costo protegido" (BAC Cost) from a quotation.
+ *
+ * For fixed-scope (project) quotations the cost comes from the V2 allocation
+ * matrix: SUM(weekly_hours × phase.weeks × line.cost_hour), then apply buffer
+ * + warranty from the parameters snapshot (or current parameters).
+ *
+ * For staff-aug quotations the cost is the V1 formula:
+ *   SUM(cost_hour × hours_per_week × 4.333 × duration_months × quantity).
+ *
+ * Returns { totalCost, costProtected } where costProtected includes contingency.
+ */
 async function computeQuotationCost(conn, quotationId) {
+  // Load quotation type + parameters
+  const { rows: [quot] } = await conn.query(
+    'SELECT type, parameters_snapshot FROM quotations WHERE id = $1',
+    [quotationId],
+  );
+  if (!quot) return { totalCost: 0, costProtected: 0 };
+
+  // --- Fixed-scope: V2 allocation matrix ---
+  if (quot.type === 'project' || quot.type === 'fixed_scope') {
+    const { rows: allocCost } = await conn.query(
+      `SELECT COALESCE(SUM(
+         qa.weekly_hours * COALESCE(qp.weeks, 0) * COALESCE(ql.cost_hour, 0)
+       ), 0)::numeric AS total_cost
+       FROM quotation_allocations qa
+       JOIN quotation_phases qp ON qp.id = qa.phase_id
+       JOIN quotation_lines ql ON ql.quotation_id = qa.quotation_id
+                               AND ql.sort_order = qa.line_sort_order
+       WHERE qa.quotation_id = $1`,
+      [quotationId],
+    );
+    let totalCost = Number(allocCost[0].total_cost || 0);
+
+    // Fallback to V1 if no allocations exist
+    if (totalCost <= 0) {
+      const { rows: v1 } = await conn.query(
+        `SELECT COALESCE(SUM(
+           COALESCE(cost_hour, 0) * COALESCE(hours_per_week, 0) * 4.333
+           * COALESCE(duration_months, 1) * COALESCE(quantity, 1)
+         ), 0)::numeric AS total_cost
+         FROM quotation_lines WHERE quotation_id = $1`,
+        [quotationId],
+      );
+      totalCost = Number(v1[0].total_cost || 0);
+    }
+
+    // Apply buffer + warranty from parameters → costProtected
+    let params = quot.parameters_snapshot;
+    if (!params) {
+      const { rows: pRows } = await conn.query('SELECT category, key, value FROM parameters');
+      params = {};
+      for (const r of pRows) {
+        if (!params[r.category]) params[r.category] = [];
+        params[r.category].push({ key: r.key, value: r.value });
+      }
+    }
+    const calc = require('../utils/calc');
+    const fin = calc.calcProjectFinancials(totalCost, params);
+    return { totalCost, costProtected: fin.costProtected };
+  }
+
+  // --- Staff-aug: V1 formula ---
   const { rows } = await conn.query(
     `SELECT COALESCE(SUM(
        COALESCE(cost_hour, 0) * COALESCE(hours_per_week, 0) * 4.333
@@ -77,7 +139,8 @@ async function computeQuotationCost(conn, quotationId) {
      FROM quotation_lines WHERE quotation_id = $1`,
     [quotationId],
   );
-  return Number(rows[0].total_cost || 0);
+  const totalCost = Number(rows[0].total_cost || 0);
+  return { totalCost, costProtected: totalCost };
 }
 
 /**
@@ -127,13 +190,17 @@ router.get('/:contract_id/baseline-preview', requireRole('superadmin', 'admin', 
 
     const bacRevenue = Number(contract.total_value_usd || 0);
     let bacCostAuto = 0;
+    let costProtected = 0;
     if (contract.winning_quotation_id) {
-      bacCostAuto = await computeQuotationCost(pool, contract.winning_quotation_id);
+      const quotCost = await computeQuotationCost(pool, contract.winning_quotation_id);
+      bacCostAuto = quotCost.costProtected;
+      costProtected = quotCost.costProtected;
     }
 
     res.json({
       bac_revenue: bacRevenue,
       bac_cost_auto: bacCostAuto,
+      cost_protected: costProtected,
       original_currency: contract.original_currency || 'USD',
       has_winning_quotation: !!contract.winning_quotation_id,
       needs_manual_cost: bacCostAuto <= 0,
@@ -192,23 +259,14 @@ router.post('/:contract_id/baseline', requireRole('superadmin', 'admin', 'lead')
     );
     const allocByPhase = new Map(allocations.map(a => [a.phase_id, Number(a.total_weekly)]));
 
-    // Derive BAC Revenue = contract value (manual); BAC Cost = quotation cost or override.
+    // Derive BAC Revenue = contract value (manual); BAC Cost = costo protegido from quotation.
     const bacRevenue = Number(contract.total_value_usd || 0);
-    // BAC Cost: prefer explicit override, else derive from quotation cost_hour data.
-    // cost_hour × hours_per_week × 4.333 × duration_months × quantity per line.
     let bacCost = 0;
     if (req.body.bac_cost_usd) {
       bacCost = Number(req.body.bac_cost_usd);
     } else {
-      const { rows: costRows } = await conn.query(
-        `SELECT COALESCE(SUM(
-           COALESCE(cost_hour, 0) * COALESCE(hours_per_week, 0) * 4.333
-           * COALESCE(duration_months, 1) * COALESCE(quantity, 1)
-         ), 0)::numeric AS total_cost
-         FROM quotation_lines WHERE quotation_id = $1`,
-        [contract.winning_quotation_id],
-      );
-      bacCost = Number(costRows[0].total_cost || 0);
+      const quotCost = await computeQuotationCost(conn, contract.winning_quotation_id);
+      bacCost = quotCost.costProtected;
     }
     if (bacCost <= 0 || bacRevenue <= 0) {
       await conn.query('ROLLBACK');
@@ -980,10 +1038,10 @@ router.post('/:contract_id/backfill-bac-cost', requireRole('superadmin', 'admin'
       return res.status(422).json({ error: 'Sin cotización ganadora' });
     }
 
-    const quotationCost = await computeQuotationCost(conn, contract.winning_quotation_id);
-    if (quotationCost <= 0) {
+    const quotCost = await computeQuotationCost(conn, contract.winning_quotation_id);
+    if (quotCost.costProtected <= 0) {
       await conn.query('ROLLBACK');
-      return res.status(400).json({ error: 'Costo derivado de la cotización es 0. Verifica cost_hour en las líneas.' });
+      return res.status(400).json({ error: 'Costo protegido derivado de la cotización es 0. Verifica cost_hour en las líneas y la matriz de allocations.' });
     }
 
     const { rows: [baseline] } = await conn.query(
@@ -998,7 +1056,7 @@ router.post('/:contract_id/backfill-bac-cost', requireRole('superadmin', 'admin'
     const oldBac = Number(baseline.bac_cost_usd);
     await conn.query(
       'UPDATE project_baselines SET bac_cost_usd=$1 WHERE id=$2',
-      [quotationCost, baseline.id],
+      [quotCost.costProtected, baseline.id],
     );
 
     // Recalculate planned_cost_usd on WBS packages (proportional to weight)
@@ -1007,7 +1065,7 @@ router.post('/:contract_id/backfill-bac-cost', requireRole('superadmin', 'admin'
       [baseline.id],
     );
     for (const pkg of wbs) {
-      const newCost = evm.round2(Number(pkg.weight_pct) * quotationCost);
+      const newCost = evm.round2(Number(pkg.weight_pct) * quotCost.costProtected);
       await conn.query('UPDATE wbs_packages SET planned_cost_usd=$1 WHERE id=$2', [newCost, pkg.id]);
     }
 
@@ -1015,7 +1073,8 @@ router.post('/:contract_id/backfill-bac-cost', requireRole('superadmin', 'admin'
     res.json({
       baseline_id: baseline.id,
       old_bac_cost: oldBac,
-      new_bac_cost: quotationCost,
+      new_bac_cost: quotCost.costProtected,
+      total_cost_raw: quotCost.totalCost,
       wbs_updated: wbs.length,
     });
   } catch (err) {

@@ -252,16 +252,16 @@ function BaselineForm({ contractId, onCreated }) {
               </div>
             </div>
             <div>
-              <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>BAC Cost (nómina del proyecto)</div>
+              <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>BAC Cost (costo protegido)</div>
               {bacCostAuto > 0 ? (
                 <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ds-accent)' }}>
-                  {bacCostAuto.toLocaleString()} {currency}
-                  <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--ds-text-soft)' }}>Calculado de la cotización</div>
+                  {bacCostAuto.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })} {currency}
+                  <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--ds-text-soft)' }}>De la cotización ganadora (costo + buffer + garantía)</div>
                 </div>
               ) : (
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#d97706' }}>
                   Requiere entrada manual
-                  <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--ds-text-soft)' }}>La cotización no tiene cost_hour en sus líneas</div>
+                  <div style={{ fontSize: 11, fontWeight: 400, color: 'var(--ds-text-soft)' }}>No se pudo derivar de la cotización</div>
                 </div>
               )}
             </div>
