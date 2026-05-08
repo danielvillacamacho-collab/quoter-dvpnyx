@@ -393,13 +393,15 @@ router.get('/:id', async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ error: 'Oportunidad no encontrada' });
 
-    // total_usd no existe como columna en quotations — se deriva de la
-    // suma de quotation_lines.total. El test mockeaba pg in-memory por lo
-    // que la query rota nunca se validó. Bug preexistente expuesto por
-    // CRM-MVP-00.1 al haber más oportunidades con cotizaciones linkeadas.
+    // total_usd se deriva de quotation_lines.total (staff_aug) o
+    // quotation_milestones.amount (fixed_scope). Tomamos el mayor de ambos
+    // para cubrir ambos tipos de cotización.
     const quotations = (await pool.query(
       `SELECT q.id, q.project_name, q.type, q.status, q.created_at,
-              COALESCE((SELECT SUM(total) FROM quotation_lines WHERE quotation_id=q.id), 0)::numeric AS total_usd
+              GREATEST(
+                COALESCE((SELECT SUM(total) FROM quotation_lines WHERE quotation_id=q.id), 0),
+                COALESCE((SELECT SUM(amount) FROM quotation_milestones WHERE quotation_id=q.id AND deleted_at IS NULL), 0)
+              )::numeric AS total_usd
          FROM quotations q WHERE q.opportunity_id=$1 ORDER BY q.created_at DESC`,
       [req.params.id],
     )).rows;
