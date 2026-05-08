@@ -1,18 +1,18 @@
-/**
- * Time Entries — Sprint 5 Modules ET-1, ET-2, ET-3, ET-6, ET-7.
+﻿/**
+ * Time Entries â€” Sprint 5 Modules ET-1, ET-2, ET-3, ET-6, ET-7.
  * Spec: docs/specs/v2/04_modules/05_time_tracking.md
  *       docs/specs/v2/09_user_stories_backlog.md ET-*
  *
  * A TimeEntry is hours logged on a specific day against a specific
  * assignment. Core rules enforced server-side:
  *
- *   ET-2: CRUD + retroactive window (default 30 days) + daily ≤16h
+ *   ET-2: CRUD + retroactive window (default 30 days) + daily â‰¤16h
  *         sum across an employee's entries on a single date.
  *   ET-3: POST /api/time-entries/copy-week duplicates entries from
  *         one week into the next.
- *   ET-6: edit gating — employee writes only to their own rows AND
+ *   ET-6: edit gating â€” employee writes only to their own rows AND
  *         only within the window; admin can do anything.
- *   ET-7: work_date > TODAY → 400 (no future entries).
+ *   ET-7: work_date > TODAY â†’ 400 (no future entries).
  *
  * All mutations emit structured events via server/utils/events.
  */
@@ -173,7 +173,7 @@ router.post('/', async (req, res) => {
   // ET-7
   if (work_date > todayISO()) return res.status(400).json({ error: 'No se pueden registrar horas futuras' });
   if (body.status && !VALID_STATUSES.includes(body.status)) {
-    return res.status(400).json({ error: 'status inválido' });
+    return res.status(400).json({ error: 'status invÃ¡lido' });
   }
 
   const conn = await pool.connect();
@@ -186,14 +186,14 @@ router.post('/', async (req, res) => {
     const asg = aRows[0];
     if (['cancelled'].includes(asg.status)) {
       conn.release();
-      return res.status(400).json({ error: 'No se pueden registrar horas en una asignación cancelada' });
+      return res.status(400).json({ error: 'No se pueden registrar horas en una asignaciÃ³n cancelada' });
     }
     // work_date within the assignment window (admins can backfill outside the range)
     const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
     if (!isAdmin && (work_date < String(asg.start_date).slice(0, 10) ||
         (asg.end_date && work_date > String(asg.end_date).slice(0, 10)))) {
       conn.release();
-      return res.status(400).json({ error: 'work_date fuera del rango de la asignación' });
+      return res.status(400).json({ error: 'work_date fuera del rango de la asignaciÃ³n' });
     }
 
     // ET-6 authorization
@@ -201,17 +201,17 @@ router.post('/', async (req, res) => {
     if (!auth.ok) {
       conn.release();
       const msg = auth.reason === 'future_entry' ? 'No se pueden registrar horas futuras'
-                : auth.reason === 'outside_window' ? `Fuera de la ventana retroactiva de ${auth.window_days} días`
+                : auth.reason === 'outside_window' ? `Fuera de la ventana retroactiva de ${auth.window_days} dÃ­as`
                 : 'No tienes permiso para registrar horas de este empleado';
       return res.status(auth.reason === 'future_entry' ? 400 : 403).json({ error: msg, reason: auth.reason });
     }
 
-    // ET-2: daily cap ≤ 16h across this employee's entries for that date
+    // ET-2: daily cap â‰¤ 16h across this employee's entries for that date
     const existingSum = await sumDailyHours(conn, asg.employee_id, work_date);
     if (existingSum + h > DAILY_MAX_HOURS) {
       conn.release();
       return res.status(409).json({
-        error: `La suma diaria excedería ${DAILY_MAX_HOURS}h (actual ${existingSum}h + ${h}h propuestas).`,
+        error: `La suma diaria excederÃ­a ${DAILY_MAX_HOURS}h (actual ${existingSum}h + ${h}h propuestas).`,
         existing_hours: existingSum, proposed_hours: h, daily_max: DAILY_MAX_HOURS,
       });
     }
@@ -257,14 +257,14 @@ router.put('/:id', async (req, res) => {
       if (body.work_date > todayISO()) { conn.release(); return res.status(400).json({ error: 'No se pueden registrar horas futuras' }); }
       nextDate = body.work_date;
     }
-    if (body.status && !VALID_STATUSES.includes(body.status)) { conn.release(); return res.status(400).json({ error: 'status inválido' }); }
+    if (body.status && !VALID_STATUSES.includes(body.status)) { conn.release(); return res.status(400).json({ error: 'status invÃ¡lido' }); }
 
     // ET-6 authorization checked against the NEW date (most restrictive)
     const auth = await authorizeWrite(conn, req.user, before.employee_id, nextDate);
     if (!auth.ok) {
       conn.release();
       return res.status(auth.reason === 'future_entry' ? 400 : 403).json({
-        error: auth.reason === 'outside_window' ? `Fuera de la ventana retroactiva de ${auth.window_days} días` : 'No tienes permiso para editar este entry',
+        error: auth.reason === 'outside_window' ? `Fuera de la ventana retroactiva de ${auth.window_days} dÃ­as` : 'No tienes permiso para editar este entry',
         reason: auth.reason,
       });
     }
@@ -275,7 +275,7 @@ router.put('/:id', async (req, res) => {
       if (existingSum + nextHours > DAILY_MAX_HOURS) {
         conn.release();
         return res.status(409).json({
-          error: `La suma diaria excedería ${DAILY_MAX_HOURS}h`,
+          error: `La suma diaria excederÃ­a ${DAILY_MAX_HOURS}h`,
           existing_hours: existingSum, proposed_hours: nextHours, daily_max: DAILY_MAX_HOURS,
         });
       }
@@ -505,7 +505,7 @@ router.post('/import-bulk', async (req, res) => {
  * Copies entries from source_week_start (YYYY-MM-DD, must be a Monday)
  * into the following week (same weekday offsets). Skips entries whose
  * assignment is no longer active/planned. Uses the ET-2 daily cap and
- * ET-6 authorization for every candidate — any failure is reported as
+ * ET-6 authorization for every candidate â€” any failure is reported as
  * a skipped row with a reason, the rest still write.
  */
 router.post('/copy-week', async (req, res) => {
@@ -590,4 +590,139 @@ router.post('/copy-week', async (req, res) => {
   }
 });
 
+
+// ─── GET /pending-hours ─────────────────────────────────────────────────────
+router.get('/pending-hours', auth, async (req, res) => {
+  const role = req.user.role;
+  if (!['admin', 'superadmin', 'lead'].includes(role)) {
+    return res.status(403).json({ error: 'Acceso denegado' });
+  }
+  try {
+    let squadFilter = '';
+    let params = [];
+    if (role === 'lead') {
+      const sq = await pool.query(
+        `SELECT e.squad_id FROM employees e WHERE e.user_id = $1 AND e.deleted_at IS NULL LIMIT 1`,
+        [req.user.id]
+      );
+      if (!sq.rows.length) return res.json({ data: [], week_start: null });
+      squadFilter = 'AND e.squad_id = $1';
+      params = [sq.rows[0].squad_id];
+    }
+    const sql = `
+      WITH last_week AS (
+        SELECT
+          date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date AS week_start,
+          (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date AS week_end
+      ),
+      with_assignments AS (
+        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, u.id AS user_id, u.email
+        FROM employees e
+        JOIN users u ON u.id = e.user_id
+        JOIN assignments a ON a.employee_id = e.id
+        CROSS JOIN last_week lw
+        WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL AND u.deleted_at IS NULL
+          AND a.status IN ('active', 'planned')
+          AND a.start_date <= lw.week_end
+          AND (a.end_date IS NULL OR a.end_date >= lw.week_start)
+          ${squadFilter}
+      )
+      SELECT wa.employee_id, wa.employee_name, wa.user_id, wa.email,
+             lw.week_start, COALESCE(SUM(te.hours), 0) AS hours_logged
+      FROM with_assignments wa
+      CROSS JOIN last_week lw
+      LEFT JOIN time_entries te
+        ON te.employee_id = wa.employee_id
+        AND te.work_date BETWEEN lw.week_start AND lw.week_end
+        AND te.deleted_at IS NULL
+      GROUP BY wa.employee_id, wa.employee_name, wa.user_id, wa.email, lw.week_start
+      HAVING COALESCE(SUM(te.hours), 0) = 0
+      ORDER BY wa.employee_name
+    `;
+    const { rows } = await pool.query(sql, params);
+    res.json({
+      data: rows.map(r => ({
+        employee_id: r.employee_id,
+        employee_name: r.employee_name,
+        user_id: r.user_id,
+        email: r.email,
+        week_start: r.week_start,
+        hours_logged: Number(r.hours_logged),
+      })),
+      week_start: rows.length > 0 ? rows[0].week_start : null,
+    });
+  } catch (err) {
+    serverError(res, 'GET /time-entries/pending-hours', err);
+  }
+});
+
+// ─── POST /send-reminders ────────────────────────────────────────────────────
+router.post('/send-reminders', auth, async (req, res) => {
+  const role = req.user.role;
+  if (!['admin', 'superadmin', 'lead'].includes(role)) {
+    return res.status(403).json({ error: 'Acceso denegado' });
+  }
+  try {
+    const { rows: settings } = await pool.query('SELECT key, value FROM app_settings');
+    const cfg = {};
+    for (const r of settings) cfg[r.key] = r.value;
+    if (cfg.sns_enabled !== 'true') {
+      return res.status(422).json({ sent: false, reason: 'SNS no esta activado. Configuralo en Ajustes -> Integracion SNS.' });
+    }
+    if (!cfg.aws_access_key_id || !cfg.aws_secret_access_key || !cfg.aws_region || !cfg.sns_topic_arn) {
+      return res.status(422).json({ sent: false, reason: 'Configuracion de SNS incompleta.' });
+    }
+    const { rows } = await pool.query(`
+      WITH last_week AS (
+        SELECT
+          date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date AS week_start,
+          (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date AS week_end
+      ),
+      with_assignments AS (
+        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name
+        FROM employees e
+        JOIN assignments a ON a.employee_id = e.id
+        CROSS JOIN last_week lw
+        WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL
+          AND a.status IN ('active', 'planned')
+          AND a.start_date <= lw.week_end
+          AND (a.end_date IS NULL OR a.end_date >= lw.week_start)
+      )
+      SELECT wa.employee_id, wa.employee_name, lw.week_start,
+             COALESCE(SUM(te.hours), 0) AS hours_logged
+      FROM with_assignments wa
+      CROSS JOIN last_week lw
+      LEFT JOIN time_entries te
+        ON te.employee_id = wa.employee_id
+        AND te.work_date BETWEEN lw.week_start AND lw.week_end
+        AND te.deleted_at IS NULL
+      GROUP BY wa.employee_id, wa.employee_name, lw.week_start
+      HAVING COALESCE(SUM(te.hours), 0) = 0
+      ORDER BY wa.employee_name
+    `);
+    if (!rows.length) return res.json({ sent: false, reason: 'No hay empleados con horas pendientes.' });
+    const weekStart = rows[0].week_start;
+    const names = rows.map(r => `* ${r.employee_name}`).join('\n');
+    const message = `Recordatorio DVPNYX: Los siguientes empleados no han registrado sus horas para la semana del ${weekStart}:\n\n${names}\n\nPor favor registra tus horas en el sistema.`;
+    // eslint-disable-next-line
+    const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
+    const snsClient = new SNSClient({
+      region: cfg.aws_region,
+      credentials: { accessKeyId: cfg.aws_access_key_id, secretAccessKey: cfg.aws_secret_access_key },
+    });
+    await snsClient.send(new PublishCommand({
+      TopicArn: cfg.sns_topic_arn,
+      Subject: `DVPNYX - ${rows.length} empleado${rows.length !== 1 ? 's' : ''} con horas pendientes`,
+      Message: message,
+    }));
+    await emitEvent(pool, 'time_entry.reminders_sent', 'time_entry', null, req.user.id, {
+      employee_count: rows.length, week_start: weekStart,
+    });
+    res.json({ sent: true, employee_count: rows.length, week_start: weekStart });
+  } catch (err) {
+    serverError(res, 'POST /time-entries/send-reminders', err);
+  }
+});
+
 module.exports = router;
+

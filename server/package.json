@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "dvpnyx-quoter-server",
   "version": "2.0.0",
   "scripts": {
@@ -49,10 +49,12 @@
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
     "pdfkit": "^0.15.0",
-    "pg": "^8.11.3"
+    "pg": "^8.11.3",
+    "@aws-sdk/client-sns": "^3.600.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",
     "nodemon": "^3.0.2"
   }
 }
+

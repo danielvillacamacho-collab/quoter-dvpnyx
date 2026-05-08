@@ -5,20 +5,16 @@ import { apiGet, apiPost } from '../utils/apiV2';
 
 /**
  * NotificationsDrawer — right-side slide-over that lists the current
- * user's in-app notifications.
+ * user's in-app notifications plus a "pending hours" section for
+ * admins and delivery managers (leads).
  *
  * Props:
- *   open     — boolean (parent controls visibility)
- *   onClose  — () => void
- *   onUpdateUnread — (count: number) => void  (bubbles up after mutations
- *                    so the bell badge stays in sync immediately)
- *
- * Fetch strategy:
- *   - On open: fetch /api/notifications (the full list).
- *   - After mark-one or mark-all: refetch + push unread count upstream.
- *
- * The drawer never throws: network errors render inline and the close
- * button always works.
+ *   open              — boolean
+ *   onClose           — () => void
+ *   onUpdateUnread    — (count: number) => void
+ *   isLeadOrAdmin     — boolean (show pending-hours section)
+ *   isAdmin           — boolean (show link to /time/admin)
+ *   onPendingHoursChange — (count: number) => void
  */
 
 const s = {
@@ -71,6 +67,33 @@ const s = {
   },
   empty: { padding: 24, textAlign: 'center', color: 'var(--ds-text-muted, #666)', fontSize: 13 },
   error: { padding: 16, color: 'var(--ds-bad, #c0392b)', fontSize: 12 },
+  pendingSection: {
+    borderBottom: '2px solid var(--ds-border, #e5e5e5)',
+    background: 'var(--ds-surface-alt, #fdf8ff)',
+  },
+  pendingHead: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '10px 16px 6px', flexWrap: 'wrap', gap: 6,
+  },
+  pendingTitle: { fontSize: 12, fontWeight: 700, color: 'var(--ds-text-dim, #888)', textTransform: 'uppercase', letterSpacing: 0.04 },
+  pendingRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '6px 16px',
+    fontSize: 12.5, color: 'var(--ds-text, #222)',
+    borderTop: '1px solid var(--ds-border, #eee)',
+  },
+  pendingName: { fontWeight: 500 },
+  pendingEmail: { color: 'var(--ds-text-muted, #888)', fontSize: 11.5 },
+  sendBtn: {
+    display: 'inline-flex', alignItems: 'center', gap: 5,
+    background: 'var(--ds-accent, #7a3a8f)', color: '#fff',
+    border: 'none', borderRadius: 6, padding: '5px 12px',
+    fontSize: 11.5, fontWeight: 600, cursor: 'pointer',
+  },
+  viewAdminLink: {
+    fontSize: 11, color: 'var(--ds-accent, #7a3a8f)', cursor: 'pointer',
+    textDecoration: 'underline', background: 'none', border: 'none', padding: 0,
+  },
 };
 
 function timeAgo(iso) {
@@ -88,10 +111,23 @@ function timeAgo(iso) {
   return d.toLocaleDateString('es-CO');
 }
 
-export default function NotificationsDrawer({ open, onClose, onUpdateUnread }) {
+function fmtWeek(isoDate) {
+  if (!isoDate) return '';
+  const d = new Date(isoDate + 'T00:00:00');
+  return `sem. ${d.toLocaleDateString('es-CO', { day: 'numeric', month: 'short' })}`;
+}
+
+export default function NotificationsDrawer({ open, onClose, onUpdateUnread, isLeadOrAdmin, isAdmin, onPendingHoursChange }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
+
+  const [pendingHours, setPendingHours] = useState([]);
+  const [pendingWeek, setPendingWeek] = useState('');
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sendResult, setSendResult] = useState(null);
+
   const nav = useNavigate();
 
   const refresh = useCallback(async () => {
@@ -110,14 +146,33 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread }) {
     }
   }, [onUpdateUnread]);
 
+  const refreshPending = useCallback(async () => {
+    if (!isLeadOrAdmin) return;
+    setPendingLoading(true);
+    try {
+      const data = await apiGet('/api/time-entries/pending-hours');
+      const list = Array.isArray(data?.data) ? data.data : [];
+      setPendingHours(list);
+      setPendingWeek(data?.week_start || '');
+      if (typeof onPendingHoursChange === 'function') onPendingHoursChange(list.length);
+    } catch (_ex) {
+      setPendingHours([]);
+    } finally {
+      setPendingLoading(false);
+    }
+  }, [isLeadOrAdmin, onPendingHoursChange]);
+
   useEffect(() => {
-    if (open) refresh();
-  }, [open, refresh]);
+    if (open) {
+      refresh();
+      refreshPending();
+      setSendResult(null);
+    }
+  }, [open, refresh, refreshPending]);
 
   const unreadCount = useMemo(() => items.filter((n) => !n.read_at).length, [items]);
 
   const openItem = useCallback(async (n) => {
-    // Optimistic mark-as-read so the UI feels instant.
     if (!n.read_at) {
       setItems((prev) => prev.map((x) => (x.id === n.id ? { ...x, read_at: new Date().toISOString() } : x)));
       try {
@@ -125,7 +180,7 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread }) {
         if (typeof onUpdateUnread === 'function') {
           onUpdateUnread(Math.max(0, unreadCount - 1));
         }
-      } catch (_e) { /* non-fatal; list will reconcile on next refresh */ }
+      } catch (_e) { /* non-fatal */ }
     }
     onClose?.();
     if (n.link) nav(n.link);
@@ -140,6 +195,23 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread }) {
       setErr(ex.message || 'No se pudo marcar todo como leído');
     }
   }, [onUpdateUnread]);
+
+  const sendReminders = useCallback(async () => {
+    setSending(true); setSendResult(null);
+    try {
+      const res = await apiPost('/api/time-entries/send-reminders', {});
+      setSendResult({
+        ok: true,
+        msg: res.sent
+          ? `Recordatorio enviado a ${res.employee_count} empleado${res.employee_count !== 1 ? 's' : ''}`
+          : (res.reason || 'Sin empleados pendientes'),
+      });
+    } catch (ex) {
+      setSendResult({ ok: false, msg: ex.message || 'Error al enviar recordatorio' });
+    } finally {
+      setSending(false);
+    }
+  }, []);
 
   if (!open) return null;
 
@@ -157,27 +229,71 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread }) {
           <Bell size={16} aria-hidden="true" />
           <div style={s.title}>Notificaciones</div>
           {unreadCount > 0 && (
-            <button
-              type="button"
-              style={s.ghostBtn}
-              onClick={markAll}
-              data-testid="notif-mark-all"
-            >
+            <button type="button" style={s.ghostBtn} onClick={markAll} data-testid="notif-mark-all">
               Marcar todo como leído
             </button>
           )}
-          <button
-            type="button"
-            style={s.closeBtn}
-            onClick={onClose}
-            aria-label="Cerrar"
-            data-testid="notif-close"
-          >×</button>
+          <button type="button" style={s.closeBtn} onClick={onClose} aria-label="Cerrar" data-testid="notif-close">×</button>
         </div>
 
         {err && <div style={s.error} role="alert" data-testid="notif-error">{err}</div>}
 
         <div style={s.list} data-testid="notif-list">
+
+          {/* ── Horas faltantes (admins + leads) ── */}
+          {isLeadOrAdmin && (
+            <div style={s.pendingSection}>
+              <div style={s.pendingHead}>
+                <span style={s.pendingTitle}>
+                  Horas faltantes
+                  {pendingWeek && <span style={{ fontWeight: 400, textTransform: 'none', marginLeft: 4 }}>— {fmtWeek(pendingWeek)}</span>}
+                  {pendingHours.length > 0 && (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 9, background: '#d32f2f', color: '#fff', fontSize: 10, fontWeight: 700, marginLeft: 6 }}>
+                      {pendingHours.length}
+                    </span>
+                  )}
+                </span>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {isAdmin && pendingHours.length > 0 && (
+                    <button type="button" style={s.viewAdminLink} onClick={() => { onClose?.(); nav('/time/admin'); }}>
+                      Ver admin
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    style={{ ...s.sendBtn, opacity: (sending || pendingHours.length === 0) ? 0.55 : 1, cursor: (sending || pendingHours.length === 0) ? 'not-allowed' : 'pointer' }}
+                    disabled={sending || pendingHours.length === 0}
+                    onClick={sendReminders}
+                  >
+                    {sending ? 'Enviando…' : 'Enviar recordatorio'}
+                  </button>
+                </div>
+              </div>
+
+              {sendResult && (
+                <div style={{ padding: '4px 16px 8px', fontSize: 12, color: sendResult.ok ? '#2e7d32' : '#c62828' }}>
+                  {sendResult.msg}
+                </div>
+              )}
+
+              {pendingLoading ? (
+                <div style={{ padding: '8px 16px', fontSize: 12.5, color: 'var(--ds-text-muted, #888)' }}>Cargando…</div>
+              ) : pendingHours.length === 0 ? (
+                <div style={{ padding: '8px 16px', fontSize: 12.5, color: 'var(--ds-text-muted, #888)' }}>
+                  Todos al día con sus horas ✓
+                </div>
+              ) : (
+                pendingHours.map((p) => (
+                  <div key={p.employee_id} style={s.pendingRow}>
+                    <span style={s.pendingName}>{p.employee_name}</span>
+                    <span style={s.pendingEmail}>{p.email || ''}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* ── Notificaciones in-app ── */}
           {loading ? (
             <div style={s.empty} data-testid="notif-loading">Cargando…</div>
           ) : items.length === 0 ? (
