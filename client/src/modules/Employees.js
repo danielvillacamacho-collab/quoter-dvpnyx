@@ -126,7 +126,7 @@ function EmployeeForm({ initial, areas, onSave, onCancel, saving }) {
         <div>
           <label style={s.label}>Área *</label>
           <FilterableSelect
-            value={form.area_id || ''}
+            value={form.area_id ? String(form.area_id) : ''}
             onChange={(e) => set('area_id', Number(e.target.value) || '')}
             aria-label="Área"
             required
