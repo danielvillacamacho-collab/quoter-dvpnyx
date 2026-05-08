@@ -23,6 +23,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom';
 import { apiGet, apiPut, apiPost } from '../utils/apiV2';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 import { COUNTRY_OPTIONS } from '../utils/countries';
 
 const fmtPct = (n) => (n == null ? '—' : `${(Number(n) * 100).toFixed(1)}%`);
@@ -219,20 +220,35 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
           ) : (
             // Non-capacity: editable input
             <>
-              <input
-                type="number" step="any" inputMode="decimal"
-                min="0" max={isProject ? '100' : undefined}
-                style={s.cellInput}
-                value={real}
-                disabled={isClosed || (!planExists && !isResell)}
-                onChange={(e) => setReal(e.target.value)}
-                onBlur={flushReal}
-                placeholder={isResell ? '—' : (planExists ? (isProject ? '0' : '—') : 'declara plan')}
-                aria-label={`Real ${yyyymm}`}
-                title={(!planExists && !isResell)
-                  ? 'Declara primero el plan de reconocimiento del contrato'
-                  : (isProject ? 'Avance acumulado del proyecto a fin de mes (0-100%). El revenue del mes se calcula como (este % − % del mes anterior) × valor del contrato.' : `Monto real en ${isResell ? ccyDisplay : ccyOrig}`)}
-              />
+              {isProject ? (
+                <input
+                  type="number" step="any" inputMode="decimal"
+                  min="0" max="100"
+                  style={s.cellInput}
+                  value={real}
+                  disabled={isClosed || !planExists}
+                  onChange={(e) => setReal(e.target.value)}
+                  onBlur={flushReal}
+                  placeholder={planExists ? '0' : 'declara plan'}
+                  aria-label={`Real ${yyyymm}`}
+                  title={!planExists
+                    ? 'Declara primero el plan de reconocimiento del contrato'
+                    : 'Avance acumulado del proyecto a fin de mes (0-100%). El revenue del mes se calcula como (este % − % del mes anterior) × valor del contrato.'}
+                />
+              ) : (
+                <NumberInput
+                  style={s.cellInput}
+                  value={real}
+                  disabled={isClosed || (!planExists && !isResell)}
+                  onChange={(e) => setReal(e.target.value)}
+                  onBlur={flushReal}
+                  placeholder={isResell ? '—' : (planExists ? '—' : 'declara plan')}
+                  aria-label={`Real ${yyyymm}`}
+                  title={(!planExists && !isResell)
+                    ? 'Declara primero el plan de reconocimiento del contrato'
+                    : `Monto real en ${isResell ? ccyDisplay : ccyOrig}`}
+                />
+              )}
               {(planExists || isResell) && (
                 <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
                   {isProject

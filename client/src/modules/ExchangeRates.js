@@ -9,6 +9,7 @@
  */
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { apiGet, apiPut, apiDelete } from '../utils/apiV2';
+import NumberInput from '../shell/NumberInput';
 
 const monthLabel = (yyyymm) => {
   const y = yyyymm.slice(0, 4); const m = Number(yyyymm.slice(4));
@@ -97,8 +98,7 @@ function FxCell({ value, yyyymm, currency, onSaved }) {
 
   return (
     <td style={s.td}>
-      <input
-        type="number" step="any" min="0"
+      <NumberInput
         style={s.cellInput}
         value={v}
         onChange={(e) => setV(e.target.value)}

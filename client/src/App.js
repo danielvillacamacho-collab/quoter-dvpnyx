@@ -15,6 +15,7 @@ import StatusBadge from './shell/StatusBadge';
 import NotificationsDrawer from './shell/NotificationsDrawer';
 import { apiGet } from './utils/apiV2';
 import ErrorBoundary from './shell/ErrorBoundary';
+import NumberInput from './shell/NumberInput';
 import Clients from './modules/Clients';
 import Opportunities from './modules/Opportunities';
 import PipelineKanban from './modules/PipelineKanban';
@@ -626,7 +627,7 @@ function AdminParams() {
                   <td style={{ ...css.td, fontWeight: 600 }}>{p.key}</td>
                   <td style={{ ...css.td, minWidth: 120 }}>
                     {editing === p.id ? (
-                      <input style={{ ...css.input, width: 100, padding: 6 }} type="number" step="any" value={newVal} onChange={e => setNewVal(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && handleSave(p)} />
+                      <NumberInput style={{ ...css.input, width: 100, padding: 6 }} value={newVal} onChange={e => setNewVal(e.target.value)} autoFocus onKeyDown={e => e.key === 'Enter' && handleSave(p)} />
                     ) : (
                       <span style={{ color: 'var(--ds-text, var(--purple-dark))', fontWeight: 600, fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)', fontFeatureSettings: "'tnum'" }}>
                         {['level', 'tools'].includes(cat) ? formatUSD(p.value) : ['margin', 'project'].includes(cat) && p.value < 1000 && p.key !== 'hours_month' ? formatPct(p.value) : p.value}

@@ -18,6 +18,7 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { apiGet, apiPost } from '../utils/apiV2';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 import { useAuth } from '../AuthContext';
 import {
   VALID_CURRENCIES, formatPeriod, normalizePeriod, currentPeriod,
@@ -417,10 +418,7 @@ export default function EmployeeCosts() {
                         />
                       </td>
                       <td style={s.td}>
-                        <input
-                          type="number"
-                          min="0"
-                          step="any"
+                        <NumberInput
                           style={{ ...s.input, width: 130, textAlign: 'right' }}
                           value={currentGross}
                           onChange={(e) => setDraft(empId, { gross_cost: e.target.value })}

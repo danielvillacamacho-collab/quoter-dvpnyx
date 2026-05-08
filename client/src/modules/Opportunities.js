@@ -12,6 +12,7 @@ import {
   computeBooking, validateFunding, validateLossReason,
 } from '../utils/booking';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 
 /* ========== styles (mirror Clients.js) ========== */
 const s = {
@@ -230,14 +231,12 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
         <div style={{ flex: 1, minWidth: 200 }}>
           <label style={s.label}>Monto estimado (USD)</label>
-          <input
-            type="number"
-            min="0"
+          <NumberInput
             style={s.input}
             value={form.one_time_amount_usd}
             onChange={(e) => set('one_time_amount_usd', e.target.value)}
             aria-label="Monto estimado USD"
-            placeholder="50000"
+            placeholder="50,000"
           />
         </div>
         <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--teal-mid)', paddingBottom: 10 }} aria-live="polite">
@@ -290,9 +289,7 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
           {form.funding_source !== 'client_direct' && (
             <div>
               <label style={s.label}>Monto de funding (USD) *</label>
-              <input
-                type="number"
-                min="0"
+              <NumberInput
                 style={s.input}
                 value={form.funding_amount_usd}
                 onChange={(e) => set('funding_amount_usd', e.target.value)}

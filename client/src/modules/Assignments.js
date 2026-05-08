@@ -7,6 +7,7 @@ import StatusBadge from '../shell/StatusBadge';
 import FilterableSelect from '../shell/FilterableSelect';
 import SearchableSelect from '../shell/SearchableSelect';
 import SortableTh from '../shell/SortableTh';
+import NumberInput from '../shell/NumberInput';
 import { useSort } from '../utils/useSort';
 
 const s = {
@@ -369,7 +370,7 @@ function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving
             </div>
             <div>
               <label style={s.label}>Tarifa mensual *</label>
-              <input type="number" min={0} step={0.01} style={s.input} value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Monto acordado con el cliente" aria-label="Tarifa mensual" />
+              <NumberInput style={s.input} value={form.client_rate} onChange={(e) => set('client_rate', e.target.value)} placeholder="Monto acordado con el cliente" aria-label="Tarifa mensual" />
             </div>
           </div>
           <div style={{ fontSize: 11, color: 'var(--ds-text-dim, var(--text-light))', marginTop: 6 }}>

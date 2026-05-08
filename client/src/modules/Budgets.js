@@ -4,6 +4,7 @@ import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import SortableTh from '../shell/SortableTh';
 import { useSort } from '../utils/useSort';
 import FilterableSelect from '../shell/FilterableSelect';
+import NumberInput from '../shell/NumberInput';
 
 /* ========== styles ========== */
 const s = {
@@ -156,7 +157,7 @@ function BudgetForm({ initial, users, onSave, onCancel, saving }) {
         </div>
         <div>
           <label style={s.label}>Target USD *</label>
-          <input style={s.input} type="number" min={0} step="0.01" value={form.target_usd} onChange={(e) => set('target_usd', e.target.value)} required />
+          <NumberInput style={s.input} value={form.target_usd} onChange={(e) => set('target_usd', e.target.value)} required />
         </div>
       </div>
       <div>
