@@ -9,6 +9,8 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import { th as dsTh, td as dsTd, TABLE_CLASS } from '../shell/tableStyles';
 import FilterableSelect from '../shell/FilterableSelect';
+import TimeEntriesImport from './TimeEntriesImport';
+import { useAuth } from '../AuthContext';
 
 const DAYS_LABELS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 const DAILY_MAX = 16;
@@ -141,8 +143,10 @@ function exportCSV(employeeName, assignments, entries, weekDates) {
 }
 
 export default function TimeAdmin() {
+  const { isAdmin } = useAuth();
   /* ---- Employee picker state ---- */
   const [employees, setEmployees] = useState([]);
+  const [showImport, setShowImport] = useState(false);
   const [selectedEmpId, setSelectedEmpId] = useState('');
   const selectedEmployee = useMemo(
     () => employees.find((e) => String(e.id) === String(selectedEmpId)) || null,
@@ -304,6 +308,7 @@ export default function TimeAdmin() {
     : '';
 
   return (
+    <>
     <div style={s.page}>
       <div style={s.ph}>
         <div>
@@ -311,6 +316,9 @@ export default function TimeAdmin() {
           <div style={s.sub}>Registra horas para cualquier empleado.</div>
         </div>
         <div style={s.phActions}>
+          <button style={s.btn} onClick={() => setShowImport(true)} aria-label="Importar historial">
+            &#128229; Importar historial
+          </button>
           {selectedEmpId && (
             <>
               <button
@@ -462,7 +470,7 @@ export default function TimeAdmin() {
                           const existing = findEntry(a.id, dIso);
                           const st = stateFor(i);
                           // Cells outside the assignment's active date range are blocked.
-                          const outOfRange = (aStart !== null && dIso < aStart) || (aEnd !== null && dIso > aEnd);
+                          const outOfRange = !isAdmin && ((aStart !== null && dIso < aStart) || (aEnd !== null && dIso > aEnd));
                           const blocked = st.future || outOfRange;
                           const pastEmpty = !blocked && !st.today && !st.weekend && !existing;
                           const bg = outOfRange ? s.cellBg.outOfRange
@@ -559,5 +567,12 @@ export default function TimeAdmin() {
         </div>
       )}
     </div>
+      {showImport && (
+        <TimeEntriesImport
+          onClose={() => setShowImport(false)}
+          onImported={() => setShowImport(false)}
+        />
+      )}
+    </>
   );
 }

@@ -132,11 +132,20 @@ describe('POST /api/time-entries (ET-2, ET-6, ET-7)', () => {
     expect(res.body.error).toMatch(/cancelada/);
   });
 
-  it('rejects when work_date is before assignment start_date', async () => {
-    queryQueue.push({ rows: [{ id: 'a1', employee_id: 'e1', start_date: tomorrow, end_date: null, status: 'active' }] });
+  it('rejects when work_date is before assignment start_date (non-admin)', async () => {
+    mockCurrentUser = { id: 'u-member', role: 'member' };
+    queryQueue.push({ rows: [{ id: 'a1', employee_id: 'u-member', start_date: tomorrow, end_date: null, status: 'active' }] });
     const res = await client.call('POST', '/api/time-entries', { ...validBody(), work_date: yesterday });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/rango/);
+  });
+
+  it('admin can post outside assignment date range (backfill)', async () => {
+    queryQueue.push({ rows: [{ id: 'a1', employee_id: 'e1', start_date: tomorrow, end_date: null, status: 'active' }] });
+    queryQueue.push({ rows: [{ total: 0 }] });
+    queryQueue.push({ rows: [{ id: 'te-new', hours: 8, work_date: yesterday }] });
+    const res = await client.call('POST', '/api/time-entries', validBody());
+    expect(res.status).toBe(201);
   });
 
   it('ET-2 daily cap: rejects 409 when sum would exceed 16h', async () => {

@@ -188,9 +188,10 @@ router.post('/', async (req, res) => {
       conn.release();
       return res.status(400).json({ error: 'No se pueden registrar horas en una asignación cancelada' });
     }
-    // work_date within the assignment window
-    if (work_date < String(asg.start_date).slice(0, 10) ||
-        (asg.end_date && work_date > String(asg.end_date).slice(0, 10))) {
+    // work_date within the assignment window (admins can backfill outside the range)
+    const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
+    if (!isAdmin && (work_date < String(asg.start_date).slice(0, 10) ||
+        (asg.end_date && work_date > String(asg.end_date).slice(0, 10)))) {
       conn.release();
       return res.status(400).json({ error: 'work_date fuera del rango de la asignación' });
     }
@@ -340,6 +341,164 @@ router.delete('/:id', async (req, res) => {
     res.json({ message: 'Time entry eliminado' });
   } catch (err) { serverError(res, 'DELETE /time-entries/:id', err); }
   finally { conn.release(); }
+});
+
+/* -------- IMPORT BULK (historical migration) --------
+ * Admin-only. Accepts a flat array of {employee_name, work_date, project_name, hours}.
+ * Resolves names → UUIDs, finds the best matching assignment, and either does a
+ * dry_run preview or writes the entries. Bypasses the retroactive window and the
+ * assignment date-range check so admins can migrate historical data freely.
+ */
+router.post('/import-bulk', async (req, res) => {
+  if (!['admin', 'superadmin'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Solo admins pueden importar historial' });
+  }
+
+  const { entries, dry_run = true } = req.body || {};
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return res.status(400).json({ error: 'entries debe ser un array no vacío' });
+  }
+  if (entries.length > 5000) {
+    return res.status(400).json({ error: 'Máximo 5000 entradas por importación' });
+  }
+
+  const conn = await pool.connect();
+  try {
+    // Build resolution maps once for all entries
+    const { rows: empRows } = await conn.query(
+      `SELECT id, TRIM(LOWER(first_name || ' ' || last_name)) AS full_name
+         FROM employees WHERE deleted_at IS NULL`
+    );
+    const empMap = new Map(empRows.map((e) => [e.full_name, e.id]));
+
+    const { rows: contractRows } = await conn.query(
+      `SELECT id, TRIM(LOWER(name)) AS name FROM contracts WHERE deleted_at IS NULL`
+    );
+    const contractMap = new Map(contractRows.map((c) => [c.name, c.id]));
+
+    const { rows: asgRows } = await conn.query(
+      `SELECT id, employee_id, contract_id, start_date, end_date, status
+         FROM assignments
+        WHERE deleted_at IS NULL AND status <> 'cancelled'
+        ORDER BY start_date DESC`
+    );
+    // employee_id:contract_id → assignments sorted newest-first
+    const asgIndex = new Map();
+    for (const a of asgRows) {
+      const key = `${a.employee_id}:${a.contract_id}`;
+      if (!asgIndex.has(key)) asgIndex.set(key, []);
+      asgIndex.get(key).push(a);
+    }
+
+    const results = [];
+    let created = 0;
+    let skipped = 0;
+
+    for (let i = 0; i < entries.length; i++) {
+      const { employee_name, work_date, project_name, hours } = entries[i];
+      const row = { row: i + 1, employee_name, work_date, project_name, hours, status: null, reason: null, warn: null };
+
+      // Resolve employee — exact then partial
+      const empKey = String(employee_name || '').trim().toLowerCase();
+      let employee_id = empMap.get(empKey);
+      if (!employee_id) {
+        for (const [name, id] of empMap) {
+          if (name.includes(empKey) || empKey.includes(name)) { employee_id = id; break; }
+        }
+      }
+      if (!employee_id) {
+        row.status = 'unresolved'; row.reason = `Empleado no encontrado: "${employee_name}"`;
+        results.push(row); skipped++; continue;
+      }
+      row.employee_id = employee_id;
+
+      // Resolve contract — exact then partial
+      const contractKey = String(project_name || '').trim().toLowerCase();
+      let contract_id = contractMap.get(contractKey);
+      if (!contract_id) {
+        for (const [name, id] of contractMap) {
+          if (name.includes(contractKey) || contractKey.includes(name)) { contract_id = id; break; }
+        }
+      }
+      if (!contract_id) {
+        row.status = 'unresolved'; row.reason = `Contrato no encontrado: "${project_name}"`;
+        results.push(row); skipped++; continue;
+      }
+      row.contract_id = contract_id;
+
+      // Find best assignment: prefer one whose date range covers work_date, else most recent
+      const candidates = asgIndex.get(`${employee_id}:${contract_id}`) || [];
+      let assignment = null;
+      for (const a of candidates) {
+        const start = String(a.start_date).slice(0, 10);
+        const end   = a.end_date ? String(a.end_date).slice(0, 10) : '9999-12-31';
+        if (work_date >= start && work_date <= end) { assignment = a; break; }
+      }
+      if (!assignment && candidates.length) {
+        assignment = candidates[0];
+        row.warn = 'work_date fuera del rango de la asignación; usando la más reciente';
+      }
+      if (!assignment) {
+        row.status = 'unresolved';
+        row.reason = `Sin asignación activa para "${employee_name}" en "${project_name}"`;
+        results.push(row); skipped++; continue;
+      }
+      row.assignment_id = assignment.id;
+
+      // Validate hours
+      const h = Number(hours);
+      if (!Number.isFinite(h) || h <= 0 || h > 24) {
+        row.status = 'unresolved'; row.reason = `Horas inválidas: ${hours}`;
+        results.push(row); skipped++; continue;
+      }
+
+      if (dry_run) {
+        row.status = 'ready'; results.push(row); continue;
+      }
+
+      // Insert — skip if an identical entry already exists (idempotent re-run)
+      const { rows: exists } = await conn.query(
+        `SELECT id FROM time_entries
+          WHERE employee_id=$1 AND assignment_id=$2 AND work_date=$3
+            AND hours=$4 AND deleted_at IS NULL LIMIT 1`,
+        [employee_id, assignment.id, work_date, h]
+      );
+      if (exists.length) {
+        row.status = 'skipped'; row.reason = 'entrada duplicada';
+        results.push(row); skipped++; continue;
+      }
+
+      try {
+        const { rows: ins } = await conn.query(
+          `INSERT INTO time_entries
+             (employee_id, assignment_id, work_date, hours, description, status, created_by)
+           VALUES ($1,$2,$3,$4,$5,'submitted',$6) RETURNING id`,
+          [employee_id, assignment.id, work_date, h, `Historial: ${project_name}`, req.user.id]
+        );
+        row.status = 'created'; row.id = ins[0].id;
+        created++;
+      } catch (insertErr) {
+        row.status = 'error'; row.reason = insertErr.message; skipped++;
+      }
+      results.push(row);
+    }
+
+    if (!dry_run && created > 0) {
+      await emitEvent(conn, {
+        event_type: 'time_entry.bulk_imported', entity_type: 'time_entry', entity_id: null,
+        actor_user_id: req.user.id,
+        payload: { total: entries.length, created, skipped },
+        req,
+      });
+    }
+
+    const resolved = results.filter((r) => r.status === 'ready' || r.status === 'created').length;
+    res.json({ dry_run, summary: { total: entries.length, resolved, created, skipped }, rows: results });
+  } catch (err) {
+    serverError(res, 'POST /time-entries/import-bulk', err);
+  } finally {
+    conn.release();
+  }
 });
 
 /* -------- COPY WEEK (ET-3) --------
