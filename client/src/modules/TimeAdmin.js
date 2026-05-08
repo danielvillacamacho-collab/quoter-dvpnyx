@@ -308,6 +308,7 @@ export default function TimeAdmin() {
     : '';
 
   return (
+    <>
     <div style={s.page}>
       <div style={s.ph}>
         <div>
@@ -566,12 +567,12 @@ export default function TimeAdmin() {
         </div>
       )}
     </div>
-
       {showImport && (
         <TimeEntriesImport
           onClose={() => setShowImport(false)}
           onImported={() => setShowImport(false)}
         />
       )}
+    </>
   );
 }
