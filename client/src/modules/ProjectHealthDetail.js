@@ -48,6 +48,21 @@ function fmtUsd(n) {
 function fmtIdx(n) { return n == null ? '—' : Number(n).toFixed(3); }
 function fmtPct(n) { return n == null ? '—' : (Number(n) * 100).toFixed(1) + '%'; }
 
+/** Format ISO date string to dd/mm/yyyy */
+function fmtDate(d) {
+  if (!d) return '—';
+  const s = String(d).slice(0, 10); // "2026-05-08"
+  const [y, m, day] = s.split('-');
+  return `${day}/${m}/${y}`;
+}
+/** Short date for chart labels: dd/mm */
+function fmtDateShort(d) {
+  if (!d) return '';
+  const s = String(d).slice(0, 10);
+  const [, m, day] = s.split('-');
+  return `${day}/${m}`;
+}
+
 function idxColor(v, threshold = 0.95) {
   if (v == null) return 'var(--ds-text)';
   if (v >= threshold) return '#16a34a';
@@ -96,7 +111,7 @@ function TrendChart({ trend }) {
       {/* X axis labels */}
       {trend.map((t, i) => (
         <text key={i} x={PAD + i * xStep} y={H - 4} fontSize={8} fill="#999" textAnchor="middle">
-          {String(t.cutoff_date || '').slice(5)}
+          {fmtDateShort(t.cutoff_date)}
         </text>
       ))}
       {/* Legend */}
@@ -369,7 +384,7 @@ export default function ProjectHealthDetail() {
           </div>
           <p style={ds.sub}>
             Baseline v{data.baseline?.version} · {data.baseline?.measurement_method} ·
-            {' '}{data.baseline?.planned_start} → {data.baseline?.planned_end} ·
+            {' '}{fmtDate(data.baseline?.planned_start)} → {fmtDate(data.baseline?.planned_end)} ·
             BAC Cost: {fmtUsd(data.baseline?.bac_cost_usd)} · BAC Revenue: {fmtUsd(data.baseline?.bac_revenue_usd)}
           </p>
 
@@ -439,8 +454,8 @@ export default function ProjectHealthDetail() {
                           <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', minWidth: 40, textAlign: 'right' }}>{pct.toFixed(0)}%</span>
                         </div>
                       </td>
-                      <td style={{ ...td, fontSize: 12 }}>{w.planned_start}</td>
-                      <td style={{ ...td, fontSize: 12 }}>{w.planned_end}</td>
+                      <td style={{ ...td, fontSize: 12 }}>{fmtDate(w.planned_start)}</td>
+                      <td style={{ ...td, fontSize: 12 }}>{fmtDate(w.planned_end)}</td>
                     </tr>
                   );
                 })}
