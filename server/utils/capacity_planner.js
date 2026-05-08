@@ -178,14 +178,43 @@ function utilizationBucket(pct) {
 }
 
 /**
+ * Count business days (Mon–Fri) where the assignment [aStart, aEnd]
+ * overlaps with the week window [wStart, wEnd].
+ *
+ * Returns a value 0..5 (a week has at most 5 business days).
+ */
+function businessDaysInOverlap(aStart, aEnd, wStart, wEnd) {
+  const as = parseDateUTC(aStart);
+  const ws = parseDateUTC(wStart);
+  if (!as || !ws) return 0;
+  const ae = aEnd ? parseDateUTC(aEnd) : null;
+  const we = parseDateUTC(wEnd);
+  // Effective overlap window
+  const overlapStart = as > ws ? as : ws;
+  const overlapEnd = ae && we ? (ae < we ? ae : we) : (ae || we);
+  if (!overlapEnd || overlapEnd < overlapStart) return 0;
+  let count = 0;
+  const cur = new Date(overlapStart.getTime());
+  while (cur <= overlapEnd) {
+    const dow = cur.getUTCDay(); // 0=Sun, 1=Mon..5=Fri, 6=Sat
+    if (dow >= 1 && dow <= 5) count += 1;
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return count;
+}
+
+/**
  * For a single employee + her assignments, produce one entry per week
  * window with hours, utilization_pct, and bucket.
  *
- * Non-terminated assignments with any overlap contribute full
- * `weekly_hours`. Terminated/cancelled are ignored.
+ * Assignments are prorated by the fraction of business days (Mon–Fri)
+ * they cover within each week. A full-week assignment (5/5 days)
+ * contributes 100% of weekly_hours; an assignment ending Wednesday
+ * contributes 3/5 = 60%.
  */
 function computeWeeklyForEmployee(employee, assignments, weekWindows) {
   const cap = Number(employee.weekly_capacity_hours) || 0;
+  const BDAYS_PER_WEEK = 5;
   const weekly = weekWindows.map((ww) => ({
     week_index: ww.index,
     start_date: ww.start_date,
@@ -199,12 +228,15 @@ function computeWeeklyForEmployee(employee, assignments, weekWindows) {
     if (hrs <= 0) continue;
     for (let i = 0; i < weekWindows.length; i += 1) {
       const ww = weekWindows[i];
-      if (rangesOverlap(a.start_date, a.end_date, ww.start_date, ww.end_date)) {
-        weekly[i].hours += hrs;
+      const activeDays = businessDaysInOverlap(a.start_date, a.end_date, ww.start_date, ww.end_date);
+      if (activeDays > 0) {
+        const fraction = activeDays / BDAYS_PER_WEEK;
+        weekly[i].hours += hrs * fraction;
       }
     }
   }
   for (const w of weekly) {
+    w.hours = Math.round(w.hours * 10) / 10;
     const pct = cap > 0 ? (w.hours / cap) * 100 : 0;
     w.utilization_pct = Math.round(pct * 10) / 10;
     w.bucket = utilizationBucket(pct);
@@ -396,6 +428,7 @@ module.exports = {
   // planner core
   buildWeekWindows,
   rangesOverlap,
+  businessDaysInOverlap,
   weekRangeForAssignment,
   utilizationBucket,
   computeWeeklyForEmployee,

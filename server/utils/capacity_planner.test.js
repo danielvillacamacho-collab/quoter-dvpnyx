@@ -99,16 +99,30 @@ describe('computeWeeklyForEmployee', () => {
   const windows = buildWeekWindows('2026-04-20', 4);
   const emp = { id: 'e1', weekly_capacity_hours: 40 };
 
-  it('sums overlapping assignments per week and sets bucket', () => {
+  it('prorates assignments by business days and sets bucket', () => {
     const weekly = computeWeeklyForEmployee(emp, [
       { id: 'a1', weekly_hours: 20, start_date: '2026-04-20', end_date: '2026-05-03', status: 'active' },
-      { id: 'a2', weekly_hours: 25, start_date: '2026-04-27', end_date: '2026-04-27', status: 'planned' }, // single day in W18
+      { id: 'a2', weekly_hours: 25, start_date: '2026-04-27', end_date: '2026-04-27', status: 'planned' }, // single day (Mon) in W18
     ], windows);
     expect(weekly).toHaveLength(4);
+    // a1 covers full week 0 (Mon–Fri = 5/5) → 20h
     expect(weekly[0]).toMatchObject({ week_index: 0, hours: 20, utilization_pct: 50, bucket: 'light' });
-    expect(weekly[1]).toMatchObject({ week_index: 1, hours: 45, utilization_pct: expect.any(Number), bucket: 'overbooked' });
-    expect(weekly[1].utilization_pct).toBeCloseTo(112.5, 1);
+    // Week 1: a1 full week (5/5)=20h + a2 single Mon (1/5)=5h → 25h, 62.5%
+    expect(weekly[1]).toMatchObject({ week_index: 1, hours: 25, bucket: 'light' });
+    expect(weekly[1].utilization_pct).toBeCloseTo(62.5, 1);
     expect(weekly[2]).toMatchObject({ hours: 0, bucket: 'idle' });
+  });
+
+  it('shows 100% (not 200%) when assignments swap mid-week without overlap', () => {
+    // Employee ends project A on Thursday, starts project B on Friday — same week
+    const weekly = computeWeeklyForEmployee(emp, [
+      { id: 'a1', weekly_hours: 40, start_date: '2026-04-20', end_date: '2026-04-23', status: 'active' },  // Mon–Thu
+      { id: 'a2', weekly_hours: 40, start_date: '2026-04-24', end_date: '2026-05-15', status: 'active' },  // Fri onwards
+    ], windows);
+    // Week 0: a1 Mon–Thu (4/5)=32h + a2 Fri (1/5)=8h → 40h, 100%
+    expect(weekly[0].hours).toBe(40);
+    expect(weekly[0].utilization_pct).toBe(100);
+    expect(weekly[0].bucket).toBe('healthy');
   });
 
   it('ignores cancelled assignments', () => {
