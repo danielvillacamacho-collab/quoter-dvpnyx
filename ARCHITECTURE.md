@@ -2,7 +2,7 @@
 
 Vista técnica del sistema. Pensado para que un ingeniero nuevo entienda **cómo fluye una request** desde el browser hasta la DB, **por qué** el código está organizado así, y **dónde** tocar para agregar algo nuevo sin romper el resto.
 
-> **Última revisión:** 2026-05-01 (housekeeping pase). Refleja main al día con: AI-readiness, sortable tables (Phase 17), endpoints `/lookup` para selectores, defense-in-depth con SAVEPOINT en helpers de side-effects (`notify`, `emitEvent`), optimizaciones PERF-001/002/003. Ver `docs/INCIDENTS.md` para los aprendizajes operativos detrás de varios de estos cambios.
+> **Última revisión:** 2026-05-08. Refleja main al día con: EVM-Revenue alignment (BAC cost from quotation, status report → revenue auto-sync, cost forecast), AI-readiness, sortable tables, endpoints `/lookup` para selectores, defense-in-depth con SAVEPOINT en helpers de side-effects (`notify`, `emitEvent`), optimizaciones PERF-001/002/003. Ver `docs/INCIDENTS.md` para los aprendizajes operativos detrás de varios de estos cambios.
 
 ---
 
@@ -153,7 +153,7 @@ flowchart TB
 | Packaging | Dockerfile multi-stage; `client/build` servido por el mismo Express en prod |
 | Reverse proxy | Traefik (TLS + host rule) |
 | CI/CD | GitHub Actions → GHCR → EC2. Pipelines: `develop-ci`, `deploy`, `deploy-dev`, `rollback`, `aws-infra`, `backup-nightly` |
-| Testing | Jest + supertest (server, 638 tests) · Jest + React Testing Library (client, 325/327) |
+| Testing | Jest + supertest (server, 1079 tests / 49 suites) · Jest + React Testing Library (client, 695 tests / 51 suites) |
 | AI futuro | Anthropic API (Claude) + OpenAI embeddings — wiring vía `utils/ai_logger.js` |
 | Infra alterna | AWS CDK (TypeScript) en `infra/` — stack listo para activar |
 
@@ -198,7 +198,7 @@ sequenceDiagram
 
 ## 5. Modelo de datos (resumen)
 
-28 tablas. Detalle completo: [`docs/specs/v2/03_data_model.md`](docs/specs/v2/03_data_model.md).
+34+ tablas (incl. EVM: project_baselines, wbs_packages, wbs_progress, project_status_reports + employee_costs, exchange_rates). Detalle completo: [`docs/specs/v2/03_data_model.md`](docs/specs/v2/03_data_model.md).
 
 ```mermaid
 erDiagram
@@ -211,7 +211,12 @@ erDiagram
   employees ||--o{ assignments : "is on"
   assignments ||--o{ time_entries : "logs hours"
   assignments ||--o{ weekly_time_allocations : "logs %"
+  employees ||--o{ employee_costs : "monthly cost"
   contracts ||--o{ revenue_periods : "monthly recognition"
+  contracts ||--o{ project_baselines : "EVM baseline"
+  project_baselines ||--o{ wbs_packages : "WBS structure"
+  project_baselines ||--o{ project_status_reports : "periodic snapshots"
+  project_status_reports ||--o{ wbs_progress : "per-package progress"
   ai_prompt_templates ||--o{ ai_interactions : "version"
 ```
 
@@ -363,7 +368,39 @@ const isAdmin = !!auth.isAdmin;
 3. Status por línea: `on_plan | over | under | missing | unplanned | no_data` con tolerancia ±10pp.
 4. Auto-scoping por rol: lead → su equipo, member → él mismo, admin → todos.
 
-### 9.3 AI-augmented (próximo paso)
+### 9.3 EVM → Revenue Recognition (Project Health)
+
+Implemented 2026-05-08. Aligns cost, progress, and revenue into one model:
+
+```mermaid
+flowchart LR
+  Q[Quotation lines<br/>cost_hour × hours × months] -->|BAC Cost| BL[Baseline]
+  C[Contract<br/>total_value_usd] -->|BAC Revenue| BL
+  BL --> WBS[WBS Packages<br/>phase weights]
+  
+  SR[Status Report<br/>% complete per phase] --> EV[Earned Value<br/>EV = Σ weight × %complete × BAC]
+  TE[Time Entries<br/>hours × employee cost] --> AC[Actual Cost]
+  
+  EV --> KPI[KPIs: SPI, CPI, EAC, VAC]
+  AC --> KPI
+  
+  EV -->|EV/BAC = global %| RP[revenue_periods<br/>real_pct auto-synced]
+  RP --> RU[real_usd =<br/>delta % × contract value]
+  
+  AC --> CF[Cost Forecast]
+  ASN[Active Assignments<br/>× employee cost<br/>× remaining weeks] --> CF
+  CF --> EAC_S[EAC staffing =<br/>AC past + projected future]
+```
+
+**Key design decisions:**
+- BAC Cost derived from quotation cost data, not arbitrary %. Override via `bac_cost_usd` in POST body.
+- Status report creation auto-syncs to revenue: global progress (EV/BAC) writes `real_pct` to `revenue_periods`.
+- Revenue for projects is driven by EVM progress, not manual entry. No dual-source-of-truth.
+- Cost forecast uses actual employee costs from `employee_costs` table × assignment hours.
+- Backfill endpoints (`/backfill-revenue`, `/backfill-bac-cost`) for mid-year adoption.
+- All EVM math in `server/utils/evm.js` — stateless, pure functions, well-tested.
+
+### 9.4 AI-augmented (próximo paso)
 
 1. Endpoint llama a `ai_logger.run()` con context.
 2. Agente devuelve sugerencia → registrada en `ai_interactions` con `__interactionId`.

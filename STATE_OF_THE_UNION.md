@@ -1,6 +1,6 @@
 # State of the Union — DVPNYX Quoter
 
-> **Fecha del snapshot:** 2026-05-02 (revisado a EOD).
+> **Fecha del snapshot:** 2026-05-08 (revisado post EVM-Revenue alignment).
 > **Para:** equipo senior que toma operación + crecimiento del producto desde **2026-05-15**.
 > **De:** Daniel Villa Camacho (Product Owner saliente, queda como referente de producto).
 > **Esto qué es:** la **carta de aterrizaje** del día 1. Léela completa antes de abrir nada más. Después seguís con [`HANDOFF.md`](HANDOFF.md) → [`docs/PROJECT_STATE_HANDOFF.md`](docs/PROJECT_STATE_HANDOFF.md) → [`ARCHITECTURE.md`](ARCHITECTURE.md).
@@ -39,7 +39,8 @@ Items con uso real en producción y tests verdes. Si los toca el equipo entrante
 - **RBAC 7 roles + scoping inline** en oportunidades (SPEC-CRM-00). Las macros canónicas (`SEE_ALL_ROLES`, `WRITE_ROLES`) están en [`server/middleware/auth.js`](server/middleware/auth.js); úsenlas, no harcodeen listas de roles en cada route.
 - **Sistema de alertas A1-A5** con dedup 24h sobre la tabla de notifications. Documentado en [`ARCHITECTURE.md §6.1`](ARCHITECTURE.md). Diseñado para que `POST /api/opportunities/check-alerts` corra en cron diario — todavía no está cableado a un cron real (ver §3).
 - **Auto-rollback en deploy a prod** ([`docs/runbooks/DEPLOY.md`](docs/runbooks/DEPLOY.md)). Health check + rollback automático si falla. Probado.
-- **Idempotencia de migrate.js**. 2267 líneas de DDL, todo `IF NOT EXISTS`. Corre en cada deploy. **No** escribir migraciones destructivas sin discutirlo primero.
+- **EVM → Revenue alignment** (SPEC-PRJ-HEALTH-01, mayo 2026). BAC cost derived from quotation, status reports auto-sync progress to revenue_periods, cost forecast from assignments. Backfill endpoints for historical data. El flujo: status report → avance global → `real_pct` en revenue automáticamente.
+- **Idempotencia de migrate.js**. 2728 líneas de DDL, todo `IF NOT EXISTS`. Corre en cada deploy. **No** escribir migraciones destructivas sin discutirlo primero.
 - **CI con 6 pipelines** que cubren tests en PR, deploy a dev al mergear, deploy a prod manual desde develop, rollback manual, backup nightly, y un stack CDK inactivo listo para activar.
 - **Capa AI-readiness** (tablas + helpers + endpoints). Aunque hoy es shelfware (ver §4), la fundación está bien diseñada — no la borren sin razón.
 
@@ -211,14 +212,22 @@ Daniel sigue como **PO referente** para preguntas de producto, contexto de decis
 
 Este doc es un snapshot del 2026-05-02. **Si algo no calza con lo que ven en el código, el código gana** — esa es la regla heredada. Avisen si encuentran cosas que estén mal documentadas; cualquier inconsistencia es deuda que dejé yo.
 
-El producto funciona. La documentación está al día (acabamos de cerrar el drift de SPEC-CRM-00 en el PR #113). Los tests están verdes salvo los 2 conocidos. El deploy automatizado tiene auto-rollback.
+El producto funciona. La documentación está al día. Los tests: server 1079/1079 pass, client 695/696 pass (1 skip, 8 failures en ResourceRequests.test.js pre-existentes por WIP de initiative support). El deploy automatizado tiene auto-rollback.
+
+**Cambios importantes desde 2026-05-02:**
+- EVM (Project Health) completamente integrado con Revenue: status reports auto-generan revenue recognition.
+- Contract value + currency editable desde ContractDetail.
+- SearchableSelect dropdowns ya no se cortan por overflow en tablas.
+- Backfill endpoints para adopción a mitad de año (correr antes del 1 de junio).
+- `CLAUDE.md` creado como guía de onboarding para agentes IA.
+- Branches sincronizados: main = develop. Ramas stale limpiadas.
 
 Lo que falta es lo que falta en cualquier producto real: observabilidad, telemetría de uso, refactor de las 3 monsters, MFA. Todo manejable. Nada de eso es bloqueante para que el negocio siga funcionando hoy.
 
 Suerte. Y gracias por agarrar esto.
 
-— Daniel (vía Claude, su asistente de los últimos 13 días)
+— Daniel (vía Claude, su asistente)
 
 ---
 
-*Documento vivo. Última revisión: 2026-05-02. Si pasa más de 1 sprint sin actualizarse después de un cambio grande, dejá de creerle.*
+*Documento vivo. Última revisión: 2026-05-08. Si pasa más de 1 sprint sin actualizarse después de un cambio grande, dejá de creerle.*
