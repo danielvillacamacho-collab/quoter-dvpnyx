@@ -10,7 +10,7 @@ import * as apiV2 from '../utils/apiV2';
 
 jest.mock('../utils/apiV2');
 jest.mock('../AuthContext', () => ({
-  useAuth: () => ({ isAdmin: true }),
+  useAuth: () => ({ isAdmin: false }),
 }));
 jest.mock('../shell/FilterableSelect', () => {
   const React = require('react');
