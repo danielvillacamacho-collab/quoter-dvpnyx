@@ -362,13 +362,19 @@ router.post('/:contract_id/baseline', requireRole('superadmin', 'admin', 'lead')
 
     // Create WBS packages from phases
     let cumulativeStart = new Date(plannedStart);
+    const endDate = new Date(plannedEnd);
     const wbsPackages = [];
     for (const phase of phases) {
       const phaseWeeks = Number(phase.weeks) || 1;
       const weight = evm.round4(phaseWeeks / totalWeeks);
       const phaseEnd = new Date(cumulativeStart);
       phaseEnd.setDate(phaseEnd.getDate() + phaseWeeks * 7 - 1);
-      const phaseEndClamped = phaseEnd > new Date(plannedEnd) ? new Date(plannedEnd) : phaseEnd;
+
+      // Clamp both start and end within [plannedStart, plannedEnd]
+      const startClamped = cumulativeStart > endDate ? endDate : cumulativeStart;
+      const endClamped = phaseEnd > endDate ? endDate : phaseEnd;
+      // Ensure end >= start (phases that overflow contract duration share the end date)
+      const finalEnd = endClamped < startClamped ? startClamped : endClamped;
 
       const weeklyHours = allocByPhase.get(phase.id) || 0;
       const plannedHours = weeklyHours * phaseWeeks;
@@ -382,13 +388,13 @@ router.post('/:contract_id/baseline', requireRole('superadmin', 'admin', 'lead')
          RETURNING *`,
         [baseline.id, phase.id, phase.name, phase.sort_order,
          plannedHours, plannedCostPhase, weight,
-         cumulativeStart.toISOString().slice(0, 10),
-         phaseEndClamped.toISOString().slice(0, 10)],
+         startClamped.toISOString().slice(0, 10),
+         finalEnd.toISOString().slice(0, 10)],
       );
       wbsPackages.push(wbs);
 
       // Advance start for next phase
-      cumulativeStart = new Date(phaseEndClamped);
+      cumulativeStart = new Date(finalEnd);
       cumulativeStart.setDate(cumulativeStart.getDate() + 1);
     }
 
