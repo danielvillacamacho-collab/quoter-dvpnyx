@@ -67,6 +67,56 @@ async function buildCostMap(conn, employeeIds, cutoffDate) {
   return map;
 }
 
+/** Derive total cost from quotation_lines (cost_hour × hours × months × qty). */
+async function computeQuotationCost(conn, quotationId) {
+  const { rows } = await conn.query(
+    `SELECT COALESCE(SUM(
+       COALESCE(cost_hour, 0) * COALESCE(hours_per_week, 0) * 4.333
+       * COALESCE(duration_months, 1) * COALESCE(quantity, 1)
+     ), 0)::numeric AS total_cost
+     FROM quotation_lines WHERE quotation_id = $1`,
+    [quotationId],
+  );
+  return Number(rows[0].total_cost || 0);
+}
+
+/**
+ * Sync EVM progress → revenue_periods.
+ * Writes cumulative real_pct for the given month and recalculates real_usd
+ * for that month + all subsequent months with real_pct (delta model).
+ */
+async function syncRevenueFromProgress(conn, contractId, yyyymm, realPct, totalValueUsd, userId) {
+  // Upsert the row for this month
+  await conn.query(
+    `INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, real_pct, created_by, updated_by)
+     VALUES ($1, $2, 0, $3, $4, $4)
+     ON CONFLICT (contract_id, yyyymm) DO UPDATE SET
+       real_pct   = EXCLUDED.real_pct,
+       updated_by = EXCLUDED.updated_by,
+       updated_at = NOW()`,
+    [contractId, yyyymm, realPct, userId],
+  );
+  // Recalculate real_usd for all months with real_pct (delta model)
+  const { rows: allMonths } = await conn.query(
+    `SELECT yyyymm, real_pct FROM revenue_periods
+      WHERE contract_id = $1 AND real_pct IS NOT NULL
+      ORDER BY yyyymm ASC`,
+    [contractId],
+  );
+  let prevPct = 0;
+  for (const m of allMonths) {
+    const pct = Number(m.real_pct);
+    const realUsd = (pct - prevPct) * totalValueUsd;
+    await conn.query(
+      `UPDATE revenue_periods
+          SET real_usd = $3::numeric, updated_at = NOW()
+        WHERE contract_id = $1 AND yyyymm = $2`,
+      [contractId, m.yyyymm, realUsd],
+    );
+    prevPct = pct;
+  }
+}
+
 // ──────────── POST /baseline ────────────
 
 router.post('/:contract_id/baseline', requireRole('superadmin', 'admin', 'lead'), async (req, res) => {
@@ -118,12 +168,31 @@ router.post('/:contract_id/baseline', requireRole('superadmin', 'admin', 'lead')
     );
     const allocByPhase = new Map(allocations.map(a => [a.phase_id, Number(a.total_weekly)]));
 
-    // Derive BAC
+    // Derive BAC Revenue = contract value (manual); BAC Cost = quotation cost or override.
     const bacRevenue = Number(contract.total_value_usd || 0);
-    const bacCost = Number(req.body.bac_cost_usd || bacRevenue * 0.75); // default 75% cost
+    // BAC Cost: prefer explicit override, else derive from quotation cost_hour data.
+    // cost_hour × hours_per_week × 4.333 × duration_months × quantity per line.
+    let bacCost = 0;
+    if (req.body.bac_cost_usd) {
+      bacCost = Number(req.body.bac_cost_usd);
+    } else {
+      const { rows: costRows } = await conn.query(
+        `SELECT COALESCE(SUM(
+           COALESCE(cost_hour, 0) * COALESCE(hours_per_week, 0) * 4.333
+           * COALESCE(duration_months, 1) * COALESCE(quantity, 1)
+         ), 0)::numeric AS total_cost
+         FROM quotation_lines WHERE quotation_id = $1`,
+        [contract.winning_quotation_id],
+      );
+      bacCost = Number(costRows[0].total_cost || 0);
+    }
     if (bacCost <= 0 || bacRevenue <= 0) {
       await conn.query('ROLLBACK');
-      return res.status(400).json({ error: 'BAC cost y revenue deben ser > 0' });
+      return res.status(400).json({
+        error: bacRevenue <= 0
+          ? 'El contrato no tiene valor (total_value_usd). Edítalo primero desde el detalle del contrato.'
+          : 'No se pudo derivar BAC cost de la cotización (cost_hour × horas). Verifica las líneas de la cotización o envía bac_cost_usd manualmente.',
+      });
     }
 
     const plannedStart = contract.start_date ? new Date(contract.start_date).toISOString().slice(0, 10) : new Date().toISOString().slice(0, 10);
@@ -505,8 +574,19 @@ router.post('/:contract_id/status-reports', requireRole('superadmin', 'admin', '
       });
     }
 
+    // ── Bridge: EVM progress → Revenue recognition ──
+    // El avance global (EV / BAC) = real_pct acumulado a fin del mes del cutoff.
+    // Se escribe directamente en revenue_periods para que Revenue refleje el
+    // progreso real del proyecto sin intervención manual.
+    const globalProgress = bacCost > 0 ? evm.round4(ev / bacCost) : 0;
+    const revenueMonth = cutoff.replace(/-/g, '').slice(0, 6); // '2026-05-08' → '202605'
+    const totalValue = Number(contract.total_value_usd || 0);
+    if (totalValue > 0 && globalProgress >= 0) {
+      await syncRevenueFromProgress(conn, contract_id, revenueMonth, globalProgress, totalValue, req.user.id);
+    }
+
     await conn.query('COMMIT');
-    res.status(201).json({ report, computed_kpis: computedKpis, health });
+    res.status(201).json({ report, computed_kpis: computedKpis, health, revenue_synced: { yyyymm: revenueMonth, real_pct: globalProgress } });
   } catch (err) {
     await safeRollback(conn);
     serverError(res, 'POST /projects/:contract_id/status-reports', err);
@@ -704,6 +784,219 @@ router.post('/:contract_id/closeout', requireRole('superadmin', 'admin', 'direct
   } catch (err) {
     await safeRollback(conn);
     serverError(res, 'POST /projects/:contract_id/closeout', err);
+  } finally { conn.release(); }
+});
+
+// ──────────── GET /cost-forecast ────────────
+// Costo real planeado = AC ejecutado (pasado) + asignaciones futuras (planeado).
+// Útil para saber si el proyecto se va a salir del presupuesto con el staffing actual.
+
+router.get('/:contract_id/cost-forecast', async (req, res) => {
+  try {
+    const contract = await loadContract(pool, req.params.contract_id);
+    if (!contract) return res.status(404).json({ error: 'Contrato no encontrado' });
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    // 1. AC ejecutado: horas registradas × costo horario (pasado)
+    const { rows: timeRows } = await pool.query(
+      `SELECT te.employee_id, SUM(te.hours) AS hours
+         FROM time_entries te
+         JOIN assignments a ON a.id = te.assignment_id
+        WHERE a.contract_id = $1
+          AND te.work_date <= $2
+          AND te.deleted_at IS NULL
+        GROUP BY te.employee_id`,
+      [contract.id, today],
+    );
+    const empIdsAc = timeRows.map(r => r.employee_id);
+    const costMapAc = await buildCostMap(pool, empIdsAc, today);
+    const acResult = evm.computeAC(
+      timeRows.map(r => ({ employee_id: r.employee_id, hours: Number(r.hours) })),
+      costMapAc,
+    );
+
+    // 2. Costo futuro planeado: asignaciones activas/planned × costo horario × semanas restantes
+    const { rows: assignments } = await pool.query(
+      `SELECT a.employee_id, a.weekly_hours, a.start_date, a.end_date
+         FROM assignments a
+        WHERE a.contract_id = $1
+          AND a.status IN ('active', 'planned')
+          AND a.deleted_at IS NULL
+          AND (a.end_date IS NULL OR a.end_date > $2)`,
+      [contract.id, today],
+    );
+
+    const futureEmpIds = [...new Set(assignments.map(a => a.employee_id))];
+    const costMapFuture = await buildCostMap(pool, futureEmpIds, today);
+
+    let plannedFutureCost = 0;
+    const futureDetails = [];
+    for (const a of assignments) {
+      const startFrom = a.start_date && a.start_date > today ? a.start_date : today;
+      const endAt = a.end_date || (contract.end_date ? new Date(contract.end_date).toISOString().slice(0, 10) : null);
+      if (!endAt) continue;
+      const diffMs = new Date(endAt) - new Date(startFrom);
+      const weeks = Math.max(0, diffMs / (7 * 24 * 3600 * 1000));
+      const hourlyRate = costMapFuture.get(a.employee_id) || 0;
+      const cost = Number(a.weekly_hours) * weeks * hourlyRate;
+      plannedFutureCost += cost;
+      futureDetails.push({
+        employee_id: a.employee_id,
+        weekly_hours: Number(a.weekly_hours),
+        weeks_remaining: evm.round2(weeks),
+        hourly_cost: evm.round2(hourlyRate),
+        projected_cost: evm.round2(cost),
+        has_cost_data: hourlyRate > 0,
+      });
+    }
+
+    const eac_staffing = evm.round2(acResult.ac + plannedFutureCost);
+
+    // 3. BAC from baseline (if exists) for comparison
+    const { rows: [baseline] } = await pool.query(
+      'SELECT bac_cost_usd, bac_revenue_usd FROM project_baselines WHERE contract_id=$1 AND is_active=true',
+      [contract.id],
+    );
+    const bacCost = baseline ? Number(baseline.bac_cost_usd) : null;
+    const bacRevenue = baseline ? Number(baseline.bac_revenue_usd) : null;
+    const variance = bacCost != null ? evm.round2(bacCost - eac_staffing) : null;
+
+    res.json({
+      contract_id: contract.id,
+      as_of: today,
+      ac_executed: acResult.ac,
+      ac_warnings: acResult.warnings,
+      planned_future_cost: evm.round2(plannedFutureCost),
+      eac_staffing,
+      bac_cost: bacCost,
+      bac_revenue: bacRevenue,
+      variance_at_completion: variance,
+      margin_projected: bacRevenue && eac_staffing ? evm.round2(bacRevenue - eac_staffing) : null,
+      assignments_detail: futureDetails,
+    });
+  } catch (err) { serverError(res, 'GET /projects/:contract_id/cost-forecast', err); }
+});
+
+// ──────────── POST /backfill-revenue ────────────
+// Admin-only: reprocess all existing status reports to sync progress → revenue.
+// Useful for historical data before the bridge was implemented.
+
+router.post('/:contract_id/backfill-revenue', requireRole('superadmin', 'admin'), async (req, res) => {
+  const { contract_id } = req.params;
+  const conn = await pool.connect();
+  try {
+    await conn.query('BEGIN');
+    const contract = await loadContract(conn, contract_id);
+    if (!contract) { await conn.query('ROLLBACK'); return res.status(404).json({ error: 'Contrato no encontrado' }); }
+
+    const totalValue = Number(contract.total_value_usd || 0);
+    if (totalValue <= 0) {
+      await conn.query('ROLLBACK');
+      return res.status(400).json({ error: 'El contrato necesita total_value_usd > 0 para sincronizar revenue' });
+    }
+
+    // Load all baselines (active and historical) to find status reports
+    const { rows: baselines } = await conn.query(
+      'SELECT id, bac_cost_usd FROM project_baselines WHERE contract_id=$1 ORDER BY version',
+      [contract_id],
+    );
+    if (!baselines.length) {
+      await conn.query('ROLLBACK');
+      return res.status(404).json({ error: 'No hay baselines para este contrato' });
+    }
+
+    // For each status report, compute the global progress at that point
+    // and assign it to the month of the cutoff_date
+    const synced = [];
+    for (const bl of baselines) {
+      const bacCost = Number(bl.bac_cost_usd);
+      if (bacCost <= 0) continue;
+
+      const { rows: reports } = await conn.query(
+        `SELECT psr.id, psr.cutoff_date, psr.computed_kpis
+           FROM project_status_reports psr
+          WHERE psr.baseline_id = $1
+          ORDER BY psr.cutoff_date ASC`,
+        [bl.id],
+      );
+
+      for (const rpt of reports) {
+        const kpis = rpt.computed_kpis || {};
+        // EV from computed_kpis is already stored
+        const evValue = Number(kpis.ev || 0);
+        const globalPct = evm.round4(evValue / bacCost);
+        const yyyymm = String(rpt.cutoff_date).replace(/-/g, '').slice(0, 6);
+
+        await syncRevenueFromProgress(conn, contract_id, yyyymm, globalPct, totalValue, req.user.id);
+        synced.push({ cutoff_date: rpt.cutoff_date, yyyymm, real_pct: globalPct });
+      }
+    }
+
+    await conn.query('COMMIT');
+    res.json({ synced_count: synced.length, details: synced });
+  } catch (err) {
+    await safeRollback(conn);
+    serverError(res, 'POST /projects/:contract_id/backfill-revenue', err);
+  } finally { conn.release(); }
+});
+
+// ──────────── POST /backfill-bac-cost ────────────
+// Admin-only: recalculate bac_cost_usd on active baseline from quotation lines.
+
+router.post('/:contract_id/backfill-bac-cost', requireRole('superadmin', 'admin'), async (req, res) => {
+  const { contract_id } = req.params;
+  const conn = await pool.connect();
+  try {
+    await conn.query('BEGIN');
+    const contract = await loadContract(conn, contract_id);
+    if (!contract) { await conn.query('ROLLBACK'); return res.status(404).json({ error: 'Contrato no encontrado' }); }
+    if (!contract.winning_quotation_id) {
+      await conn.query('ROLLBACK');
+      return res.status(422).json({ error: 'Sin cotización ganadora' });
+    }
+
+    const quotationCost = await computeQuotationCost(conn, contract.winning_quotation_id);
+    if (quotationCost <= 0) {
+      await conn.query('ROLLBACK');
+      return res.status(400).json({ error: 'Costo derivado de la cotización es 0. Verifica cost_hour en las líneas.' });
+    }
+
+    const { rows: [baseline] } = await conn.query(
+      'SELECT id, bac_cost_usd FROM project_baselines WHERE contract_id=$1 AND is_active=true FOR UPDATE',
+      [contract_id],
+    );
+    if (!baseline) {
+      await conn.query('ROLLBACK');
+      return res.status(404).json({ error: 'No hay baseline activo' });
+    }
+
+    const oldBac = Number(baseline.bac_cost_usd);
+    await conn.query(
+      'UPDATE project_baselines SET bac_cost_usd=$1 WHERE id=$2',
+      [quotationCost, baseline.id],
+    );
+
+    // Recalculate planned_cost_usd on WBS packages (proportional to weight)
+    const { rows: wbs } = await conn.query(
+      "SELECT id, weight_pct FROM wbs_packages WHERE baseline_id=$1 AND kind='phase'",
+      [baseline.id],
+    );
+    for (const pkg of wbs) {
+      const newCost = evm.round2(Number(pkg.weight_pct) * quotationCost);
+      await conn.query('UPDATE wbs_packages SET planned_cost_usd=$1 WHERE id=$2', [newCost, pkg.id]);
+    }
+
+    await conn.query('COMMIT');
+    res.json({
+      baseline_id: baseline.id,
+      old_bac_cost: oldBac,
+      new_bac_cost: quotationCost,
+      wbs_updated: wbs.length,
+    });
+  } catch (err) {
+    await safeRollback(conn);
+    serverError(res, 'POST /projects/:contract_id/backfill-bac-cost', err);
   } finally { conn.release(); }
 });
 

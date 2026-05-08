@@ -200,6 +200,17 @@ function BaselineForm({ contractId, onCreated }) {
   const [method, setMethod] = useState('weighted_milestones');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [contractInfo, setContractInfo] = useState(null);
+
+  // Load contract info to show BAC preview
+  useEffect(() => {
+    apiGet(`/api/contracts/${contractId}`)
+      .then(c => setContractInfo(c))
+      .catch(() => {});
+  }, [contractId]);
+
+  const contractValue = contractInfo ? Number(contractInfo.total_value_usd || 0) : 0;
+  const currency = contractInfo?.original_currency || 'USD';
 
   const handleCreate = async () => {
     try {
@@ -220,6 +231,33 @@ function BaselineForm({ contractId, onCreated }) {
       <p style={{ fontSize: 13, color: 'var(--ds-text-soft)', marginBottom: 12 }}>
         Este proyecto no tiene baseline activo. Crea uno a partir de la cotización ganadora para comenzar a medir EVM.
       </p>
+
+      {contractInfo && (
+        <div style={{ marginBottom: 16, padding: '12px 16px', background: '#f8fafc', border: '1px solid var(--ds-border)', borderRadius: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ds-text-soft)', textTransform: 'uppercase', marginBottom: 8 }}>Valores del baseline</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>BAC Revenue (valor contrato)</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: contractValue > 0 ? 'var(--ds-accent)' : '#dc2626' }}>
+                {contractValue > 0 ? `${contractValue.toLocaleString()} ${currency}` : 'Sin definir'}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>BAC Cost (nómina de la cotización)</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--ds-accent)' }}>
+                Se calcula automáticamente
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--ds-text-soft)' }}>cost_hour x horas x meses x cantidad</div>
+            </div>
+          </div>
+          {contractValue <= 0 && (
+            <div style={{ marginTop: 8, fontSize: 12, color: '#dc2626' }}>
+              Edita el contrato para definir el valor antes de crear el baseline.
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ marginBottom: 12 }}>
         <label style={ds.label}>Razón</label>
         <input value={reason} onChange={e => setReason(e.target.value)} style={ds.input} />
@@ -238,7 +276,7 @@ function BaselineForm({ contractId, onCreated }) {
         </div>
       </div>
       {error && <p style={{ color: 'red', fontSize: 13, marginBottom: 8 }}>{error}</p>}
-      <button style={ds.btn} onClick={handleCreate} disabled={saving}>
+      <button style={ds.btn} onClick={handleCreate} disabled={saving || contractValue <= 0}>
         {saving ? 'Creando…' : 'Congelar baseline'}
       </button>
     </div>
@@ -297,7 +335,7 @@ export default function ProjectHealthDetail() {
           <p style={ds.sub}>
             Baseline v{data.baseline?.version} · {data.baseline?.measurement_method} ·
             {' '}{data.baseline?.planned_start} → {data.baseline?.planned_end} ·
-            BAC: {fmtUsd(data.baseline?.bac_cost_usd)}
+            BAC Cost: {fmtUsd(data.baseline?.bac_cost_usd)} · BAC Revenue: {fmtUsd(data.baseline?.bac_revenue_usd)}
           </p>
 
           {/* Health drivers */}
