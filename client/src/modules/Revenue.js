@@ -117,20 +117,23 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
 
   // For non-capacity contracts, real is manually editable.
   // For capacity contracts, real is auto-computed (read-only).
+  // For resell, the input is in display currency (not original).
+  const realSource = isResell ? cell?.real_amount_display : cell?.real_amount_original;
   const initialReal = isProject
     ? formatPctForInput(cell?.real_pct)
-    : (cell?.real_amount_original != null ? String(cell.real_amount_original) : '');
+    : (realSource != null ? String(realSource) : '');
   const [real, setReal] = useState(initialReal);
   const [savingField, setSavingField] = useState(null);
   const realInitial = useRef(initialReal);
 
   useEffect(() => {
+    const src = isResell ? cell?.real_amount_display : cell?.real_amount_original;
     const nextInit = isProject
       ? formatPctForInput(cell?.real_pct)
-      : (cell?.real_amount_original != null ? String(cell.real_amount_original) : '');
+      : (src != null ? String(src) : '');
     setReal(nextInit);
     realInitial.current = nextInit;
-  }, [cell, isProject]);
+  }, [cell, isProject, isResell]);
 
   const flushReal = async () => {
     if (isAutoReal) return; // capacity real is auto-computed, not editable
@@ -140,7 +143,9 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
       const empty = real === '';
       const body = isProject
         ? { real_pct: empty ? null : Number(real) / 100 }
-        : { real_usd: empty ? null : Number(real) };
+        : isResell
+          ? { real_display: empty ? null : Number(real), display_currency: ccyDisplay }
+          : { real_usd: empty ? null : Number(real) };
       const updated = await apiPut(`/api/revenue/${contract.id}/${yyyymm}`, body);
       onSaved(updated);
       realInitial.current = real;
@@ -195,7 +200,7 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
         <div>
           <span style={s.cellLabel}>
             Real {isAutoReal && <span title="Calculado automáticamente de asignaciones y tarifas" style={{ marginLeft: 2 }}>⚡</span>}
-            {!isAutoReal && (isProject ? '(%)' : `(${ccyOrig})`)}
+            {!isAutoReal && (isProject ? '(%)' : `(${isResell ? ccyDisplay : ccyOrig})`)}
           </span>
           {isAutoReal ? (
             // Capacity: real is auto-computed, show read-only
@@ -226,13 +231,15 @@ function EditableCell({ cell, contract, yyyymm, displayCurrency, onSaved, onClos
                 aria-label={`Real ${yyyymm}`}
                 title={(!planExists && !isResell)
                   ? 'Declara primero el plan de reconocimiento del contrato'
-                  : (isProject ? 'Avance acumulado del proyecto a fin de mes (0-100%). El revenue del mes se calcula como (este % − % del mes anterior) × valor del contrato.' : `Monto real en ${ccyOrig}`)}
+                  : (isProject ? 'Avance acumulado del proyecto a fin de mes (0-100%). El revenue del mes se calcula como (este % − % del mes anterior) × valor del contrato.' : `Monto real en ${isResell ? ccyDisplay : ccyOrig}`)}
               />
               {(planExists || isResell) && (
                 <span style={{ fontSize: 9, color: 'var(--text-light)' }}>
                   {isProject
                     ? (liveLocalUsd != null ? fmtMoney(liveLocalUsd, ccyOrig) : (realOrig != null ? fmtMoney(realOrig, ccyOrig) : '—'))
-                    : (realDisp != null && showDual ? fmtMoney(realDisp, ccyDisplay) : (fxMissing ? '— sin tasa' : ''))}
+                    : isResell
+                      ? (realOrig != null && showDual ? fmtMoney(realOrig, ccyOrig) : (fxMissing ? '— sin tasa' : ''))
+                      : (realDisp != null && showDual ? fmtMoney(realDisp, ccyDisplay) : (fxMissing ? '— sin tasa' : ''))}
                 </span>
               )}
             </>
