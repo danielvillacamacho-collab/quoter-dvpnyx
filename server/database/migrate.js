@@ -2569,6 +2569,82 @@ const SPEC_RM_00_SQL = `
     WHERE deleted_at IS NULL AND status IN ('planned','active');
 `;
 
+// ── SPEC-PRJ-HEALTH-01 — Project Health (EVM PMI) ──────────────────
+const SPEC_PRJ_HEALTH_01_SQL = `
+  -- project_baselines: frozen baseline at kick-off (PMB)
+  CREATE TABLE IF NOT EXISTS project_baselines (
+    id                  UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    contract_id         UUID NOT NULL REFERENCES contracts(id) ON DELETE CASCADE,
+    version             INT  NOT NULL DEFAULT 1,
+    frozen_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    frozen_by           UUID NOT NULL REFERENCES users(id),
+    reason              TEXT NULL,
+    bac_cost_usd        NUMERIC(14,2) NOT NULL CHECK (bac_cost_usd > 0),
+    bac_revenue_usd     NUMERIC(14,2) NOT NULL CHECK (bac_revenue_usd > 0),
+    planned_start       DATE NOT NULL,
+    planned_end         DATE NOT NULL CHECK (planned_end >= planned_start),
+    measurement_method  VARCHAR(20) NOT NULL DEFAULT 'weighted_milestones'
+      CHECK (measurement_method IN
+        ('0_100','50_50','weighted_milestones','apportioned_effort','percent_complete')),
+    snapshot            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active           BOOLEAN NOT NULL DEFAULT true,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS pb_active_uq
+    ON project_baselines(contract_id) WHERE is_active = true;
+  CREATE INDEX IF NOT EXISTS pb_contract_idx
+    ON project_baselines(contract_id);
+
+  -- wbs_packages: Work Breakdown Structure derived from quotation phases/epics/milestones
+  CREATE TABLE IF NOT EXISTS wbs_packages (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    baseline_id      UUID NOT NULL REFERENCES project_baselines(id) ON DELETE CASCADE,
+    parent_id        UUID NULL REFERENCES wbs_packages(id),
+    kind             VARCHAR(20) NOT NULL
+      CHECK (kind IN ('phase','epic','milestone','task')),
+    source_id        UUID NULL,
+    name             VARCHAR(255) NOT NULL,
+    sort_order       INT NOT NULL DEFAULT 0,
+    planned_hours    NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (planned_hours >= 0),
+    planned_cost_usd NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (planned_cost_usd >= 0),
+    weight_pct       NUMERIC(7,4) NOT NULL DEFAULT 0,
+    planned_start    DATE NOT NULL,
+    planned_end      DATE NOT NULL CHECK (planned_end >= planned_start)
+  );
+  CREATE INDEX IF NOT EXISTS wbs_baseline_idx ON wbs_packages(baseline_id);
+
+  -- project_status_reports: weekly snapshot with computed KPIs
+  CREATE TABLE IF NOT EXISTS project_status_reports (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    baseline_id     UUID NOT NULL REFERENCES project_baselines(id),
+    cutoff_date     DATE NOT NULL,
+    reported_by     UUID NOT NULL REFERENCES users(id),
+    reported_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    overall_health  VARCHAR(10) NOT NULL DEFAULT 'green'
+      CHECK (overall_health IN ('green','yellow','red')),
+    narrative       TEXT NULL,
+    risks           JSONB NULL,
+    computed_kpis   JSONB NOT NULL DEFAULT '{}'::jsonb,
+    CONSTRAINT uq_baseline_cutoff UNIQUE (baseline_id, cutoff_date)
+  );
+  CREATE INDEX IF NOT EXISTS psr_baseline_idx ON project_status_reports(baseline_id);
+
+  -- wbs_progress: per-package progress within a status report
+  CREATE TABLE IF NOT EXISTS wbs_progress (
+    id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    status_report_id  UUID NOT NULL REFERENCES project_status_reports(id) ON DELETE CASCADE,
+    wbs_package_id    UUID NOT NULL REFERENCES wbs_packages(id),
+    percent_complete  NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK (percent_complete >= 0 AND percent_complete <= 100),
+    evidence_url      TEXT NULL,
+    notes             TEXT NULL
+  );
+  CREATE INDEX IF NOT EXISTS wp_report_idx ON wbs_progress(status_report_id);
+
+  -- New FK columns on existing tables (nullable, non-breaking)
+  ALTER TABLE assignments  ADD COLUMN IF NOT EXISTS wbs_package_id UUID NULL REFERENCES wbs_packages(id);
+  ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS wbs_package_id UUID NULL REFERENCES wbs_packages(id);
+`;
+
 const migrate = async () => {
   let client;
   try {
@@ -2592,6 +2668,7 @@ const migrate = async () => {
       ['GOOGLE_OAUTH',             GOOGLE_OAUTH_SQL],
       ['SPEC_EMP_00',              SPEC_EMP_00_SQL],
       ['SPEC_RM_00',               SPEC_RM_00_SQL],
+      ['SPEC_PRJ_HEALTH_01',       SPEC_PRJ_HEALTH_01_SQL],
     ];
     for (const [label, sql] of blocks) {
       try {
