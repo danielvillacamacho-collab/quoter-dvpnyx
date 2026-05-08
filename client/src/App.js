@@ -62,6 +62,9 @@ import CountryHolidays from './modules/CountryHolidays';
 import MiPerfil from './modules/MiPerfil';
 import MisAsignaciones from './modules/MisAsignaciones';
 import Deviations from './modules/Deviations';
+// SPEC-PRJ-HEALTH-01 — Project Health (EVM/PMI)
+import ProjectHealth from './modules/ProjectHealth';
+import ProjectHealthDetail from './modules/ProjectHealthDetail';
 import './theme.css';
 import './App.css';
 
@@ -245,6 +248,8 @@ function Layout() {
           {isAdmin && <Route path="/admin/budgets" element={<Budgets />} />}
           <Route path="/admin/holidays"               element={<CountryHolidays />} />
           <Route path="/deviations"                  element={<Deviations />} />
+          <Route path="/project-health"              element={<ProjectHealth />} />
+          <Route path="/project-health/:contract_id" element={<ProjectHealthDetail />} />
           </>}
         </Routes>
         </ErrorBoundary>

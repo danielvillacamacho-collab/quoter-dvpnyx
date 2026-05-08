@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { apiGet, apiPost, apiPut } from '../utils/apiV2';
+import { apiGet, apiPost, apiPut, apiDelete } from '../utils/apiV2';
 import CandidatesModal from './CandidatesModal';
 import BulkAssignModal from './BulkAssignModal';
 import FilterableSelect from '../shell/FilterableSelect';
@@ -467,6 +467,21 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                           </span>
                           {r.reason && <span style={{ color: 'var(--ds-text-soft)', marginLeft: 6, fontStyle: 'italic' }}>({r.reason})</span>}
                         </div>
+                        <button type="button" title="Eliminar esta tarifa"
+                          onClick={async () => {
+                            // eslint-disable-next-line no-alert
+                            if (!window.confirm(`¿Eliminar tarifa ${new Intl.NumberFormat('en-US', { style: 'currency', currency: r.client_rate_currency || 'USD', maximumFractionDigits: 0 }).format(r.client_rate)} desde ${r.effective_date?.slice(0, 10)}?`)) return;
+                            try {
+                              await apiDelete(`/api/assignments/${assignmentId}/rate-history/${r.id}`);
+                              loadRateHistory();
+                              // Refresh assignment data so client_rate reflects the latest remaining entry.
+                              const updated = await apiGet(`/api/assignments/${assignmentId}`);
+                              set('client_rate', updated.client_rate != null ? String(Number(updated.client_rate)) : '');
+                            } catch (ex) { setErr(ex.message); }
+                          }}
+                          style={{ background: 'none', border: 'none', color: 'var(--danger, #dc2626)', cursor: 'pointer', fontSize: 14, padding: '2px 6px', lineHeight: 1 }}>
+                          ×
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -493,17 +508,50 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                 </div>
                 {/* Agregar nueva tarifa futura */}
                 {!showAddRate ? (
-                  <button type="button" onClick={() => { setShowAddRate(true); setNewRate({ effective_date: '', client_rate: '', reason: '' }); }}
+                  <button type="button" onClick={() => {
+                    // Auto-suggest next day after the latest entry to avoid gaps.
+                    let suggestedDate = '';
+                    if (rateHistory.length > 0) {
+                      const lastDate = rateHistory[rateHistory.length - 1].effective_date?.slice(0, 10);
+                      if (lastDate) {
+                        const d = new Date(lastDate + 'T12:00:00');
+                        d.setDate(d.getDate() + 1);
+                        suggestedDate = d.toISOString().slice(0, 10);
+                      }
+                    }
+                    setShowAddRate(true);
+                    setNewRate({ effective_date: suggestedDate, client_rate: '', reason: '' });
+                  }}
                     style={{ fontSize: 11, color: 'var(--ds-accent, var(--purple-dark))', background: 'none', border: 'none', cursor: 'pointer', padding: '4px 0', fontWeight: 600 }}>
                     + Agregar cambio de tarifa
                   </button>
                 ) : (
                   <div style={{ background: '#fff', borderRadius: 6, padding: 10, marginTop: 6, border: '1px solid var(--ds-border, #ddd)' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 6 }}>Nueva tarifa</div>
+                    {(() => {
+                      // Client-side validation: detect duplicate date or gap.
+                      const dateVal = newRate.effective_date;
+                      const existingDates = rateHistory.map((r) => r.effective_date?.slice(0, 10));
+                      const isDuplicate = dateVal && existingDates.includes(dateVal);
+                      const lastDate = existingDates.length > 0 ? existingDates[existingDates.length - 1] : null;
+                      let hasGap = false;
+                      if (dateVal && lastDate) {
+                        const nextDay = new Date(lastDate + 'T12:00:00');
+                        nextDay.setDate(nextDay.getDate() + 1);
+                        const expected = nextDay.toISOString().slice(0, 10);
+                        hasGap = dateVal !== expected && dateVal > lastDate;
+                      }
+                      const dateError = isDuplicate
+                        ? 'Ya existe una tarifa en esta fecha. Elimínala primero.'
+                        : hasGap
+                          ? `La fecha debe ser el día siguiente a la última tarifa (${(() => { const d = new Date(lastDate + 'T12:00:00'); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })()}).`
+                          : null;
+                      return (<>
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 6 }}>
                       <div>
                         <label style={ms.label}>Desde</label>
-                        <input style={ms.input} type="date" value={newRate.effective_date} onChange={(e) => setNewRate((r) => ({ ...r, effective_date: e.target.value }))} />
+                        <input style={{ ...ms.input, ...(dateError ? { borderColor: 'var(--danger, #dc2626)' } : {}) }} type="date" value={newRate.effective_date} onChange={(e) => setNewRate((r) => ({ ...r, effective_date: e.target.value }))} />
+                        {dateError && <div style={{ fontSize: 10, color: 'var(--danger, #dc2626)', marginTop: 2 }}>{dateError}</div>}
                       </div>
                       <div>
                         <label style={ms.label}>Tarifa</label>
@@ -515,7 +563,7 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                       <input style={ms.input} type="text" value={newRate.reason} onChange={(e) => setNewRate((r) => ({ ...r, reason: e.target.value }))} placeholder="Ej: Ascenso a L7, Incremento anual" />
                     </div>
                     <div style={{ display: 'flex', gap: 6 }}>
-                      <button type="button" disabled={savingRate || !newRate.effective_date || !newRate.client_rate}
+                      <button type="button" disabled={savingRate || !newRate.effective_date || !newRate.client_rate || !!dateError}
                         onClick={async () => {
                           setSavingRate(true);
                           try {
@@ -536,6 +584,8 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
                       </button>
                       <button type="button" onClick={() => setShowAddRate(false)} style={{ ...ms.btnGhost, fontSize: 11, padding: '5px 12px' }}>Cancelar</button>
                     </div>
+                      </>);
+                    })()}
                   </div>
                 )}
                 <div style={{ fontSize: 10, color: 'var(--ds-text-soft, var(--text-light))', marginTop: 6 }}>

@@ -966,6 +966,16 @@ router.post('/:id/rate-history', adminOnly, async (req, res) => {
     );
     if (!asg.length) return res.status(404).json({ error: 'Asignación no encontrada' });
 
+    // ── Validate: no duplicate effective_date ──
+    const { rows: existing } = await pool.query(
+      `SELECT id FROM assignment_rate_history
+        WHERE assignment_id = $1 AND effective_date = $2`,
+      [req.params.id, effective_date],
+    );
+    if (existing.length) {
+      return res.status(409).json({ error: `Ya existe una tarifa con fecha ${effective_date}. Elimina la existente antes de agregar una nueva.` });
+    }
+
     const ccy = client_rate_currency || asg[0].client_rate_currency || 'USD';
     const { rows } = await pool.query(
       `INSERT INTO assignment_rate_history
@@ -976,11 +986,18 @@ router.post('/:id/rate-history', adminOnly, async (req, res) => {
     );
 
     // Update the assignment's current client_rate to the latest entry.
-    await pool.query(
-      `UPDATE assignments SET client_rate = $2, client_rate_currency = $3, updated_at = NOW()
-        WHERE id = $1`,
-      [req.params.id, Number(client_rate), ccy],
+    const { rows: latest } = await pool.query(
+      `SELECT client_rate, client_rate_currency FROM assignment_rate_history
+        WHERE assignment_id = $1 ORDER BY effective_date DESC, created_at DESC LIMIT 1`,
+      [req.params.id],
     );
+    if (latest.length) {
+      await pool.query(
+        `UPDATE assignments SET client_rate = $2, client_rate_currency = $3, updated_at = NOW()
+          WHERE id = $1`,
+        [req.params.id, latest[0].client_rate, latest[0].client_rate_currency],
+      );
+    }
 
     res.status(201).json(rows[0]);
   } catch (err) {
