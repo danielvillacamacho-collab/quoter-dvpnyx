@@ -1,0 +1,47 @@
+name: Weekly Hours Reminder
+
+# Runs every Monday at 08:00 Colombia time (UTC-5 = 13:00 UTC).
+# Calls POST /api/time-entries/cron-send-reminders on the production server.
+# Auth: X-Cron-Secret header — must match app_settings.cron_secret in the DB.
+# Required GitHub secret: CRON_SECRET
+# Optional GitHub secret: APP_URL (defaults to production URL)
+
+on:
+  schedule:
+    - cron: '0 13 * * 1'   # Monday 13:00 UTC = 08:00 UTC-5 (Colombia)
+  workflow_dispatch:        # Allow manual trigger for testing
+
+jobs:
+  send-reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send weekly hours reminder
+        env:
+          APP_URL: ${{ secrets.APP_URL || 'https://quoter.doublevpartners.com' }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "X-Cron-Secret: ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            "${APP_URL}/api/time-entries/cron-send-reminders")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | head -n -1)
+
+          echo "HTTP status: $HTTP_CODE"
+          echo "Response: $BODY"
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Reminder endpoint returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+          SENT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sent', False))")
+          if [ "$SENT" = "True" ]; then
+            COUNT=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('employee_count', 0))")
+            echo "Reminders sent to $COUNT employee(s)."
+          else
+            REASON=$(echo "$BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('reason', 'unknown'))")
+            echo "No reminders sent: $REASON"
+          fi

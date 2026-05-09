@@ -21,7 +21,7 @@ const { emitEvent }            = require('../utils/events');
 
 router.use(auth, superadminOnly);
 
-const SECRET_KEYS = new Set(['aws_secret_access_key']);
+const SECRET_KEYS = new Set(['aws_secret_access_key', 'cron_secret']);
 
 function redactSecrets(obj, reveal) {
   if (reveal) return obj;

@@ -30,6 +30,8 @@ export default function AwsSettings() {
   const [secretPlaceholder, setSecretPlaceholder] = useState('');
   const [region, setRegion] = useState('us-east-1');
   const [topicArn, setTopicArn] = useState('');
+  const [cronSecret, setCronSecret] = useState('');
+  const [cronSecretPlaceholder, setCronSecretPlaceholder] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -40,6 +42,7 @@ export default function AwsSettings() {
         setSecretPlaceholder(data.aws_secret_access_key || '');
         setRegion(data.aws_region || 'us-east-1');
         setTopicArn(data.sns_topic_arn || '');
+        setCronSecretPlaceholder(data.cron_secret || '');
       } catch (_e) { /* show empty form */ }
       finally { setLoading(false); }
     })();
@@ -55,15 +58,19 @@ export default function AwsSettings() {
         aws_region:           region,
         sns_topic_arn:        topicArn.trim(),
       };
-      // Only send secret if the user typed something new (i.e. it's not the redacted placeholder)
+      // Only send secret fields if the user typed something new
       if (secretKey && secretKey !== '••••••••') {
         payload.aws_secret_access_key = secretKey;
       }
+      if (cronSecret && cronSecret !== '••••••••') {
+        payload.cron_secret = cronSecret;
+      }
       await apiPut('/api/admin/settings', payload);
       setSaveMsg({ ok: true, msg: 'Configuración guardada' });
-      // Clear the secret field after save — next load will show placeholder again
       setSecretKey('');
       setSecretPlaceholder('••••••••');
+      setCronSecret('');
+      setCronSecretPlaceholder('••••••••');
     } catch (err) {
       setSaveMsg({ ok: false, msg: err.message || 'Error al guardar' });
     } finally {
@@ -162,6 +169,29 @@ export default function AwsSettings() {
               Crea un topic en la consola de AWS SNS y añade suscripciones de tipo Email para cada persona
               que deba recibir los recordatorios. El ARN tiene el formato
               <code style={{ marginLeft: 4 }}>arn:aws:sns:&lt;región&gt;:&lt;cuenta&gt;:&lt;nombre-topic&gt;</code>.
+            </div>
+          </div>
+        </div>
+
+        <div style={s.card}>
+          <div style={s.sectionTitle}>Cron automático (recordatorio cada lunes 8am)</div>
+
+          <div style={s.row}>
+            <label style={s.label} htmlFor="cron-secret">Cron Secret</label>
+            <input
+              id="cron-secret"
+              style={s.input}
+              type="password"
+              value={cronSecret}
+              onChange={(e) => setCronSecret(e.target.value)}
+              placeholder={cronSecretPlaceholder || 'Clave secreta para el cron'}
+              autoComplete="new-password"
+            />
+            <div style={s.hint}>
+              Token secreto que el workflow de GitHub Actions envía en el header{' '}
+              <code>X-Cron-Secret</code> al llamar al endpoint de recordatorios automáticos.
+              Debe coincidir con el secret <code>CRON_SECRET</code> configurado en el repositorio de GitHub.
+              Deja en blanco para conservar el valor actual.
             </div>
           </div>
         </div>
