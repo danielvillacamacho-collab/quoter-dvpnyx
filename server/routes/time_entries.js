@@ -619,29 +619,26 @@ router.get('/pending-hours', auth, async (req, res) => {
           date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date AS week_start,
           (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date AS week_end
       ),
-      with_assignments AS (
-        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, u.id AS user_id, u.email,
-                        w.week_start, w.week_end
+      active_employees AS (
+        SELECT e.id AS employee_id, e.name AS employee_name, u.id AS user_id, u.email
         FROM employees e
         JOIN users u ON u.id = e.user_id
-        JOIN assignments a ON a.employee_id = e.id
-        CROSS JOIN weeks w
-        WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL AND u.deleted_at IS NULL
-          AND a.status IN ('active', 'planned', 'ended')
-          AND a.start_date <= w.week_end
-          AND (a.end_date IS NULL OR a.end_date >= w.week_start)
+        WHERE e.deleted_at IS NULL
+          AND u.deleted_at IS NULL
+          AND COALESCE(e.status, 'active') != 'terminated'
           ${squadFilter}
       )
-      SELECT wa.employee_id, wa.employee_name, wa.user_id, wa.email,
-             wa.week_start, COALESCE(SUM(te.hours), 0) AS hours_logged
-      FROM with_assignments wa
+      SELECT ae.employee_id, ae.employee_name, ae.user_id, ae.email,
+             w.week_start, COALESCE(SUM(te.hours), 0) AS hours_logged
+      FROM active_employees ae
+      CROSS JOIN weeks w
       LEFT JOIN time_entries te
-        ON te.employee_id = wa.employee_id
-        AND te.work_date BETWEEN wa.week_start AND wa.week_end
+        ON te.employee_id = ae.employee_id
+        AND te.work_date BETWEEN w.week_start AND w.week_end
         AND te.deleted_at IS NULL
-      GROUP BY wa.employee_id, wa.employee_name, wa.user_id, wa.email, wa.week_start
+      GROUP BY ae.employee_id, ae.employee_name, ae.user_id, ae.email, w.week_start
       HAVING COALESCE(SUM(te.hours), 0) = 0
-      ORDER BY wa.week_start DESC, wa.employee_name
+      ORDER BY w.week_start DESC, ae.employee_name
     `;
     const { rows } = await pool.query(sql, params);
     const uniqueEmployeeIds = new Set(rows.map(r => r.employee_id));
@@ -688,26 +685,23 @@ router.post('/send-reminders', auth, async (req, res) => {
           date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date AS week_start,
           (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date AS week_end
       ),
-      with_assignments AS (
-        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, w.week_start, w.week_end
+      active_employees AS (
+        SELECT e.id AS employee_id, e.name AS employee_name
         FROM employees e
-        JOIN assignments a ON a.employee_id = e.id
-        CROSS JOIN weeks w
-        WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL
-          AND a.status IN ('active', 'planned', 'ended')
-          AND a.start_date <= w.week_end
-          AND (a.end_date IS NULL OR a.end_date >= w.week_start)
+        WHERE e.deleted_at IS NULL
+          AND COALESCE(e.status, 'active') != 'terminated'
       )
-      SELECT wa.employee_id, wa.employee_name, wa.week_start,
+      SELECT ae.employee_id, ae.employee_name, w.week_start,
              COALESCE(SUM(te.hours), 0) AS hours_logged
-      FROM with_assignments wa
+      FROM active_employees ae
+      CROSS JOIN weeks w
       LEFT JOIN time_entries te
-        ON te.employee_id = wa.employee_id
-        AND te.work_date BETWEEN wa.week_start AND wa.week_end
+        ON te.employee_id = ae.employee_id
+        AND te.work_date BETWEEN w.week_start AND w.week_end
         AND te.deleted_at IS NULL
-      GROUP BY wa.employee_id, wa.employee_name, wa.week_start
+      GROUP BY ae.employee_id, ae.employee_name, w.week_start
       HAVING COALESCE(SUM(te.hours), 0) = 0
-      ORDER BY wa.week_start DESC, wa.employee_name
+      ORDER BY w.week_start DESC, ae.employee_name
     `);
     if (!rows.length) return res.json({ sent: false, reason: 'No hay empleados con horas pendientes.' });
     // Group by week for a readable message
@@ -773,26 +767,23 @@ router.post('/cron-send-reminders', async (req, res) => {
           date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date AS week_start,
           (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date AS week_end
       ),
-      with_assignments AS (
-        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, w.week_start, w.week_end
+      active_employees AS (
+        SELECT e.id AS employee_id, e.name AS employee_name
         FROM employees e
-        JOIN assignments a ON a.employee_id = e.id
-        CROSS JOIN weeks w
-        WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL
-          AND a.status IN ('active', 'planned', 'ended')
-          AND a.start_date <= w.week_end
-          AND (a.end_date IS NULL OR a.end_date >= w.week_start)
+        WHERE e.deleted_at IS NULL
+          AND COALESCE(e.status, 'active') != 'terminated'
       )
-      SELECT wa.employee_id, wa.employee_name, wa.week_start,
+      SELECT ae.employee_id, ae.employee_name, w.week_start,
              COALESCE(SUM(te.hours), 0) AS hours_logged
-      FROM with_assignments wa
+      FROM active_employees ae
+      CROSS JOIN weeks w
       LEFT JOIN time_entries te
-        ON te.employee_id = wa.employee_id
-        AND te.work_date BETWEEN wa.week_start AND wa.week_end
+        ON te.employee_id = ae.employee_id
+        AND te.work_date BETWEEN w.week_start AND w.week_end
         AND te.deleted_at IS NULL
-      GROUP BY wa.employee_id, wa.employee_name, wa.week_start
+      GROUP BY ae.employee_id, ae.employee_name, w.week_start
       HAVING COALESCE(SUM(te.hours), 0) = 0
-      ORDER BY wa.week_start DESC, wa.employee_name
+      ORDER BY w.week_start DESC, ae.employee_name
     `);
     if (!rows.length) return res.json({ sent: false, reason: 'No pending employees' });
     const byWeek = {};
