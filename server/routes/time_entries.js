@@ -620,13 +620,14 @@ router.get('/pending-hours', auth, async (req, res) => {
           (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date AS week_end
       ),
       with_assignments AS (
-        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, u.id AS user_id, u.email,
+        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name,
+                        u.id AS user_id, u.email,
                         w.week_start, w.week_end
         FROM employees e
-        JOIN users u ON u.id = e.user_id
+        LEFT JOIN users u ON u.id = e.user_id AND u.deleted_at IS NULL
         JOIN assignments a ON a.employee_id = e.id
         CROSS JOIN weeks w
-        WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL AND u.deleted_at IS NULL
+        WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL
           AND a.status IN ('active', 'planned', 'ended')
           AND a.start_date <= w.week_end
           AND (a.end_date IS NULL OR a.end_date >= w.week_start)
