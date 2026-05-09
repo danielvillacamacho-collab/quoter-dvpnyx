@@ -286,13 +286,8 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread, isL
                 </div>
               ) : (
                 pendingHours.map((p) => (
-                  <div key={`${p.employee_id}-${p.week_start}`} style={s.pendingRow}>
-                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                      <span style={s.pendingName}>{p.employee_name}</span>
-                      <span style={{ fontSize: 10.5, color: 'var(--ds-text-muted, #aaa)' }}>
-                        Sem. {String(p.week_start).slice(0, 10)}
-                      </span>
-                    </div>
+                  <div key={p.employee_id} style={s.pendingRow}>
+                    <span style={s.pendingName}>{p.employee_name}</span>
                     <span style={s.pendingEmail}>{p.email || ''}</span>
                   </div>
                 ))
