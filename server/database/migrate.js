@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Idempotent DDL migration for DVPNYX Cotizador.
  *
  * V1 schema + V2 schema coexist. Running this on a V1 production DB creates

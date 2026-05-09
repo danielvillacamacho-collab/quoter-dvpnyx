@@ -1,18 +1,18 @@
-﻿/**
- * Time Entries â€” Sprint 5 Modules ET-1, ET-2, ET-3, ET-6, ET-7.
+/**
+ * Time Entries — Sprint 5 Modules ET-1, ET-2, ET-3, ET-6, ET-7.
  * Spec: docs/specs/v2/04_modules/05_time_tracking.md
  *       docs/specs/v2/09_user_stories_backlog.md ET-*
  *
  * A TimeEntry is hours logged on a specific day against a specific
  * assignment. Core rules enforced server-side:
  *
- *   ET-2: CRUD + retroactive window (default 30 days) + daily â‰¤16h
+ *   ET-2: CRUD + retroactive window (default 30 days) + daily ≤16h
  *         sum across an employee's entries on a single date.
  *   ET-3: POST /api/time-entries/copy-week duplicates entries from
  *         one week into the next.
- *   ET-6: edit gating â€” employee writes only to their own rows AND
+ *   ET-6: edit gating — employee writes only to their own rows AND
  *         only within the window; admin can do anything.
- *   ET-7: work_date > TODAY â†’ 400 (no future entries).
+ *   ET-7: work_date > TODAY → 400 (no future entries).
  *
  * All mutations emit structured events via server/utils/events.
  */
@@ -173,7 +173,7 @@ router.post('/', async (req, res) => {
   // ET-7
   if (work_date > todayISO()) return res.status(400).json({ error: 'No se pueden registrar horas futuras' });
   if (body.status && !VALID_STATUSES.includes(body.status)) {
-    return res.status(400).json({ error: 'status invÃ¡lido' });
+    return res.status(400).json({ error: 'status inválido' });
   }
 
   const conn = await pool.connect();
@@ -186,14 +186,14 @@ router.post('/', async (req, res) => {
     const asg = aRows[0];
     if (['cancelled'].includes(asg.status)) {
       conn.release();
-      return res.status(400).json({ error: 'No se pueden registrar horas en una asignaciÃ³n cancelada' });
+      return res.status(400).json({ error: 'No se pueden registrar horas en una asignación cancelada' });
     }
     // work_date within the assignment window (admins can backfill outside the range)
     const isAdmin = ['admin', 'superadmin'].includes(req.user.role);
     if (!isAdmin && (work_date < String(asg.start_date).slice(0, 10) ||
         (asg.end_date && work_date > String(asg.end_date).slice(0, 10)))) {
       conn.release();
-      return res.status(400).json({ error: 'work_date fuera del rango de la asignaciÃ³n' });
+      return res.status(400).json({ error: 'work_date fuera del rango de la asignación' });
     }
 
     // ET-6 authorization
@@ -201,17 +201,17 @@ router.post('/', async (req, res) => {
     if (!auth.ok) {
       conn.release();
       const msg = auth.reason === 'future_entry' ? 'No se pueden registrar horas futuras'
-                : auth.reason === 'outside_window' ? `Fuera de la ventana retroactiva de ${auth.window_days} dÃ­as`
+                : auth.reason === 'outside_window' ? `Fuera de la ventana retroactiva de ${auth.window_days} días`
                 : 'No tienes permiso para registrar horas de este empleado';
       return res.status(auth.reason === 'future_entry' ? 400 : 403).json({ error: msg, reason: auth.reason });
     }
 
-    // ET-2: daily cap â‰¤ 16h across this employee's entries for that date
+    // ET-2: daily cap ≤ 16h across this employee's entries for that date
     const existingSum = await sumDailyHours(conn, asg.employee_id, work_date);
     if (existingSum + h > DAILY_MAX_HOURS) {
       conn.release();
       return res.status(409).json({
-        error: `La suma diaria excederÃ­a ${DAILY_MAX_HOURS}h (actual ${existingSum}h + ${h}h propuestas).`,
+        error: `La suma diaria excedería ${DAILY_MAX_HOURS}h (actual ${existingSum}h + ${h}h propuestas).`,
         existing_hours: existingSum, proposed_hours: h, daily_max: DAILY_MAX_HOURS,
       });
     }
@@ -257,14 +257,14 @@ router.put('/:id', async (req, res) => {
       if (body.work_date > todayISO()) { conn.release(); return res.status(400).json({ error: 'No se pueden registrar horas futuras' }); }
       nextDate = body.work_date;
     }
-    if (body.status && !VALID_STATUSES.includes(body.status)) { conn.release(); return res.status(400).json({ error: 'status invÃ¡lido' }); }
+    if (body.status && !VALID_STATUSES.includes(body.status)) { conn.release(); return res.status(400).json({ error: 'status inválido' }); }
 
     // ET-6 authorization checked against the NEW date (most restrictive)
     const auth = await authorizeWrite(conn, req.user, before.employee_id, nextDate);
     if (!auth.ok) {
       conn.release();
       return res.status(auth.reason === 'future_entry' ? 400 : 403).json({
-        error: auth.reason === 'outside_window' ? `Fuera de la ventana retroactiva de ${auth.window_days} dÃ­as` : 'No tienes permiso para editar este entry',
+        error: auth.reason === 'outside_window' ? `Fuera de la ventana retroactiva de ${auth.window_days} días` : 'No tienes permiso para editar este entry',
         reason: auth.reason,
       });
     }
@@ -275,7 +275,7 @@ router.put('/:id', async (req, res) => {
       if (existingSum + nextHours > DAILY_MAX_HOURS) {
         conn.release();
         return res.status(409).json({
-          error: `La suma diaria excederÃ­a ${DAILY_MAX_HOURS}h`,
+          error: `La suma diaria excedería ${DAILY_MAX_HOURS}h`,
           existing_hours: existingSum, proposed_hours: nextHours, daily_max: DAILY_MAX_HOURS,
         });
       }
@@ -505,7 +505,7 @@ router.post('/import-bulk', async (req, res) => {
  * Copies entries from source_week_start (YYYY-MM-DD, must be a Monday)
  * into the following week (same weekday offsets). Skips entries whose
  * assignment is no longer active/planned. Uses the ET-2 daily cap and
- * ET-6 authorization for every candidate â€” any failure is reported as
+ * ET-6 authorization for every candidate — any failure is reported as
  * a skipped row with a reason, the rest still write.
  */
 router.post('/copy-week', async (req, res) => {
@@ -667,10 +667,10 @@ router.post('/send-reminders', auth, async (req, res) => {
     const cfg = {};
     for (const r of settings) cfg[r.key] = r.value;
     if (cfg.sns_enabled !== 'true') {
-      return res.status(422).json({ sent: false, reason: 'SNS no esta activado. Configuralo en Ajustes -> Integracion SNS.' });
+      return res.status(422).json({ sent: false, reason: 'SNS no está activado. Configuralo en Ajustes → Integración SNS.' });
     }
     if (!cfg.aws_access_key_id || !cfg.aws_secret_access_key || !cfg.aws_region || !cfg.sns_topic_arn) {
-      return res.status(422).json({ sent: false, reason: 'Configuracion de SNS incompleta.' });
+      return res.status(422).json({ sent: false, reason: 'Configuración de SNS incompleta.' });
     }
     const { rows } = await pool.query(`
       WITH last_week AS (
@@ -725,4 +725,3 @@ router.post('/send-reminders', auth, async (req, res) => {
 });
 
 module.exports = router;
-
