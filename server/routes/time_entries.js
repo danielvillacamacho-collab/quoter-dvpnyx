@@ -627,7 +627,7 @@ router.get('/pending-hours', auth, async (req, res) => {
         JOIN assignments a ON a.employee_id = e.id
         CROSS JOIN weeks w
         WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL AND u.deleted_at IS NULL
-          AND a.status IN ('active', 'planned')
+          AND a.status IN ('active', 'planned', 'ended')
           AND a.start_date <= w.week_end
           AND (a.end_date IS NULL OR a.end_date >= w.week_start)
           ${squadFilter}
@@ -694,7 +694,7 @@ router.post('/send-reminders', auth, async (req, res) => {
         JOIN assignments a ON a.employee_id = e.id
         CROSS JOIN weeks w
         WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL
-          AND a.status IN ('active', 'planned')
+          AND a.status IN ('active', 'planned', 'ended')
           AND a.start_date <= w.week_end
           AND (a.end_date IS NULL OR a.end_date >= w.week_start)
       )
@@ -779,7 +779,7 @@ router.post('/cron-send-reminders', async (req, res) => {
         JOIN assignments a ON a.employee_id = e.id
         CROSS JOIN weeks w
         WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL
-          AND a.status IN ('active', 'planned')
+          AND a.status IN ('active', 'planned', 'ended')
           AND a.start_date <= w.week_end
           AND (a.end_date IS NULL OR a.end_date >= w.week_start)
       )

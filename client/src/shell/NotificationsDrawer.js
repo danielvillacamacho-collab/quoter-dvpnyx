@@ -156,8 +156,9 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread, isL
       setPendingWeek(data?.week_start || '');
       const distinctCount = data?.employee_count ?? new Set(list.map(r => r.employee_id)).size;
       if (typeof onPendingHoursChange === 'function') onPendingHoursChange(distinctCount);
-    } catch (_ex) {
+    } catch (ex) {
       setPendingHours([]);
+      console.error('[pending-hours]', ex?.message || ex);
     } finally {
       setPendingLoading(false);
     }
