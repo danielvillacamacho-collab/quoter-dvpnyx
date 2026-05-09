@@ -154,7 +154,8 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread, isL
       const list = Array.isArray(data?.data) ? data.data : [];
       setPendingHours(list);
       setPendingWeek(data?.week_start || '');
-      if (typeof onPendingHoursChange === 'function') onPendingHoursChange(list.length);
+      const distinctCount = data?.employee_count ?? new Set(list.map(r => r.employee_id)).size;
+      if (typeof onPendingHoursChange === 'function') onPendingHoursChange(distinctCount);
     } catch (_ex) {
       setPendingHours([]);
     } finally {
@@ -246,10 +247,10 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread, isL
               <div style={s.pendingHead}>
                 <span style={s.pendingTitle}>
                   Horas faltantes
-                  {pendingWeek && <span style={{ fontWeight: 400, textTransform: 'none', marginLeft: 4 }}>— {fmtWeek(pendingWeek)}</span>}
+                  <span style={{ fontWeight: 400, textTransform: 'none', marginLeft: 4 }}>— últimas 2 semanas</span>
                   {pendingHours.length > 0 && (
                     <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: 9, background: '#d32f2f', color: '#fff', fontSize: 10, fontWeight: 700, marginLeft: 6 }}>
-                      {pendingHours.length}
+                      {new Set(pendingHours.map(p => p.employee_id)).size}
                     </span>
                   )}
                 </span>
@@ -284,8 +285,13 @@ export default function NotificationsDrawer({ open, onClose, onUpdateUnread, isL
                 </div>
               ) : (
                 pendingHours.map((p) => (
-                  <div key={p.employee_id} style={s.pendingRow}>
-                    <span style={s.pendingName}>{p.employee_name}</span>
+                  <div key={`${p.employee_id}-${p.week_start}`} style={s.pendingRow}>
+                    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                      <span style={s.pendingName}>{p.employee_name}</span>
+                      <span style={{ fontSize: 10.5, color: 'var(--ds-text-muted, #aaa)' }}>
+                        Sem. {String(p.week_start).slice(0, 10)}
+                      </span>
+                    </div>
                     <span style={s.pendingEmail}>{p.email || ''}</span>
                   </div>
                 ))

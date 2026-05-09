@@ -610,36 +610,41 @@ router.get('/pending-hours', auth, async (req, res) => {
       params = [sq.rows[0].squad_id];
     }
     const sql = `
-      WITH last_week AS (
+      WITH weeks AS (
         SELECT
-          date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date AS week_start,
+          date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date  AS week_start,
           (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date AS week_end
+        UNION ALL
+        SELECT
+          date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date AS week_start,
+          (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date AS week_end
       ),
       with_assignments AS (
-        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, u.id AS user_id, u.email
+        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, u.id AS user_id, u.email,
+                        w.week_start, w.week_end
         FROM employees e
         JOIN users u ON u.id = e.user_id
         JOIN assignments a ON a.employee_id = e.id
-        CROSS JOIN last_week lw
+        CROSS JOIN weeks w
         WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL AND u.deleted_at IS NULL
           AND a.status IN ('active', 'planned')
-          AND a.start_date <= lw.week_end
-          AND (a.end_date IS NULL OR a.end_date >= lw.week_start)
+          AND a.start_date <= w.week_end
+          AND (a.end_date IS NULL OR a.end_date >= w.week_start)
           ${squadFilter}
       )
       SELECT wa.employee_id, wa.employee_name, wa.user_id, wa.email,
-             lw.week_start, COALESCE(SUM(te.hours), 0) AS hours_logged
+             wa.week_start, COALESCE(SUM(te.hours), 0) AS hours_logged
       FROM with_assignments wa
-      CROSS JOIN last_week lw
       LEFT JOIN time_entries te
         ON te.employee_id = wa.employee_id
-        AND te.work_date BETWEEN lw.week_start AND lw.week_end
+        AND te.work_date BETWEEN wa.week_start AND wa.week_end
         AND te.deleted_at IS NULL
-      GROUP BY wa.employee_id, wa.employee_name, wa.user_id, wa.email, lw.week_start
+      GROUP BY wa.employee_id, wa.employee_name, wa.user_id, wa.email, wa.week_start
       HAVING COALESCE(SUM(te.hours), 0) = 0
-      ORDER BY wa.employee_name
+      ORDER BY wa.week_start DESC, wa.employee_name
     `;
     const { rows } = await pool.query(sql, params);
+    const uniqueEmployeeIds = new Set(rows.map(r => r.employee_id));
     res.json({
       data: rows.map(r => ({
         employee_id: r.employee_id,
@@ -649,7 +654,8 @@ router.get('/pending-hours', auth, async (req, res) => {
         week_start: r.week_start,
         hours_logged: Number(r.hours_logged),
       })),
-      week_start: rows.length > 0 ? rows[0].week_start : null,
+      week_start: rows.length > 0 ? rows[rows.length - 1].week_start : null,
+      employee_count: uniqueEmployeeIds.size,
     });
   } catch (err) {
     serverError(res, 'GET /time-entries/pending-hours', err);
@@ -673,37 +679,50 @@ router.post('/send-reminders', auth, async (req, res) => {
       return res.status(422).json({ sent: false, reason: 'Configuración de SNS incompleta.' });
     }
     const { rows } = await pool.query(`
-      WITH last_week AS (
+      WITH weeks AS (
         SELECT
-          date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date AS week_start,
+          date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date  AS week_start,
           (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date AS week_end
+        UNION ALL
+        SELECT
+          date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date AS week_start,
+          (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date AS week_end
       ),
       with_assignments AS (
-        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name
+        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, w.week_start, w.week_end
         FROM employees e
         JOIN assignments a ON a.employee_id = e.id
-        CROSS JOIN last_week lw
+        CROSS JOIN weeks w
         WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL
           AND a.status IN ('active', 'planned')
-          AND a.start_date <= lw.week_end
-          AND (a.end_date IS NULL OR a.end_date >= lw.week_start)
+          AND a.start_date <= w.week_end
+          AND (a.end_date IS NULL OR a.end_date >= w.week_start)
       )
-      SELECT wa.employee_id, wa.employee_name, lw.week_start,
+      SELECT wa.employee_id, wa.employee_name, wa.week_start,
              COALESCE(SUM(te.hours), 0) AS hours_logged
       FROM with_assignments wa
-      CROSS JOIN last_week lw
       LEFT JOIN time_entries te
         ON te.employee_id = wa.employee_id
-        AND te.work_date BETWEEN lw.week_start AND lw.week_end
+        AND te.work_date BETWEEN wa.week_start AND wa.week_end
         AND te.deleted_at IS NULL
-      GROUP BY wa.employee_id, wa.employee_name, lw.week_start
+      GROUP BY wa.employee_id, wa.employee_name, wa.week_start
       HAVING COALESCE(SUM(te.hours), 0) = 0
-      ORDER BY wa.employee_name
+      ORDER BY wa.week_start DESC, wa.employee_name
     `);
     if (!rows.length) return res.json({ sent: false, reason: 'No hay empleados con horas pendientes.' });
-    const weekStart = rows[0].week_start;
-    const names = rows.map(r => `* ${r.employee_name}`).join('\n');
-    const message = `Recordatorio DVPNYX: Los siguientes empleados no han registrado sus horas para la semana del ${weekStart}:\n\n${names}\n\nPor favor registra tus horas en el sistema.`;
+    // Group by week for a readable message
+    const byWeek = {};
+    for (const r of rows) {
+      const ws = String(r.week_start).slice(0, 10);
+      if (!byWeek[ws]) byWeek[ws] = [];
+      byWeek[ws].push(r.employee_name);
+    }
+    const weekSections = Object.entries(byWeek)
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([ws, names]) => `Semana del ${ws}:\n${names.map(n => `  * ${n}`).join('\n')}`)
+      .join('\n\n');
+    const uniqueEmployees = new Set(rows.map(r => r.employee_id));
+    const message = `Recordatorio DVPNYX: Los siguientes empleados tienen horas sin registrar:\n\n${weekSections}\n\nPor favor registra tus horas en el sistema.`;
     // eslint-disable-next-line
     const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
     const snsClient = new SNSClient({
@@ -712,15 +731,99 @@ router.post('/send-reminders', auth, async (req, res) => {
     });
     await snsClient.send(new PublishCommand({
       TopicArn: cfg.sns_topic_arn,
-      Subject: `DVPNYX - ${rows.length} empleado${rows.length !== 1 ? 's' : ''} con horas pendientes`,
+      Subject: `DVPNYX - ${uniqueEmployees.size} empleado${uniqueEmployees.size !== 1 ? 's' : ''} con horas pendientes`,
       Message: message,
     }));
     await emitEvent(pool, 'time_entry.reminders_sent', 'time_entry', null, req.user.id, {
-      employee_count: rows.length, week_start: weekStart,
+      employee_count: uniqueEmployees.size, weeks_checked: 2,
     });
-    res.json({ sent: true, employee_count: rows.length, week_start: weekStart });
+    res.json({ sent: true, employee_count: uniqueEmployees.size });
   } catch (err) {
     serverError(res, 'POST /time-entries/send-reminders', err);
+  }
+});
+
+// ─── POST /cron-send-reminders ───────────────────────────────────────────────
+// Called by GitHub Actions on Monday 08:00 Colombia (13:00 UTC).
+// Auth: X-Cron-Secret header matched against app_settings.cron_secret.
+// No JWT required — intended for server-to-server use only.
+router.post('/cron-send-reminders', async (req, res) => {
+  const headerSecret = req.headers['x-cron-secret'];
+  if (!headerSecret) return res.status(401).json({ error: 'Missing X-Cron-Secret header' });
+  try {
+    const { rows: settings } = await pool.query('SELECT key, value FROM app_settings');
+    const cfg = {};
+    for (const r of settings) cfg[r.key] = r.value;
+    if (!cfg.cron_secret || cfg.cron_secret !== headerSecret) {
+      return res.status(401).json({ error: 'Invalid cron secret' });
+    }
+    if (cfg.sns_enabled !== 'true') {
+      return res.json({ sent: false, reason: 'SNS disabled' });
+    }
+    if (!cfg.aws_access_key_id || !cfg.aws_secret_access_key || !cfg.aws_region || !cfg.sns_topic_arn) {
+      return res.status(422).json({ sent: false, reason: 'Incomplete SNS config' });
+    }
+    const { rows } = await pool.query(`
+      WITH weeks AS (
+        SELECT
+          date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date  AS week_start,
+          (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date AS week_end
+        UNION ALL
+        SELECT
+          date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date AS week_start,
+          (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date AS week_end
+      ),
+      with_assignments AS (
+        SELECT DISTINCT e.id AS employee_id, e.name AS employee_name, w.week_start, w.week_end
+        FROM employees e
+        JOIN assignments a ON a.employee_id = e.id
+        CROSS JOIN weeks w
+        WHERE a.deleted_at IS NULL AND e.deleted_at IS NULL
+          AND a.status IN ('active', 'planned')
+          AND a.start_date <= w.week_end
+          AND (a.end_date IS NULL OR a.end_date >= w.week_start)
+      )
+      SELECT wa.employee_id, wa.employee_name, wa.week_start,
+             COALESCE(SUM(te.hours), 0) AS hours_logged
+      FROM with_assignments wa
+      LEFT JOIN time_entries te
+        ON te.employee_id = wa.employee_id
+        AND te.work_date BETWEEN wa.week_start AND wa.week_end
+        AND te.deleted_at IS NULL
+      GROUP BY wa.employee_id, wa.employee_name, wa.week_start
+      HAVING COALESCE(SUM(te.hours), 0) = 0
+      ORDER BY wa.week_start DESC, wa.employee_name
+    `);
+    if (!rows.length) return res.json({ sent: false, reason: 'No pending employees' });
+    const byWeek = {};
+    for (const r of rows) {
+      const ws = String(r.week_start).slice(0, 10);
+      if (!byWeek[ws]) byWeek[ws] = [];
+      byWeek[ws].push(r.employee_name);
+    }
+    const weekSections = Object.entries(byWeek)
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([ws, names]) => `Semana del ${ws}:\n${names.map(n => `  * ${n}`).join('\n')}`)
+      .join('\n\n');
+    const uniqueEmployees = new Set(rows.map(r => r.employee_id));
+    const message = `Recordatorio DVPNYX: Los siguientes empleados tienen horas sin registrar:\n\n${weekSections}\n\nPor favor registra tus horas en el sistema.`;
+    // eslint-disable-next-line
+    const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
+    const snsClient = new SNSClient({
+      region: cfg.aws_region,
+      credentials: { accessKeyId: cfg.aws_access_key_id, secretAccessKey: cfg.aws_secret_access_key },
+    });
+    await snsClient.send(new PublishCommand({
+      TopicArn: cfg.sns_topic_arn,
+      Subject: `DVPNYX - ${uniqueEmployees.size} empleado${uniqueEmployees.size !== 1 ? 's' : ''} con horas pendientes`,
+      Message: message,
+    }));
+    await emitEvent(pool, 'time_entry.cron_reminders_sent', 'time_entry', null, null, {
+      employee_count: uniqueEmployees.size, weeks_checked: 2, triggered_by: 'cron',
+    });
+    res.json({ sent: true, employee_count: uniqueEmployees.size });
+  } catch (err) {
+    serverError(res, 'POST /time-entries/cron-send-reminders', err);
   }
 });
 
