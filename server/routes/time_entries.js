@@ -591,6 +591,65 @@ router.post('/copy-week', async (req, res) => {
 });
 
 
+/**
+ * Crea o resuelve notificaciones in-app de horas pendientes.
+ *   pendingRows : resultado de la consulta pending-hours (puede ser vacío)
+ *   targetUserIds : array de user_ids que deben recibir la notif de admin/lead
+ *   employeeRows  : filas con { user_id } de los propios empleados pendientes
+ */
+async function syncPendingHoursNotifications(pool, pendingRows, targetUserIds, employeeRows) {
+  if (pendingRows.length > 0) {
+    const nameList = pendingRows.slice(0, 5).map(r => r.employee_name).join(', ')
+      + (pendingRows.length > 5 ? ` y ${pendingRows.length - 5} más` : '');
+    const title = `${pendingRows.length} empleado${pendingRows.length !== 1 ? 's' : ''} sin horas registradas`;
+    const body  = `Sin horas en las últimas 2 semanas: ${nameList}.`;
+
+    // Notificación para cada admin/lead
+    for (const uid of targetUserIds) {
+      await pool.query(
+        `INSERT INTO notifications (user_id, type, title, body, link, entity_type, created_at)
+         SELECT $1, 'pending_hours', $2, $3, '/time/admin', 'time_entry', NOW()
+         WHERE NOT EXISTS (
+           SELECT 1 FROM notifications
+           WHERE user_id = $1 AND type = 'pending_hours' AND read_at IS NULL
+         )`,
+        [uid, title, body]
+      );
+    }
+
+    // Notificación para cada empleado sin horas (si tiene cuenta)
+    for (const emp of employeeRows) {
+      if (!emp.user_id) continue;
+      await pool.query(
+        `INSERT INTO notifications (user_id, type, title, body, link, entity_type, created_at)
+         SELECT $1, 'pending_hours_employee', $2, $3, '/time/me', 'time_entry', NOW()
+         WHERE NOT EXISTS (
+           SELECT 1 FROM notifications
+           WHERE user_id = $1 AND type = 'pending_hours_employee' AND read_at IS NULL
+         )`,
+        [emp.user_id, 'Tenés horas sin registrar', 'No registraste horas en las últimas 2 semanas. Ingresá a Mis horas para completarlas.']
+      );
+    }
+  } else {
+    // Todos al día: marcar como leídas las notificaciones activas
+    if (targetUserIds.length > 0) {
+      await pool.query(
+        `UPDATE notifications SET read_at = NOW()
+         WHERE user_id = ANY($1) AND type = 'pending_hours' AND read_at IS NULL`,
+        [targetUserIds]
+      );
+    }
+    for (const emp of employeeRows) {
+      if (!emp.user_id) continue;
+      await pool.query(
+        `UPDATE notifications SET read_at = NOW()
+         WHERE user_id = $1 AND type = 'pending_hours_employee' AND read_at IS NULL`,
+        [emp.user_id]
+      );
+    }
+  }
+}
+
 // ─── GET /pending-hours ─────────────────────────────────────────────────────
 router.get('/pending-hours', auth, async (req, res) => {
   const role = req.user.role;
@@ -635,31 +694,11 @@ router.get('/pending-hours', auth, async (req, res) => {
     `;
     const { rows } = await pool.query(sql, params);
 
-    if (rows.length > 0) {
-      // Hay pendientes: crear notificación si no existe una sin leer activa.
-      const nameList = rows.slice(0, 5).map(r => r.employee_name).join(', ')
-        + (rows.length > 5 ? ` y ${rows.length - 5} más` : '');
-      await pool.query(
-        `INSERT INTO notifications (user_id, type, title, body, link, entity_type, created_at)
-         SELECT $1, 'pending_hours', $2, $3, '/time/admin', 'time_entry', NOW()
-         WHERE NOT EXISTS (
-           SELECT 1 FROM notifications
-           WHERE user_id = $1 AND type = 'pending_hours' AND read_at IS NULL
-         )`,
-        [
-          req.user.id,
-          `${rows.length} empleado${rows.length !== 1 ? 's' : ''} sin horas registradas`,
-          `Sin horas en las últimas 2 semanas: ${nameList}.`,
-        ]
-      );
-    } else {
-      // Todos al día: resolver (marcar como leídas) las notificaciones pendientes.
-      await pool.query(
-        `UPDATE notifications SET read_at = NOW()
-         WHERE user_id = $1 AND type = 'pending_hours' AND read_at IS NULL`,
-        [req.user.id]
-      );
-    }
+    // Obtener todos los user_ids con rol admin/superadmin/lead para notificarlos
+    const { rows: adminLeads } = await pool.query(
+      `SELECT id FROM users WHERE deleted_at IS NULL AND role IN ('admin', 'superadmin', 'lead')`
+    );
+    await syncPendingHoursNotifications(pool, rows, adminLeads.map(r => r.id), rows);
 
     res.json({
       data: rows.map(r => ({
@@ -784,6 +823,17 @@ router.post('/cron-send-reminders', async (req, res) => {
       Subject: `DVPNYX - ${rows.length} empleado${rows.length !== 1 ? 's' : ''} con horas pendientes`,
       Message: message,
     }));
+    // Notificaciones in-app para todos los admins/leads y empleados afectados
+    const { rows: empWithUsers } = await pool.query(
+      `SELECT e.id AS employee_id, u.id AS user_id
+       FROM employees e JOIN users u ON u.id = e.user_id
+       WHERE e.id = ANY($1) AND e.deleted_at IS NULL AND u.deleted_at IS NULL`,
+      [rows.map(r => r.employee_id)]
+    );
+    const { rows: adminLeads } = await pool.query(
+      `SELECT id FROM users WHERE deleted_at IS NULL AND role IN ('admin', 'superadmin', 'lead')`
+    );
+    await syncPendingHoursNotifications(pool, rows, adminLeads.map(r => r.id), empWithUsers);
     await emitEvent(pool, 'time_entry.cron_reminders_sent', 'time_entry', null, null, {
       employee_count: rows.length, weeks_checked: 2, triggered_by: 'cron',
     });
