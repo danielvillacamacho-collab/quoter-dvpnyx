@@ -598,8 +598,8 @@ router.post('/copy-week', async (req, res) => {
  *   employeeRows  : filas con { user_id } de los propios empleados pendientes
  */
 const PENDING_HOURS_SQL = `
-  SELECT DISTINCT e.id AS employee_id, e.name AS employee_name,
-         u.id AS user_id, u.email
+  SELECT DISTINCT e.id AS employee_id, (e.first_name || ' ' || e.last_name) AS employee_name,
+         u.id AS user_id, COALESCE(u.email, e.corporate_email) AS email
   FROM employees e
   LEFT JOIN users u ON u.id = e.user_id AND u.deleted_at IS NULL
   WHERE e.deleted_at IS NULL
@@ -621,7 +621,7 @@ const PENDING_HOURS_SQL = `
                                AND (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date
       )
     )
-  ORDER BY e.name
+  ORDER BY e.first_name, e.last_name
 `;
 
 async function syncPendingHoursNotifications(pool, pendingRows, targetUserIds, employeeRows) {
