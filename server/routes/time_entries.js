@@ -634,6 +634,27 @@ router.get('/pending-hours', auth, async (req, res) => {
       ORDER BY e.name
     `;
     const { rows } = await pool.query(sql, params);
+
+    // Crear notificación in-app para el usuario actual, una vez por semana.
+    if (rows.length > 0) {
+      const weekTag = new Date().toISOString().slice(0, 10); // YYYY-MM-DD del día actual como deduplicador
+      await pool.query(
+        `INSERT INTO notifications (user_id, type, title, body, link, entity_type, created_at)
+         SELECT $1, 'pending_hours', $2, $3, '/time/admin', 'time_entry', NOW()
+         WHERE NOT EXISTS (
+           SELECT 1 FROM notifications
+           WHERE user_id = $1
+             AND type = 'pending_hours'
+             AND created_at >= date_trunc('week', CURRENT_DATE)
+         )`,
+        [
+          req.user.id,
+          `${rows.length} empleado${rows.length !== 1 ? 's' : ''} sin horas registradas`,
+          `Los siguientes empleados no registraron horas en las últimas 2 semanas: ${rows.slice(0, 5).map(r => r.employee_name).join(', ')}${rows.length > 5 ? ` y ${rows.length - 5} más` : ''}.`,
+        ]
+      );
+    }
+
     res.json({
       data: rows.map(r => ({
         employee_id: r.employee_id,
@@ -699,7 +720,7 @@ router.post('/send-reminders', auth, async (req, res) => {
     await emitEvent(pool, 'time_entry.reminders_sent', 'time_entry', null, req.user.id, {
       employee_count: rows.length, weeks_checked: 2,
     });
-    res.json({ sent: true, employee_count: uniqueEmployees.size });
+    res.json({ sent: true, employee_count: rows.length });
   } catch (err) {
     serverError(res, 'POST /time-entries/send-reminders', err);
   }
