@@ -597,6 +597,39 @@ router.post('/copy-week', async (req, res) => {
  *   targetUserIds : array de user_ids que deben recibir la notif de admin/lead
  *   employeeRows  : filas con { user_id } de los propios empleados pendientes
  */
+const PENDING_HOURS_SQL = `
+  SELECT DISTINCT e.id AS employee_id, e.name AS employee_name,
+         u.id AS user_id, u.email
+  FROM employees e
+  LEFT JOIN users u ON u.id = e.user_id AND u.deleted_at IS NULL
+  JOIN assignments a ON a.employee_id = e.id
+  WHERE e.deleted_at IS NULL
+    AND a.deleted_at IS NULL
+    AND a.status IN ('active', 'planned', 'ended')
+    AND (
+      (
+        a.start_date <= (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
+        AND (a.end_date IS NULL OR a.end_date >= date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date)
+        AND NOT EXISTS (
+          SELECT 1 FROM time_entries te WHERE te.employee_id = e.id AND te.deleted_at IS NULL
+            AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date
+                                 AND (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
+        )
+      )
+      OR
+      (
+        a.start_date <= (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date
+        AND (a.end_date IS NULL OR a.end_date >= date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date)
+        AND NOT EXISTS (
+          SELECT 1 FROM time_entries te WHERE te.employee_id = e.id AND te.deleted_at IS NULL
+            AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date
+                                 AND (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date
+        )
+      )
+    )
+  ORDER BY e.name
+`;
+
 async function syncPendingHoursNotifications(pool, pendingRows, targetUserIds, employeeRows) {
   if (pendingRows.length > 0) {
     const nameList = pendingRows.slice(0, 5).map(r => r.employee_name).join(', ')
@@ -668,31 +701,10 @@ router.get('/pending-hours', auth, async (req, res) => {
       squadFilter = 'AND e.squad_id = $1';
       params = [sq.rows[0].squad_id];
     }
-    // Empleados con asignación en las últimas 2 semanas que NO tienen
-    // ninguna time_entry en ese período.
-    const windowStart = `date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date`;
-    const windowEnd   = `(date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date`;
-    const sql = `
-      SELECT DISTINCT e.id AS employee_id, e.name AS employee_name,
-             u.id AS user_id, u.email
-      FROM employees e
-      LEFT JOIN users u ON u.id = e.user_id AND u.deleted_at IS NULL
-      JOIN assignments a ON a.employee_id = e.id
-      WHERE e.deleted_at IS NULL
-        AND a.deleted_at IS NULL
-        AND a.status IN ('active', 'planned', 'ended')
-        AND a.start_date <= ${windowEnd}
-        AND (a.end_date IS NULL OR a.end_date >= ${windowStart})
-        ${squadFilter}
-        AND NOT EXISTS (
-          SELECT 1 FROM time_entries te
-          WHERE te.employee_id = e.id
-            AND te.deleted_at IS NULL
-            AND te.work_date BETWEEN ${windowStart} AND ${windowEnd}
-        )
-      ORDER BY e.name
-    `;
-    const { rows } = await pool.query(sql, params);
+    const squadSql = squadFilter
+      ? PENDING_HOURS_SQL.replace('ORDER BY', `AND e.squad_id = $1\n  ORDER BY`)
+      : PENDING_HOURS_SQL;
+    const { rows } = await pool.query(squadSql, params);
 
     // Obtener todos los user_ids con rol admin/superadmin/lead para notificarlos
     const { rows: adminLeads } = await pool.query(
@@ -730,24 +742,7 @@ router.post('/send-reminders', auth, async (req, res) => {
     if (!cfg.aws_access_key_id || !cfg.aws_secret_access_key || !cfg.aws_region || !cfg.sns_topic_arn) {
       return res.status(422).json({ sent: false, reason: 'Configuración de SNS incompleta.' });
     }
-    const { rows } = await pool.query(`
-      SELECT DISTINCT e.id AS employee_id, e.name AS employee_name
-      FROM employees e
-      JOIN assignments a ON a.employee_id = e.id
-      WHERE e.deleted_at IS NULL
-        AND a.deleted_at IS NULL
-        AND a.status IN ('active', 'planned', 'ended')
-        AND a.start_date <= (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
-        AND (a.end_date IS NULL OR a.end_date >= date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date)
-        AND NOT EXISTS (
-          SELECT 1 FROM time_entries te
-          WHERE te.employee_id = e.id
-            AND te.deleted_at IS NULL
-            AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date
-                                 AND (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
-        )
-      ORDER BY e.name
-    `);
+    const { rows } = await pool.query(PENDING_HOURS_SQL);
     if (!rows.length) return res.json({ sent: false, reason: 'No hay empleados con horas pendientes.' });
     const names = rows.map(r => `* ${r.employee_name}`).join('\n');
     const message = `Recordatorio DVPNYX: Los siguientes empleados no han registrado horas en las últimas 2 semanas:\n\n${names}\n\nPor favor registra tus horas en el sistema.`;
@@ -791,24 +786,7 @@ router.post('/cron-send-reminders', async (req, res) => {
     if (!cfg.aws_access_key_id || !cfg.aws_secret_access_key || !cfg.aws_region || !cfg.sns_topic_arn) {
       return res.status(422).json({ sent: false, reason: 'Incomplete SNS config' });
     }
-    const { rows } = await pool.query(`
-      SELECT DISTINCT e.id AS employee_id, e.name AS employee_name
-      FROM employees e
-      JOIN assignments a ON a.employee_id = e.id
-      WHERE e.deleted_at IS NULL
-        AND a.deleted_at IS NULL
-        AND a.status IN ('active', 'planned', 'ended')
-        AND a.start_date <= (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
-        AND (a.end_date IS NULL OR a.end_date >= date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date)
-        AND NOT EXISTS (
-          SELECT 1 FROM time_entries te
-          WHERE te.employee_id = e.id
-            AND te.deleted_at IS NULL
-            AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date
-                                 AND (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
-        )
-      ORDER BY e.name
-    `);
+    const { rows } = await pool.query(PENDING_HOURS_SQL);
     if (!rows.length) return res.json({ sent: false, reason: 'No pending employees' });
     const names = rows.map(r => `* ${r.employee_name}`).join('\n');
     const message = `Recordatorio DVPNYX: Los siguientes empleados no han registrado horas en las últimas 2 semanas:\n\n${names}\n\nPor favor registra tus horas en el sistema.`;
