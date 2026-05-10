@@ -635,23 +635,29 @@ router.get('/pending-hours', auth, async (req, res) => {
     `;
     const { rows } = await pool.query(sql, params);
 
-    // Crear notificación in-app para el usuario actual, una vez por semana.
     if (rows.length > 0) {
-      const weekTag = new Date().toISOString().slice(0, 10); // YYYY-MM-DD del día actual como deduplicador
+      // Hay pendientes: crear notificación si no existe una sin leer activa.
+      const nameList = rows.slice(0, 5).map(r => r.employee_name).join(', ')
+        + (rows.length > 5 ? ` y ${rows.length - 5} más` : '');
       await pool.query(
         `INSERT INTO notifications (user_id, type, title, body, link, entity_type, created_at)
          SELECT $1, 'pending_hours', $2, $3, '/time/admin', 'time_entry', NOW()
          WHERE NOT EXISTS (
            SELECT 1 FROM notifications
-           WHERE user_id = $1
-             AND type = 'pending_hours'
-             AND created_at >= date_trunc('week', CURRENT_DATE)
+           WHERE user_id = $1 AND type = 'pending_hours' AND read_at IS NULL
          )`,
         [
           req.user.id,
           `${rows.length} empleado${rows.length !== 1 ? 's' : ''} sin horas registradas`,
-          `Los siguientes empleados no registraron horas en las últimas 2 semanas: ${rows.slice(0, 5).map(r => r.employee_name).join(', ')}${rows.length > 5 ? ` y ${rows.length - 5} más` : ''}.`,
+          `Sin horas en las últimas 2 semanas: ${nameList}.`,
         ]
+      );
+    } else {
+      // Todos al día: resolver (marcar como leídas) las notificaciones pendientes.
+      await pool.query(
+        `UPDATE notifications SET read_at = NOW()
+         WHERE user_id = $1 AND type = 'pending_hours' AND read_at IS NULL`,
+        [req.user.id]
       );
     }
 
