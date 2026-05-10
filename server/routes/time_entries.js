@@ -602,29 +602,23 @@ const PENDING_HOURS_SQL = `
          u.id AS user_id, u.email
   FROM employees e
   LEFT JOIN users u ON u.id = e.user_id AND u.deleted_at IS NULL
-  JOIN assignments a ON a.employee_id = e.id
   WHERE e.deleted_at IS NULL
-    AND a.deleted_at IS NULL
-    AND a.status IN ('active', 'planned', 'ended')
+    AND EXISTS (
+      SELECT 1 FROM assignments a
+      WHERE a.employee_id = e.id AND a.deleted_at IS NULL
+        AND a.status IN ('active', 'planned', 'ended')
+    )
     AND (
-      (
-        a.start_date <= (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
-        AND (a.end_date IS NULL OR a.end_date >= date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date)
-        AND NOT EXISTS (
-          SELECT 1 FROM time_entries te WHERE te.employee_id = e.id AND te.deleted_at IS NULL
-            AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date
-                                 AND (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
-        )
+      NOT EXISTS (
+        SELECT 1 FROM time_entries te WHERE te.employee_id = e.id AND te.deleted_at IS NULL
+          AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date
+                               AND (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
       )
       OR
-      (
-        a.start_date <= (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date
-        AND (a.end_date IS NULL OR a.end_date >= date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date)
-        AND NOT EXISTS (
-          SELECT 1 FROM time_entries te WHERE te.employee_id = e.id AND te.deleted_at IS NULL
-            AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date
-                                 AND (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date
-        )
+      NOT EXISTS (
+        SELECT 1 FROM time_entries te WHERE te.employee_id = e.id AND te.deleted_at IS NULL
+          AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date
+                               AND (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date
       )
     )
   ORDER BY e.name
