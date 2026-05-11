@@ -32,6 +32,7 @@ const {
   mondayOf,
   parseDateUTC,
   formatDateUTC,
+  businessDaysInOverlap,
 } = require('../utils/capacity_planner');
 
 router.use(auth);
@@ -273,6 +274,15 @@ router.get('/planner', async (req, res) => {
         const key = `${a.id}::${wi}`;
         return actualByAsgWeek.get(key) || 0;
       });
+      // Prorate weekly_hours by business days for each week window.
+      const BDAYS_PER_WEEK = 5;
+      const rawHrs = Number(a.weekly_hours);
+      const aStartStr = a.start_date instanceof Date ? formatDateUTC(a.start_date) : a.start_date;
+      const aEndStr = a.end_date instanceof Date ? formatDateUTC(a.end_date) : (a.end_date || null);
+      const hours_by_week = weekWindows.map((ww) => {
+        const days = businessDaysInOverlap(aStartStr, aEndStr, ww.start_date, ww.end_date);
+        return Math.round((rawHrs * days / BDAYS_PER_WEEK) * 10) / 10;
+      });
       const enriched = {
         id: a.id,
         contract_id: a.contract_id,
@@ -280,15 +290,16 @@ router.get('/planner', async (req, res) => {
         client_name: a.client_name,
         resource_request_id: a.resource_request_id,
         role_title: a.role_title,
-        weekly_hours: Number(a.weekly_hours),
-        start_date: a.start_date instanceof Date ? formatDateUTC(a.start_date) : a.start_date,
-        end_date: a.end_date instanceof Date ? formatDateUTC(a.end_date) : (a.end_date || null),
+        weekly_hours: rawHrs,
+        start_date: aStartStr,
+        end_date: aEndStr,
         status: a.status,
         color,
         week_range: range, // [first, last] or null
         request_level: a.request_level || null,
         request_area_id: a.request_area_id || null,
         actual_hours_by_week,
+        hours_by_week,
       };
       if (!asgByEmp.has(a.employee_id)) asgByEmp.set(a.employee_id, []);
       asgByEmp.get(a.employee_id).push(enriched);

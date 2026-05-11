@@ -606,20 +606,24 @@ function AssignmentEditModal({ assignmentId, onClose, onSaved }) {
 
 function AssignmentBar({ a, onOpen, capacity, weekIndex }) {
   const cap = Number(capacity) || 0;
-  const pctVal = cap > 0 ? Math.round((Number(a.weekly_hours) / cap) * 100) : null;
+  // Use prorated hours for this specific week if available, else fall back to raw weekly_hours.
+  const weekHrs = (a.hours_by_week && weekIndex != null && a.hours_by_week[weekIndex] != null)
+    ? a.hours_by_week[weekIndex]
+    : Number(a.weekly_hours);
+  const pctVal = cap > 0 ? Math.round((weekHrs / cap) * 100) : null;
   const pctStr = pctVal !== null ? `${pctVal}%` : '—';
   const actualHrs = (a.actual_hours_by_week && weekIndex != null) ? (a.actual_hours_by_week[weekIndex] || 0) : 0;
   return (
     <div
       style={{ ...s.bar(a.color), cursor: onOpen ? 'pointer' : 'default' }}
-      title={`${a.contract_name} · ${a.weekly_hours}h/sem${actualHrs > 0 ? ` · real: ${actualHrs}h` : ''}`}
+      title={`${a.contract_name} · ${weekHrs}h/sem${actualHrs > 0 ? ` · real: ${actualHrs}h` : ''}`}
       onClick={onOpen ? (e) => { e.stopPropagation(); onOpen(a.id); } : undefined}
       role={onOpen ? 'button' : undefined}
       tabIndex={onOpen ? 0 : undefined}
       onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(a.id); } } : undefined}
     >
       <span style={s.barName}>{a.contract_name}</span>
-      <span style={s.barMeta}>{a.weekly_hours}h · {pctStr}</span>
+      <span style={s.barMeta}>{weekHrs}h · {pctStr}</span>
       {actualHrs > 0 && (
         <span style={{ ...s.barMeta, fontSize: 9, opacity: 0.95, fontStyle: 'italic' }}>real: {actualHrs}h</span>
       )}
