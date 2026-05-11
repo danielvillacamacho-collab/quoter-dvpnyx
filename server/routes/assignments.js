@@ -135,13 +135,41 @@ function buildEmployeeIds(query) {
   return [...ids];
 }
 
+/* buildContractIds — SPEC-008
+ *
+ * Soporta filtro multi-contrato con los mismos convenios que el filtro
+ * de empleados:
+ *   ?contract_id=<uuid>              single (backward-compat, usado por la
+ *                                    página de resource requests)
+ *   ?contract_ids=<uuid>,<uuid>,...  multi (OR logic, nuevo)
+ *   El Set deduplicará si ambos params contienen el mismo UUID.
+ */
+function buildContractIds(query) {
+  const ids = new Set();
+  if (query.contract_id) ids.add(String(query.contract_id).trim());
+  if (query.contract_ids) {
+    String(query.contract_ids)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((id) => ids.add(id));
+  }
+  return [...ids];
+}
+
 function buildAssignmentFilters(query) {
   const wheres = ['a.deleted_at IS NULL'];
   const params = [];
   const add = (v) => { params.push(v); return `$${params.length}`; };
 
-  if (query.contract_id)         wheres.push(`a.contract_id = ${add(query.contract_id)}`);
   if (query.resource_request_id) wheres.push(`a.resource_request_id = ${add(query.resource_request_id)}`);
+
+  const contractIds = buildContractIds(query);
+  if (contractIds.length === 1) {
+    wheres.push(`a.contract_id = ${add(contractIds[0])}`);
+  } else if (contractIds.length > 1) {
+    wheres.push(`a.contract_id IN (${contractIds.map((id) => add(id)).join(', ')})`);
+  }
   if (query.status) {
     // Support comma-separated values: ?status=active,ended
     const statuses = String(query.status).split(',').map((v) => v.trim()).filter((v) => VALID_STATUSES.includes(v));

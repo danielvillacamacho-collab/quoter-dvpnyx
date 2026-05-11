@@ -581,3 +581,62 @@ describe('contract_subtype (SPEC subtipo-contrato Abril 2026)', () => {
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEC-008 — GET /api/contracts/lookup
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('GET /api/contracts/lookup — SPEC-008', () => {
+  const sampleContracts = [
+    { id: 'ct1', name: 'Acme MSA 2026', type: 'capacity', status: 'active', client_name: 'Acme Corp' },
+    { id: 'ct2', name: 'Beta Proyecto', type: 'project',  status: 'completed', client_name: 'Beta SA' },
+    { id: 'ct3', name: 'Gamma Reventa', type: 'resell',   status: 'cancelled', client_name: 'Gamma Inc' },
+  ];
+
+  it('returns 200 with all non-deleted contracts (including terminal)', async () => {
+    queryQueue.push({ rows: sampleContracts });
+    const res = await client.call('GET', '/api/contracts/lookup');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(3);
+  });
+
+  it('response rows include id, name, type, status and client_name', async () => {
+    queryQueue.push({ rows: sampleContracts });
+    const res = await client.call('GET', '/api/contracts/lookup');
+    const first = res.body.data[0];
+    expect(first).toHaveProperty('id');
+    expect(first).toHaveProperty('name');
+    expect(first).toHaveProperty('type');
+    expect(first).toHaveProperty('status');
+    expect(first).toHaveProperty('client_name');
+  });
+
+  it('includes completed and cancelled contracts (for historical assignment filters)', async () => {
+    queryQueue.push({ rows: sampleContracts });
+    const res = await client.call('GET', '/api/contracts/lookup');
+    const statuses = res.body.data.map((c) => c.status);
+    expect(statuses).toContain('completed');
+    expect(statuses).toContain('cancelled');
+    expect(statuses).toContain('active');
+  });
+
+  it('the SQL query filters deleted_at IS NULL', async () => {
+    queryQueue.push({ rows: [] });
+    await client.call('GET', '/api/contracts/lookup');
+    const q = issuedQueries.find((r) => /FROM contracts/.test(r.sql) && /deleted_at IS NULL/.test(r.sql));
+    expect(q).toBeTruthy();
+  });
+
+  it('returns 200 with empty array when no contracts exist', async () => {
+    queryQueue.push({ rows: [] });
+    const res = await client.call('GET', '/api/contracts/lookup');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+  });
+
+  it('returns 500 when the DB throws', async () => {
+    queryQueue.push(new Error('db error'));
+    const res = await client.call('GET', '/api/contracts/lookup');
+    expect(res.status).toBe(500);
+  });
+});

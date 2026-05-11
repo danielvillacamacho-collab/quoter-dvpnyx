@@ -189,6 +189,145 @@ function EmployeeMultiSelect({ allEmployees, selectedIds, onChange }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ContractMultiSelect — SPEC-008
+//
+// Autocomplete multi-select para el filtro de contratos. Soporta:
+//   - Búsqueda por nombre en tiempo real
+//   - Selección múltiple con chips removibles (✕)
+//   - Muestra el tipo de contrato como hint (capacidad / proyecto / reventa)
+//   - Contratos completados/cancelados visibles (para historial de asignaciones)
+//   - Cierre al click afuera y con Escape
+// ─────────────────────────────────────────────────────────────────────────────
+const CONTRACT_TYPE_LABEL = { capacity: 'capacidad', project: 'proyecto', resell: 'reventa' };
+const CONTRACT_TERMINAL   = new Set(['completed', 'cancelled']);
+const CONTRACT_TERMINAL_LABEL = { completed: 'completado', cancelled: 'cancelado' };
+
+function ContractMultiSelect({ allContracts, selectedIds, onChange }) {
+  const [query, setQuery]   = useState('');
+  const [open, setOpen]     = useState(false);
+  const wrapperRef          = useRef(null);
+  const inputRef            = useRef(null);
+
+  const selectedContracts = useMemo(
+    () => allContracts.filter((c) => selectedIds.includes(c.id)),
+    [allContracts, selectedIds],
+  );
+
+  // Excluye ya-seleccionados; filtra por nombre si hay texto.
+  const filtered = useMemo(() => {
+    const q = query.toLowerCase();
+    return allContracts
+      .filter((c) => !selectedIds.includes(c.id))
+      .filter((c) => !q || c.name.toLowerCase().includes(q))
+      .slice(0, 60);
+  }, [allContracts, selectedIds, query]);
+
+  // Cierra el dropdown al click afuera.
+  useEffect(() => {
+    if (!open) return undefined;
+    const handler = (ev) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(ev.target)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const add = (id) => {
+    onChange([...selectedIds, id]);
+    setQuery('');
+    inputRef.current?.focus();
+  };
+
+  const remove = (id) => onChange(selectedIds.filter((x) => x !== id));
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') { setOpen(false); setQuery(''); }
+  };
+
+  return (
+    <div ref={wrapperRef} style={{ position: 'relative' }}>
+      {selectedContracts.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 4 }}>
+          {selectedContracts.map((ct) => (
+            <span key={ct.id} style={s.chip}>
+              {ct.name}
+              <button
+                type="button"
+                style={s.chipBtn}
+                onClick={() => remove(ct.id)}
+                aria-label={`Quitar ${ct.name}`}
+              >×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKeyDown}
+        placeholder={selectedIds.length ? 'Agregar contrato…' : 'Buscar contrato…'}
+        aria-label="Filtro por contrato"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        autoComplete="off"
+        style={s.input}
+      />
+      {open && (
+        <ul
+          role="listbox"
+          aria-label="Contratos"
+          style={{
+            position: 'absolute', top: '100%', left: 0, right: 0,
+            zIndex: 50, margin: '4px 0 0', padding: 0, listStyle: 'none',
+            background: 'var(--ds-surface, #fff)',
+            border: '1px solid var(--border)',
+            borderRadius: 8,
+            boxShadow: '0 6px 20px rgba(0,0,0,0.12)',
+            maxHeight: 220, overflowY: 'auto',
+          }}
+        >
+          {filtered.length === 0 && (
+            <li style={{ padding: '8px 12px', fontSize: 13, color: 'var(--text-light)' }}>
+              {query.trim() ? 'Sin coincidencias' : 'Sin contratos disponibles'}
+            </li>
+          )}
+          {filtered.map((ct) => (
+            <li
+              key={ct.id}
+              role="option"
+              aria-selected={false}
+              onMouseDown={(e) => { e.preventDefault(); add(ct.id); }}
+              style={{
+                padding: '7px 12px', fontSize: 13, cursor: 'pointer',
+                borderTop: '1px solid var(--border)',
+              }}
+            >
+              {ct.name}
+              {ct.type && (
+                <span style={{ fontSize: 11, color: 'var(--text-light)', marginLeft: 6 }}>
+                  ({CONTRACT_TYPE_LABEL[ct.type] || ct.type})
+                </span>
+              )}
+              {CONTRACT_TERMINAL.has(ct.status) && (
+                <span style={{ fontSize: 11, color: 'var(--text-light)', marginLeft: 4 }}>
+                  · {CONTRACT_TERMINAL_LABEL[ct.status]}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // AssignmentForm
 // ─────────────────────────────────────────────────────────────────────────────
 function AssignmentForm({ initial, requests, employees, onSave, onCancel, saving }) {
@@ -413,6 +552,10 @@ export default function Assignments() {
   const [dateTo, setDateTo]             = useState('');   // Spec 2: fecha hasta
   const [dateError, setDateError]       = useState('');
 
+  // SPEC-008: filtro multi-contrato
+  const [contractIds, setContractIds]         = useState([]);
+  const [filterContracts, setFilterContracts] = useState([]);
+
   const [requests, setRequests]               = useState([]);
   const [employees, setEmployees]             = useState([]);   // para el form (sin terminados)
   const [filterEmployees, setFilterEmployees] = useState([]);   // para el filtro (todos, inc. terminados)
@@ -453,6 +596,7 @@ export default function Assignments() {
     qs.set('limit', '25');
     if (statusFilter)         qs.set('status', statusFilter);
     if (employeeIds.length)   qs.set('employee_ids', employeeIds.join(','));
+    if (contractIds.length)   qs.set('contract_ids', contractIds.join(','));
     if (dateFrom)             qs.set('date_from', dateFrom);
     if (dateTo)               qs.set('date_to', dateTo);
     sort.applyToQs(qs);
@@ -464,7 +608,7 @@ export default function Assignments() {
       // eslint-disable-next-line no-alert
       alert('Error cargando asignaciones: ' + e.message);
     }
-  }, [statusFilter, employeeIds, dateFrom, dateTo, sort.field, sort.dir]);
+  }, [statusFilter, employeeIds, contractIds, dateFrom, dateTo, sort.field, sort.dir]);
 
   // INC-003: usar /lookup (sin paginación) para los combobox del formulario
   // y para la lista de empleados del filtro. Separamos ambos usos:
@@ -472,16 +616,18 @@ export default function Assignments() {
   //   - employees       → activos únicamente para el formulario de asignación
   const loadLookups = useCallback(async () => {
     try {
-      const [rr, re] = await Promise.all([
+      const [rr, re, rc] = await Promise.all([
         apiGet('/api/resource-requests/lookup'),
         apiGet('/api/employees/lookup'),
+        apiGet('/api/contracts/lookup'),
       ]);
       setRequests((rr?.data || []).filter((r) => !['filled', 'cancelled'].includes(r.status)));
       const allEmps = re?.data || [];
       setFilterEmployees(allEmps);
       setEmployees(allEmps.filter((e) => e.status !== 'terminated'));
+      setFilterContracts(rc?.data || []);
     } catch {
-      setRequests([]); setEmployees([]); setFilterEmployees([]);
+      setRequests([]); setEmployees([]); setFilterEmployees([]); setFilterContracts([]);
     }
   }, []);
 
@@ -492,12 +638,13 @@ export default function Assignments() {
   const clearFilters = () => {
     setStatusFilter('');
     setEmployeeIds([]);
+    setContractIds([]);
     setDateFrom('');
     setDateTo('');
     setDateError('');
   };
 
-  const hasActiveFilters = statusFilter || employeeIds.length || dateFrom || dateTo;
+  const hasActiveFilters = statusFilter || employeeIds.length || contractIds.length || dateFrom || dateTo;
 
   // ── Guardado / override ───────────────────────────────────────────────────
   const persist = useCallback(async (form, editingId) => {
@@ -560,10 +707,11 @@ export default function Assignments() {
   const onExportCsv = async () => {
     try {
       const qs = new URLSearchParams();
-      if (statusFilter)       qs.set('status', statusFilter);
-      if (employeeIds.length) qs.set('employee_ids', employeeIds.join(','));
-      if (dateFrom)           qs.set('date_from', dateFrom);
-      if (dateTo)             qs.set('date_to', dateTo);
+      if (statusFilter)         qs.set('status', statusFilter);
+      if (employeeIds.length)   qs.set('employee_ids', employeeIds.join(','));
+      if (contractIds.length)   qs.set('contract_ids', contractIds.join(','));
+      if (dateFrom)             qs.set('date_from', dateFrom);
+      if (dateTo)               qs.set('date_to', dateTo);
       await apiDownload(
         `/api/assignments/export.csv${qs.toString() ? `?${qs}` : ''}`,
         'asignaciones.csv',
@@ -628,6 +776,16 @@ export default function Assignments() {
               allEmployees={filterEmployees}
               selectedIds={employeeIds}
               onChange={setEmployeeIds}
+            />
+          </div>
+
+          {/* SPEC-008: Filtro por contrato (multi-select) */}
+          <div style={{ minWidth: 220, flex: 2 }}>
+            <label style={s.label}>Contrato</label>
+            <ContractMultiSelect
+              allContracts={filterContracts}
+              selectedIds={contractIds}
+              onChange={setContractIds}
             />
           </div>
 

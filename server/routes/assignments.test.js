@@ -822,3 +822,81 @@ describe('SPEC-012 — GET /api/assignments multi-status filter', () => {
     expect(q.params).toContain('2026-05-04');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEC-008 — filtro multi-contrato en assignments
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('GET /api/assignments — SPEC-008 filtro por contrato', () => {
+  const pushList = (rows = []) => {
+    queryQueue.push({ rows: [{ total: rows.length }] });
+    queryQueue.push({ rows });
+  };
+
+  it('filters by single contract_id (backward-compat param)', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?contract_id=ct1');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('ct1');
+    expect(q.sql).toMatch(/a\.contract_id\s*=\s*\$\d+/);
+  });
+
+  it('filters by contract_ids (comma-separated, OR logic)', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?contract_ids=ct1,ct2');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('ct1');
+    expect(q.params).toContain('ct2');
+    expect(q.sql).toMatch(/a\.contract_id\s+IN\s*\(/);
+  });
+
+  it('deduplicates when contract_id and contract_ids overlap', async () => {
+    pushList();
+    const res = await client.call('GET', '/api/assignments?contract_id=ct1&contract_ids=ct1,ct2');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params.filter((p) => p === 'ct1')).toHaveLength(1);
+    expect(q.params).toContain('ct2');
+  });
+
+  it('returns 200 with empty data when no assignments match the contract', async () => {
+    pushList([]);
+    const res = await client.call('GET', '/api/assignments?contract_ids=ct-nonexistent');
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([]);
+    expect(res.body.pagination.total).toBe(0);
+  });
+
+  it('combines contract_ids + employee_ids + status + date range (AND logic)', async () => {
+    pushList();
+    const res = await client.call(
+      'GET',
+      '/api/assignments?contract_ids=ct1,ct2&employee_ids=e1&status=active&date_from=2026-05-01&date_to=2026-08-31',
+    );
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT/.test(r.sql));
+    expect(q.params).toContain('ct1');
+    expect(q.params).toContain('ct2');
+    expect(q.params).toContain('e1');
+    expect(q.params).toContain('active');
+    expect(q.params).toContain('2026-05-01');
+    expect(q.params).toContain('2026-08-31');
+  });
+
+  it('contract_ids filter is respected in CSV export', async () => {
+    queryQueue.push({ rows: [
+      { id: 'a1', status: 'active', weekly_hours: 40,
+        start_date: '2026-05-01', end_date: '2026-08-01', role_title: 'Dev', notes: null,
+        created_at: '2026-05-01T00:00:00Z',
+        employee_name: 'Ana García', contract_name: 'Acme MSA', request_role_title: 'Senior Dev' },
+    ] });
+    const res = await client.call('GET', '/api/assignments/export.csv?contract_ids=ct1,ct2');
+    expect(res.status).toBe(200);
+    const q = issuedQueries.find((r) => /FROM assignments a/.test(r.sql) && /LIMIT 10000/.test(r.sql));
+    expect(q.params).toContain('ct1');
+    expect(q.params).toContain('ct2');
+    expect(q.sql).toMatch(/IN\s*\(/);
+  });
+});

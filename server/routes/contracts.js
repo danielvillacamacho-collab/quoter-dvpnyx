@@ -184,6 +184,32 @@ router.get('/export.csv', async (req, res) => {
   }
 });
 
+/* -------- LOOKUP (dropdown / filtro) --------
+ *
+ * Lista ligera de contratos para selectores y filtros. Incluye contratos
+ * terminales (completed, cancelled) para que los filtros de asignaciones
+ * históricas funcionen correctamente — análogo al lookup de empleados
+ * que expone terminados con include_terminated=true.
+ *
+ * Devuelve: id, name, type, status, client_name
+ * Ordenado por nombre para facilitar la búsqueda visual.
+ */
+router.get('/lookup', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT c.id, c.name, c.type, c.status,
+              cl.name AS client_name
+         FROM contracts c
+         LEFT JOIN clients cl ON cl.id = c.client_id
+        WHERE c.deleted_at IS NULL
+        ORDER BY c.name`,
+    );
+    res.json({ data: rows });
+  } catch (err) {
+    serverError(res, 'GET /contracts/lookup', err);
+  }
+});
+
 /* -------- GET ONE -------- */
 router.get('/:id', async (req, res) => {
   try {
