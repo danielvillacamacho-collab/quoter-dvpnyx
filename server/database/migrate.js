@@ -142,10 +142,10 @@ const V1_SCHEMA = `
 `;
 
 /* ==================================================================
- * V2 SCHEMA — new tables
+ * V2 SCHEMA â€” new tables
  * ================================================================== */
 const V2_NEW_TABLES = `
-  -- Squads — simple organizational grouping
+  -- Squads â€” simple organizational grouping
   CREATE TABLE IF NOT EXISTS squads (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name VARCHAR(100) NOT NULL,
@@ -401,7 +401,7 @@ const V2_NEW_TABLES = `
   CREATE INDEX IF NOT EXISTS time_entries_date_idx
     ON time_entries(work_date) WHERE deleted_at IS NULL;
 
-  -- Events — structured audit log (replaces audit_log over time)
+  -- Events â€” structured audit log (replaces audit_log over time)
   CREATE TABLE IF NOT EXISTS events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     event_type VARCHAR(100) NOT NULL,
@@ -457,7 +457,7 @@ const V2_ALTERS = `
   ALTER TABLE users ADD COLUMN IF NOT EXISTS squad_id UUID NULL REFERENCES squads(id);
   ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
 
-  -- Phase 10 UI refresh: per-user UI preferences (scheme, accent hue, density, …).
+  -- Phase 10 UI refresh: per-user UI preferences (scheme, accent hue, density, â€¦).
   -- JSONB so we can add more keys later without another migration.
   ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences JSONB NOT NULL DEFAULT '{}'::jsonb;
 
@@ -466,7 +466,7 @@ const V2_ALTERS = `
   -- from PR4, plus 'preventa' for backward compat. Creating the full list from
   -- the start prevents a re-deploy failure when a user already has role
   -- 'director' or 'external' (the old code created a narrow constraint here
-  -- and widened it later in the same transaction — safe for first deploy but
+  -- and widened it later in the same transaction â€” safe for first deploy but
   -- broke on re-runs if data had those roles).
   DO $$
   BEGIN
@@ -510,7 +510,7 @@ const V2_ALTERS = `
   -- Stores the free-text justification whenever an admin explicitly
   -- overrides an overridable validation failure (area mismatch, level
   -- gap, capacity partial/exceeded, partial date overlap). Nullable
-  -- because the vast majority of assignments don't need it — only those
+  -- because the vast majority of assignments don't need it â€” only those
   -- where the user consciously bypassed a check. Also records the
   -- structured checks JSON so AI/analytics can learn from past overrides.
   ALTER TABLE assignments ADD COLUMN IF NOT EXISTS override_reason    TEXT  NULL;
@@ -523,13 +523,13 @@ const V2_ALTERS = `
   CREATE INDEX IF NOT EXISTS idx_quotations_squad       ON quotations(squad_id)       WHERE deleted_at IS NULL;
 
   -- ==================================================================
-  -- CRM-MVP-00.1 (Abril 27 2026) — Pipeline Kanban sobre opportunities
+  -- CRM-MVP-00.1 (Abril 27 2026) â€” Pipeline Kanban sobre opportunities
   -- ==================================================================
-  -- Decisión (Daniel + CPO interim): construir CRM evolutivo sobre el
-  -- stack actual sin entrar en migración fundacional (TS, monorepo, RLS,
+  -- DecisiÃ³n (Daniel + CPO interim): construir CRM evolutivo sobre el
+  -- stack actual sin entrar en migraciÃ³n fundacional (TS, monorepo, RLS,
   -- multi-tenant, Zod). Estas columnas son aditivas, los 7 valores de
   -- status legacy se mantienen y se mapean a stages del pipeline en
-  -- código (server/utils/pipeline.js + client/src/utils/pipeline.js).
+  -- cÃ³digo (server/utils/pipeline.js + client/src/utils/pipeline.js).
   ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS booking_amount_usd  NUMERIC(18,2) NOT NULL DEFAULT 0;
   ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS probability         NUMERIC(5,2)  NOT NULL DEFAULT 5;
   ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS weighted_amount_usd NUMERIC(18,2) NOT NULL DEFAULT 0;
@@ -539,7 +539,7 @@ const V2_ALTERS = `
 
   -- Trigger: cuando cambia status o booking_amount_usd, recalcular
   -- probability + weighted + last_stage_change_at. Probability mapping
-  -- está hardcoded acá (mismos valores que en utils/pipeline.js).
+  -- estÃ¡ hardcoded acÃ¡ (mismos valores que en utils/pipeline.js).
   CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
   RETURNS TRIGGER AS $$
   BEGIN
@@ -570,7 +570,7 @@ const V2_ALTERS = `
     EXECUTE FUNCTION opp_pipeline_recalc();
 
   -- Backfill probability + weighted para opportunities pre-CRM-MVP.
-  -- last_stage_change_at queda en updated_at (mejor aproximación disponible).
+  -- last_stage_change_at queda en updated_at (mejor aproximaciÃ³n disponible).
   UPDATE opportunities SET
     probability = CASE status
       WHEN 'open'        THEN 5
@@ -584,32 +584,32 @@ const V2_ALTERS = `
   WHERE probability = 5 AND status <> 'open';
 
   -- Recalc weighted (en caso de que booking_amount_usd haya quedado en 0
-  -- el weighted también, lo que es correcto; este UPDATE solo es defensivo).
+  -- el weighted tambiÃ©n, lo que es correcto; este UPDATE solo es defensivo).
   UPDATE opportunities SET weighted_amount_usd = COALESCE(booking_amount_usd, 0) * COALESCE(probability, 0) / 100.0
     WHERE weighted_amount_usd = 0 AND booking_amount_usd > 0;
 
   CREATE INDEX IF NOT EXISTS idx_opportunities_status_close ON opportunities(status, expected_close_date) WHERE deleted_at IS NULL;
 
   -- ==================================================================
-  -- SPEC-CRM-00 v1.1 PR1 (Mayo 2026) — Pipeline 9 estados + Postponed
+  -- SPEC-CRM-00 v1.1 PR1 (Mayo 2026) â€” Pipeline 9 estados + Postponed
   -- ==================================================================
-  -- Decisión CEO + CPO interim:
+  -- DecisiÃ³n CEO + CPO interim:
   --   * Renombrado en lote de los 7 estados legacy a los 9 del spec.
-  --   * cancelled → closed_lost (decisión explícita CCO 2026-05).
+  --   * cancelled â†’ closed_lost (decisiÃ³n explÃ­cita CCO 2026-05).
   --   * Estado postponed nuevo, requiere postponed_until_date.
-  --   * opportunity_number legible "OPP-{cc}-{año}-{seq}" generado para
+  --   * opportunity_number legible "OPP-{cc}-{aÃ±o}-{seq}" generado para
   --     las opps existentes y para todas las nuevas.
   --
-  -- Mapping (idempotente — la segunda corrida no encuentra filas):
-  --   open       → lead
-  --   qualified  → qualified  (sin cambio)
-  --   proposal   → proposal_validated  (probability 50 = match exacto)
-  --   negotiation→ negotiation (sin cambio)
-  --   won        → closed_won
-  --   lost       → closed_lost
-  --   cancelled  → closed_lost (per decisión CCO; outcome se preserva)
+  -- Mapping (idempotente â€” la segunda corrida no encuentra filas):
+  --   open       â†’ lead
+  --   qualified  â†’ qualified  (sin cambio)
+  --   proposal   â†’ proposal_validated  (probability 50 = match exacto)
+  --   negotiationâ†’ negotiation (sin cambio)
+  --   won        â†’ closed_won
+  --   lost       â†’ closed_lost
+  --   cancelled  â†’ closed_lost (per decisiÃ³n CCO; outcome se preserva)
   --
-  -- Probabilidades nuevas (más granulares que las 7 legacy):
+  -- Probabilidades nuevas (mÃ¡s granulares que las 7 legacy):
   --   lead 5 / qualified 15 / solution_design 30 / proposal_validated 50
   --   / negotiation 75 / verbal_commit 90 / closed_won 100 / closed_lost 0
   --   / postponed 0
@@ -619,17 +619,17 @@ const V2_ALTERS = `
   ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS opportunity_number   VARCHAR(50) NULL;
 
   -- 1) Drop el CHECK constraint legacy (autonombre de Postgres). Se
-  --    busca dinámicamente porque su nombre exacto depende de la versión
-  --    en la que se creó la tabla.
+  --    busca dinÃ¡micamente porque su nombre exacto depende de la versiÃ³n
+  --    en la que se creÃ³ la tabla.
   --
   --    HOTFIX 2026-05-01: Postgres reescribe CHECK (status IN ('open', ...))
   --    a CHECK ((status)::text = ANY (ARRAY['open'::varchar, ...])) cuando
-  --    hay >1 valor — la representacion canonica NO contiene la palabra IN.
+  --    hay >1 valor â€” la representacion canonica NO contiene la palabra IN.
   --    El pattern original '%status%IN%open%' nunca matcheo en RDS, el
-  --    constraint legacy quedó vivo, y el primer UPDATE a 'lead' violó la
-  --    restricción → toda la transacción de migración hizo rollback en dev.
-  --    La señal específica del enum legacy es el literal 'cancelled', que
-  --    se eliminó en v1.1; usarlo como marcador es 100% determinístico.
+  --    constraint legacy quedÃ³ vivo, y el primer UPDATE a 'lead' violÃ³ la
+  --    restricciÃ³n â†’ toda la transacciÃ³n de migraciÃ³n hizo rollback en dev.
+  --    La seÃ±al especÃ­fica del enum legacy es el literal 'cancelled', que
+  --    se eliminÃ³ en v1.1; usarlo como marcador es 100% determinÃ­stico.
   DO $do_status_check_drop$
   DECLARE
     cn text;
@@ -649,15 +649,15 @@ const V2_ALTERS = `
   END
   $do_status_check_drop$;
 
-  -- 2) Migración de datos. Idempotente: la segunda vuelta no toca nada.
+  -- 2) MigraciÃ³n de datos. Idempotente: la segunda vuelta no toca nada.
   UPDATE opportunities SET status = 'lead'               WHERE status = 'open';
   UPDATE opportunities SET status = 'proposal_validated' WHERE status = 'proposal';
   UPDATE opportunities SET status = 'closed_won'         WHERE status = 'won';
   UPDATE opportunities SET status = 'closed_lost'        WHERE status IN ('lost', 'cancelled');
 
-  -- 3) Constraint nuevo con los 9 estados aprobados + cláusula postponed.
+  -- 3) Constraint nuevo con los 9 estados aprobados + clÃ¡usula postponed.
   --    HOTFIX 2026-05-01: envuelto en DO/IF NOT EXISTS para que la
-  --    migración sea idempotente entre deploys (el legacy ADD CONSTRAINT
+  --    migraciÃ³n sea idempotente entre deploys (el legacy ADD CONSTRAINT
   --    crudo fallaba en la segunda corrida con "constraint already exists").
   DO $do_status_check_v11_add$
   BEGIN
@@ -678,8 +678,8 @@ const V2_ALTERS = `
   -- match the new status vocabulary so INSERTs without explicit status work.
   ALTER TABLE opportunities ALTER COLUMN status SET DEFAULT 'lead';
 
-  -- Postponed siempre debe tener fecha de reactivación. Se nombra
-  -- explícitamente para poder verificarlo en tests + drop si se quita.
+  -- Postponed siempre debe tener fecha de reactivaciÃ³n. Se nombra
+  -- explÃ­citamente para poder verificarlo en tests + drop si se quita.
   DO $do_postponed_check$
   BEGIN
     IF NOT EXISTS (
@@ -693,7 +693,7 @@ const V2_ALTERS = `
   $do_postponed_check$;
 
   -- 4) Reescribimos opp_pipeline_recalc() con la nueva tabla de
-  --    probabilidades. CREATE OR REPLACE → idempotente.
+  --    probabilidades. CREATE OR REPLACE â†’ idempotente.
   CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
   RETURNS TRIGGER AS $$
   BEGIN
@@ -725,7 +725,7 @@ const V2_ALTERS = `
     'lead','qualified','proposal_validated','negotiation','closed_won','closed_lost'
   );
 
-  -- 6) Backfill de country desde el cliente — solo donde está vacío.
+  -- 6) Backfill de country desde el cliente â€” solo donde estÃ¡ vacÃ­o.
   UPDATE opportunities o
      SET country = c.country
     FROM clients c
@@ -734,11 +734,11 @@ const V2_ALTERS = `
      AND c.country IS NOT NULL;
 
   -- 7) Backfill de opportunity_number. Formato OPP-{cc}-{yyyy}-{nnnnn}.
-  --    cc es el código de país de la opp en mayúsculas, máx 4 caracteres
-  --    para acomodar nombres en español ("Colombia"→"COLO", "México"→"MEXI").
+  --    cc es el cÃ³digo de paÃ­s de la opp en mayÃºsculas, mÃ¡x 4 caracteres
+  --    para acomodar nombres en espaÃ±ol ("Colombia"â†’"COLO", "MÃ©xico"â†’"MEXI").
   --    Si el ops team prefiere ISO alpha-2 estricto se puede normalizar
-  --    en una migración futura sin romper este formato.
-  --    El seq se calcula por (cc, año) sobre el set existente — números
+  --    en una migraciÃ³n futura sin romper este formato.
+  --    El seq se calcula por (cc, aÃ±o) sobre el set existente â€” nÃºmeros
   --    estables para opps ya en BD.
   WITH numbered AS (
     SELECT id,
@@ -766,12 +766,12 @@ const V2_ALTERS = `
     WHERE status = 'postponed' AND deleted_at IS NULL;
 
   -- ==================================================================
-  -- SPEC-CRM-00 v1.1 PR2 (Mayo 2026) — Revenue model + Champion/EB +
+  -- SPEC-CRM-00 v1.1 PR2 (Mayo 2026) â€” Revenue model + Champion/EB +
   -- Funding source + Loss reasons formalizadas + Drive URL
   -- ==================================================================
-  -- Decisión CCO: el modelo legacy "booking_amount_usd suelto" no refleja
-  -- la operación real. Capacity y resell son recurrentes; tratarlos como
-  -- one-time falsea métricas. Aquí formalizamos:
+  -- DecisiÃ³n CCO: el modelo legacy "booking_amount_usd suelto" no refleja
+  -- la operaciÃ³n real. Capacity y resell son recurrentes; tratarlos como
+  -- one-time falsea mÃ©tricas. AquÃ­ formalizamos:
   --   * revenue_type (one_time | recurring | mixed)
   --   * one_time_amount_usd / mrr_usd / contract_length_months
   --   * booking_amount_usd ahora es DERIVADO via trigger:
@@ -783,7 +783,7 @@ const V2_ALTERS = `
   --   * loss_reason enum extendida (9 valores spec) + loss_reason_detail
   --   * drive_url (link a carpeta de cliente, opcional)
   --
-  -- Migración legacy: opps existentes se asumen 'one_time' con
+  -- MigraciÃ³n legacy: opps existentes se asumen 'one_time' con
   -- one_time_amount_usd = booking_amount_usd actual (idempotente).
   ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS revenue_type            TEXT NULL;
   ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS one_time_amount_usd     NUMERIC(18,2) NULL;
@@ -799,7 +799,7 @@ const V2_ALTERS = `
 
   -- Backfill: opps legacy todas son one_time con booking actual.
   -- GREATEST(..., 0) garantiza non-negative para que opp_amounts_nonneg CHECK
-  -- pase incluso si alguna opp legacy tiene booking negativo (crédito / error).
+  -- pase incluso si alguna opp legacy tiene booking negativo (crÃ©dito / error).
   UPDATE opportunities SET revenue_type = 'one_time'
     WHERE revenue_type IS NULL;
   UPDATE opportunities SET one_time_amount_usd = GREATEST(COALESCE(booking_amount_usd, 0), 0)
@@ -807,7 +807,7 @@ const V2_ALTERS = `
   UPDATE opportunities SET funding_source = 'client_direct'
     WHERE funding_source IS NULL;
 
-  -- Promover defaults + NOT NULL después del backfill.
+  -- Promover defaults + NOT NULL despuÃ©s del backfill.
   ALTER TABLE opportunities ALTER COLUMN revenue_type   SET DEFAULT 'one_time';
   ALTER TABLE opportunities ALTER COLUMN revenue_type   SET NOT NULL;
   ALTER TABLE opportunities ALTER COLUMN funding_source SET DEFAULT 'client_direct';
@@ -845,9 +845,9 @@ const V2_ALTERS = `
   $do_loss_enum$;
 
   -- Consistency relajado: solo verificamos que los campos REQUERIDOS por
-  -- el motion estén presentes. NO forzamos NULL en los no-aplicables — el
-  -- trigger los ignora al calcular booking, y mantener el dato histórico
-  -- es útil cuando una opp pasa de recurring → one_time.
+  -- el motion estÃ©n presentes. NO forzamos NULL en los no-aplicables â€” el
+  -- trigger los ignora al calcular booking, y mantener el dato histÃ³rico
+  -- es Ãºtil cuando una opp pasa de recurring â†’ one_time.
   DO $do_rev_consistency$
   BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_revenue_consistency') THEN
@@ -886,13 +886,13 @@ const V2_ALTERS = `
   $do_amounts_nonneg$;
 
   -- Trigger reescrito: ahora calcula booking_amount_usd derivado del
-  -- revenue_type ANTES de calcular weighted. CREATE OR REPLACE → idempotente.
+  -- revenue_type ANTES de calcular weighted. CREATE OR REPLACE â†’ idempotente.
   CREATE OR REPLACE FUNCTION opp_pipeline_recalc()
   RETURNS TRIGGER AS $$
   BEGIN
     -- 1) Booking derivado del revenue_type. La app sigue pudiendo enviar
     --    booking_amount_usd directo; el trigger lo sobrescribe siempre que
-    --    haya datos del modelo. Si el modelo está vacío (legacy) se mantiene
+    --    haya datos del modelo. Si el modelo estÃ¡ vacÃ­o (legacy) se mantiene
     --    el booking enviado.
     IF NEW.revenue_type = 'recurring' THEN
       NEW.booking_amount_usd := COALESCE(NEW.mrr_usd, 0) * COALESCE(NEW.contract_length_months, 0);
@@ -900,8 +900,8 @@ const V2_ALTERS = `
       NEW.booking_amount_usd := COALESCE(NEW.one_time_amount_usd, 0)
                               + COALESCE(NEW.mrr_usd, 0) * COALESCE(NEW.contract_length_months, 0);
     ELSIF NEW.revenue_type = 'one_time' THEN
-      -- Si la app envía one_time_amount_usd, se usa. Si no, se respeta el
-      -- booking enviado (compat legacy). Cuando la app esté 100% migrada
+      -- Si la app envÃ­a one_time_amount_usd, se usa. Si no, se respeta el
+      -- booking enviado (compat legacy). Cuando la app estÃ© 100% migrada
       -- esta rama colapsa a COALESCE(NEW.one_time_amount_usd, 0).
       NEW.booking_amount_usd := COALESCE(NEW.one_time_amount_usd, NEW.booking_amount_usd, 0);
     END IF;
@@ -933,8 +933,8 @@ const V2_ALTERS = `
   $$ LANGUAGE plpgsql;
 
   -- Re-trigger para recalcular booking en todas las opps (booking ya estaba
-  -- correcto en legacy porque era el campo directo, pero después del
-  -- rename one_time_amount_usd ← booking este UPDATE no-op confirma).
+  -- correcto en legacy porque era el campo directo, pero despuÃ©s del
+  -- rename one_time_amount_usd â† booking este UPDATE no-op confirma).
   UPDATE opportunities SET revenue_type = revenue_type
     WHERE revenue_type IS NOT NULL;
 
@@ -948,15 +948,15 @@ const V2_ALTERS = `
     WHERE champion_identified = false AND deleted_at IS NULL;
 
   -- ==================================================================
-  -- RR-MVP-00.1 (Abril 27 2026) — Revenue recognition mínimo
+  -- RR-MVP-00.1 (Abril 27 2026) â€” Revenue recognition mÃ­nimo
   -- ==================================================================
-  -- Decisión CTO+CPO: trabajo funcional placeholder. Reemplaza el Excel
+  -- DecisiÃ³n CTO+CPO: trabajo funcional placeholder. Reemplaza el Excel
   -- mensual de revenue para que DMs/CFO puedan operar sin esa hoja.
-  -- TODO eng team: este módulo está intencionalmente simple. Cuando entren
+  -- TODO eng team: este mÃ³dulo estÃ¡ intencionalmente simple. Cuando entren
   -- a refactorizar, ver SPEC-RR-00 para el modelo NIIF 15-friendly real
   -- (immutability triggers, plan_frozen_at, service_period_history append-
-  -- only, multi-currency, atomic worker async, 4 motores polimórficos).
-  -- Aquí sólo: 1 columna en contracts + 1 tabla revenue_periods + 1
+  -- only, multi-currency, atomic worker async, 4 motores polimÃ³rficos).
+  -- AquÃ­ sÃ³lo: 1 columna en contracts + 1 tabla revenue_periods + 1
   -- motor monthly_projection plano. Sin triggers DB. Sin multi-currency.
   ALTER TABLE contracts ADD COLUMN IF NOT EXISTS total_value_usd  NUMERIC(18,2) NOT NULL DEFAULT 0;
   ALTER TABLE contracts ADD COLUMN IF NOT EXISTS original_currency VARCHAR(3)  NOT NULL DEFAULT 'USD';
@@ -966,8 +966,8 @@ const V2_ALTERS = `
     yyyymm         CHAR(6) NOT NULL CHECK (yyyymm ~ '^[0-9]{6}$'),
     projected_usd  NUMERIC(18,2) NOT NULL DEFAULT 0,
     -- projected_pct: porcentaje de avance del proyecto (0..1) para
-    -- contratos type='project'. Para los demás tipos queda NULL y se
-    -- ignora — esos llevan el monto USD directo en projected_usd. El
+    -- contratos type='project'. Para los demÃ¡s tipos queda NULL y se
+    -- ignora â€” esos llevan el monto USD directo en projected_usd. El
     -- valor visible PROY = projected_pct * contracts.total_value_usd.
     projected_pct  NUMERIC(7,4) NULL CHECK (projected_pct IS NULL OR (projected_pct >= 0 AND projected_pct <= 1)),
     real_usd       NUMERIC(18,2) NULL,
@@ -983,20 +983,20 @@ const V2_ALTERS = `
     PRIMARY KEY (contract_id, yyyymm)
   );
   ALTER TABLE revenue_periods ADD COLUMN IF NOT EXISTS projected_pct NUMERIC(7,4) NULL;
-  -- RR-MVP-00.5: para contratos type='project' el REAL también se captura
-  -- en % (0..1) y real_usd se deriva de real_pct × contracts.total_value_usd.
-  -- Para los demás tipos queda NULL (real_usd se ingresa directo).
+  -- RR-MVP-00.5: para contratos type='project' el REAL tambiÃ©n se captura
+  -- en % (0..1) y real_usd se deriva de real_pct Ã— contracts.total_value_usd.
+  -- Para los demÃ¡s tipos queda NULL (real_usd se ingresa directo).
   ALTER TABLE revenue_periods ADD COLUMN IF NOT EXISTS real_pct NUMERIC(7,4) NULL;
   CREATE INDEX IF NOT EXISTS idx_revenue_periods_yyyymm ON revenue_periods(yyyymm);
   CREATE INDEX IF NOT EXISTS idx_revenue_periods_status ON revenue_periods(status);
 
   -- RR-MVP-00.6 (Abril 2026): tasas de cambio mensuales tipo "USDCOP".
-  -- Convención: usd_rate = N tal que 1 USD = N <currency>. USD propio NO
-  -- vive en esta tabla — código asume rate=1.0 implícito.
-  -- Para convertir A → B usando rates del mes Y:
+  -- ConvenciÃ³n: usd_rate = N tal que 1 USD = N <currency>. USD propio NO
+  -- vive en esta tabla â€” cÃ³digo asume rate=1.0 implÃ­cito.
+  -- Para convertir A â†’ B usando rates del mes Y:
   --     amount_in_USD = amount_in_A / usd_rate(Y, A)   (o = amount_in_A si A=USD)
-  --     amount_in_B   = amount_in_USD × usd_rate(Y, B) (o = amount_in_USD si B=USD)
-  -- Si no hay rate para el período, fallback al último rate disponible para
+  --     amount_in_B   = amount_in_USD Ã— usd_rate(Y, B) (o = amount_in_USD si B=USD)
+  -- Si no hay rate para el perÃ­odo, fallback al Ãºltimo rate disponible para
   -- esa moneda (LATERAL JOIN en query). El admin gestiona estos rates desde
   -- /admin/exchange-rates (mismo formato que el Excel).
   CREATE TABLE IF NOT EXISTS exchange_rates (
@@ -1011,11 +1011,11 @@ const V2_ALTERS = `
   CREATE INDEX IF NOT EXISTS idx_exchange_rates_currency ON exchange_rates(currency, yyyymm);
 
   -- ==================================================================
-  -- Time-MVP-00.1 (Abril 2026) — Weekly time allocations en %.
+  -- Time-MVP-00.1 (Abril 2026) â€” Weekly time allocations en %.
   -- ==================================================================
-  -- Cada empleado registra cuánto % de su semana dedicó a cada
-  -- asignación activa. Bench se calcula como 100 - SUM(pct) (no se
-  -- persiste). Coexiste con time_entries (horas diarias) — modelos
+  -- Cada empleado registra cuÃ¡nto % de su semana dedicÃ³ a cada
+  -- asignaciÃ³n activa. Bench se calcula como 100 - SUM(pct) (no se
+  -- persiste). Coexiste con time_entries (horas diarias) â€” modelos
   -- distintos, eng team va a consolidar.
   CREATE TABLE IF NOT EXISTS weekly_time_allocations (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1034,23 +1034,23 @@ const V2_ALTERS = `
   CREATE INDEX IF NOT EXISTS wta_assignment_idx ON weekly_time_allocations(assignment_id);
 
   -- ==================================================================
-  -- SUBTYPE-CONTRATO (Abril 2026) — clasificación dentro del Tipo.
+  -- SUBTYPE-CONTRATO (Abril 2026) â€” clasificaciÃ³n dentro del Tipo.
   -- ==================================================================
   -- Operaciones necesita distinguir el modelo de trabajo dentro de cada
-  -- type ('capacity' / 'project'). Hoy esa distinción vive en notes con
+  -- type ('capacity' / 'project'). Hoy esa distinciÃ³n vive en notes con
   -- valores inconsistentes ("T&M", "Tiempo y materiales", "TyM"). Sin
-  -- estructura no se puede filtrar/reportar y bloquea Módulo 3 (billing).
+  -- estructura no se puede filtrar/reportar y bloquea MÃ³dulo 3 (billing).
   --
   -- Aditivo: NULL en contratos existentes (mostrar "Sin especificar"
-  -- en UI). Validación enforced server-side y UI.
+  -- en UI). ValidaciÃ³n enforced server-side y UI.
   --
-  -- Mapeo válido:
-  --   capacity → staff_augmentation | mission_driven_squad | managed_service | time_and_materials
-  --   project  → fixed_scope | hour_pool
-  --   resell   → NULL siempre (sin subtipos por ahora)
+  -- Mapeo vÃ¡lido:
+  --   capacity â†’ staff_augmentation | mission_driven_squad | managed_service | time_and_materials
+  --   project  â†’ fixed_scope | hour_pool
+  --   resell   â†’ NULL siempre (sin subtipos por ahora)
   ALTER TABLE contracts ADD COLUMN IF NOT EXISTS contract_subtype VARCHAR(50) NULL;
 
-  -- CHECK constraint — legacy block creates the base 6-value constraint
+  -- CHECK constraint â€” legacy block creates the base 6-value constraint
   -- ONLY if neither the original (contracts_subtype_check) nor the v2
   -- replacement (contracts_subtype_valid, adds resell subtypes) exist.
   -- Once do_subtype_v2 (in SPEC_CRM_01) runs, contracts_subtype_valid
@@ -1076,25 +1076,25 @@ const V2_ALTERS = `
     ON contracts(contract_subtype) WHERE deleted_at IS NULL AND contract_subtype IS NOT NULL;
 
   COMMENT ON COLUMN contracts.contract_subtype IS
-    'Clasificación dentro del type. capacity → staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project → fixed_scope|hour_pool. resell → NULL. Coherencia type↔subtype validada en server/routes/contracts.js.';
+    'ClasificaciÃ³n dentro del type. capacity â†’ staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project â†’ fixed_scope|hour_pool. resell â†’ NULL. Coherencia typeâ†”subtype validada en server/routes/contracts.js.';
 
   -- ==================================================================
-  -- EMPLOYEE-COSTS-MVP-00.1 (Abril 28 2026) — Costo empresa mensual
+  -- EMPLOYEE-COSTS-MVP-00.1 (Abril 28 2026) â€” Costo empresa mensual
   -- ==================================================================
   -- Spec: spec_costos_empleado.docx (operaciones, prioridad ALTA).
   --
   -- Una row por (empleado, mes). Captura el costo empresa REAL en moneda
-  -- original + conversión a USD usando exchange_rates del mismo período.
-  -- Histórica e inmutable cuando locked=true (cierre contable).
+  -- original + conversiÃ³n a USD usando exchange_rates del mismo perÃ­odo.
+  -- HistÃ³rica e inmutable cuando locked=true (cierre contable).
   --
-  -- Decisiones técnicas tomadas (ver docs/DECISIONS.md :: EMPLOYEE-COSTS):
+  -- Decisiones tÃ©cnicas tomadas (ver docs/DECISIONS.md :: EMPLOYEE-COSTS):
   --   - period CHAR(6) 'YYYYMM' (alineado con exchange_rates y revenue_periods).
-  --   - ON DELETE RESTRICT en employee_id — soft-delete del empleado NO toca
+  --   - ON DELETE RESTRICT en employee_id â€” soft-delete del empleado NO toca
   --     historial financiero. Para borrar un empleado con costos, primero hay
-  --     que purgar/archivar su historial (decisión consciente de superadmin).
-  --   - exchange_rate_used capturada al momento del cálculo (auditoría).
-  --     Si la tasa cambia después y el row no está locked, finanzas decide
-  --     vía endpoint de recálculo (no auto-recálculo silencioso).
+  --     que purgar/archivar su historial (decisiÃ³n consciente de superadmin).
+  --   - exchange_rate_used capturada al momento del cÃ¡lculo (auditorÃ­a).
+  --     Si la tasa cambia despuÃ©s y el row no estÃ¡ locked, finanzas decide
+  --     vÃ­a endpoint de recÃ¡lculo (no auto-recÃ¡lculo silencioso).
   --   - Costos PII: sin encryption at rest por ahora (depende de infra).
   --     Acceso restringido a admin/superadmin a nivel route.
   CREATE TABLE IF NOT EXISTS employee_costs (
@@ -1118,8 +1118,8 @@ const V2_ALTERS = `
     UNIQUE (employee_id, period)
   );
 
-  -- CHECK currency contra catálogo expandible. Si se agrega una moneda nueva:
-  -- 1) ALTER aquí, 2) seed exchange_rate, 3) actualizar client/utils/cost.js.
+  -- CHECK currency contra catÃ¡logo expandible. Si se agrega una moneda nueva:
+  -- 1) ALTER aquÃ­, 2) seed exchange_rate, 3) actualizar client/utils/cost.js.
   DO $$
   BEGIN
     IF NOT EXISTS (
@@ -1137,23 +1137,23 @@ const V2_ALTERS = `
     ON employee_costs(period, locked);
 
   COMMENT ON TABLE  employee_costs IS
-    'Costo empresa mensual por empleado (PII: salarial). Una row por (employee_id, period). Multi-currency con conversión a USD vía exchange_rates. locked=true marca período cerrado (solo superadmin edita). Acceso restringido a admin/superadmin.';
+    'Costo empresa mensual por empleado (PII: salarial). Una row por (employee_id, period). Multi-currency con conversiÃ³n a USD vÃ­a exchange_rates. locked=true marca perÃ­odo cerrado (solo superadmin edita). Acceso restringido a admin/superadmin.';
   COMMENT ON COLUMN employee_costs.period IS
     'YYYYMM. Mismo formato que exchange_rates.yyyymm y revenue_periods.yyyymm.';
   COMMENT ON COLUMN employee_costs.gross_cost IS
-    'PII:high — costo empresa total en moneda original (incluye salario + carga prestacional + beneficios). Acceso solo admin/superadmin.';
+    'PII:high â€” costo empresa total en moneda original (incluye salario + carga prestacional + beneficios). Acceso solo admin/superadmin.';
   COMMENT ON COLUMN employee_costs.cost_usd IS
-    'PII:high — gross_cost convertido a USD usando exchange_rate_used. Para currency=USD se setea igual a gross_cost.';
+    'PII:high â€” gross_cost convertido a USD usando exchange_rate_used. Para currency=USD se setea igual a gross_cost.';
   COMMENT ON COLUMN employee_costs.exchange_rate_used IS
-    'Snapshot de la tasa al momento del cálculo. Si exchange_rates cambia después, este valor NO se actualiza automáticamente — finanzas decide vía POST /api/employee-costs/recalculate-usd/:period.';
+    'Snapshot de la tasa al momento del cÃ¡lculo. Si exchange_rates cambia despuÃ©s, este valor NO se actualiza automÃ¡ticamente â€” finanzas decide vÃ­a POST /api/employee-costs/recalculate-usd/:period.';
   COMMENT ON COLUMN employee_costs.locked IS
-    'true = período cerrado contablemente. Solo superadmin puede editar/deslockar. Audit log obligatorio en cada lock/unlock.';
+    'true = perÃ­odo cerrado contablemente. Solo superadmin puede editar/deslockar. Audit log obligatorio en cada lock/unlock.';
   COMMENT ON COLUMN employee_costs.source IS
-    'Cómo se cargó el dato: manual (form), csv_import (bulk preview/commit), copy_from_prev (acción "Copiar mes anterior"), projected (proyección automática hacia el futuro), payroll_sync (futura integración Giitic).';
+    'CÃ³mo se cargÃ³ el dato: manual (form), csv_import (bulk preview/commit), copy_from_prev (acciÃ³n "Copiar mes anterior"), projected (proyecciÃ³n automÃ¡tica hacia el futuro), payroll_sync (futura integraciÃ³n Giitic).';
 
-  -- Idempotente: en DBs creadas con la versión inicial del CHECK (sin
+  -- Idempotente: en DBs creadas con la versiÃ³n inicial del CHECK (sin
   -- 'projected'), reescribimos la constraint. Postgres no tiene "ALTER
-  -- CHECK", así que dropeamos y recreamos.
+  -- CHECK", asÃ­ que dropeamos y recreamos.
   DO $$
   DECLARE
     cdef text;
@@ -1174,26 +1174,26 @@ const V2_ALTERS = `
     END IF;
   END $$;
 
-  -- Deprecación de columnas en employees (no se borran — preserva schema
+  -- DeprecaciÃ³n de columnas en employees (no se borran â€” preserva schema
   -- existente, pero quedan NULL forever para nuevos empleados; la fuente
   -- de verdad es employee_costs).
   COMMENT ON COLUMN employees.company_monthly_cost IS
-    'DEPRECATED 2026-04: usar employee_costs.gross_cost. Esta columna queda NULL para nuevos empleados. Se mantiene en schema sólo por compatibilidad con datos legacy.';
+    'DEPRECATED 2026-04: usar employee_costs.gross_cost. Esta columna queda NULL para nuevos empleados. Se mantiene en schema sÃ³lo por compatibilidad con datos legacy.';
   COMMENT ON COLUMN employees.hourly_cost IS
     'DEPRECATED 2026-04: usar employee_costs (cost_usd / horas_mes_estimadas) para derivar hourly. Esta columna queda NULL.';
   COMMENT ON COLUMN employees.cost_currency IS
     'DEPRECATED 2026-04: la moneda vive en employee_costs.currency por mes (puede variar).';
   COMMENT ON COLUMN employees.cost_updated_at IS
-    'DEPRECATED 2026-04: usar employee_costs.updated_at del último período.';
+    'DEPRECATED 2026-04: usar employee_costs.updated_at del Ãºltimo perÃ­odo.';
   COMMENT ON COLUMN employees.cost_updated_by IS
-    'DEPRECATED 2026-04: usar employee_costs.updated_by del último período.';
+    'DEPRECATED 2026-04: usar employee_costs.updated_by del Ãºltimo perÃ­odo.';
 
   -- ==================================================================
-  -- SPEC-CRM-00 v1.1 PR3 (Mayo 2026) — margin_pct + estimated_cost_usd
+  -- SPEC-CRM-00 v1.1 PR3 (Mayo 2026) â€” margin_pct + estimated_cost_usd
   -- ==================================================================
-  -- margin_pct se calcula vía POST /api/opportunities/:id/check-margin.
-  -- El endpoint acepta estimated_cost_usd explícito o lo auto-computa
-  -- desde cost_hour / rate_hour de las líneas de cotización activa.
+  -- margin_pct se calcula vÃ­a POST /api/opportunities/:id/check-margin.
+  -- El endpoint acepta estimated_cost_usd explÃ­cito o lo auto-computa
+  -- desde cost_hour / rate_hour de las lÃ­neas de cotizaciÃ³n activa.
   -- Si margin_pct < 20 % se emite opportunity.margin_low (Alerta A4).
   -- Los dos campos son opcionales / nullable: no se exige que existan
   -- para crear/actualizar la oportunidad.
@@ -1201,7 +1201,7 @@ const V2_ALTERS = `
   ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS margin_pct         NUMERIC(5,2)  NULL;
 
   -- margin_pct no puede exceder 100 % (si cost >= 0 y booking > 0, esto
-  -- se cumple siempre; el constraint es una red de seguridad explícita).
+  -- se cumple siempre; el constraint es una red de seguridad explÃ­cita).
   DO $do_margin_pct_range$
   BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'opp_margin_pct_range') THEN
@@ -1226,8 +1226,8 @@ const V2_ALTERS = `
     ON opportunities(id)
     WHERE margin_pct IS NOT NULL AND margin_pct < 20 AND deleted_at IS NULL;
 
-  -- SPEC-CRM-00 v1.1 PR4 — RBAC 7 roles: 'director' y 'external' ya están
-  -- en el users_role_check de arriba (línea ~476). No se necesita un segundo
+  -- SPEC-CRM-00 v1.1 PR4 â€” RBAC 7 roles: 'director' y 'external' ya estÃ¡n
+  -- en el users_role_check de arriba (lÃ­nea ~476). No se necesita un segundo
   -- bloque DO. Eliminado en hotfix 2026-05-02 para evitar re-deploy failure.
 `;
 
@@ -1238,7 +1238,7 @@ const V2_ALTERS = `
  * Cambios aditivos. NINGUNO altera comportamiento existente.
  *
  * 1) ai_interactions: log estructurado de cada llamada a un agente IA
- *    (modelo, prompt template, input redacted, output, decisión humana,
+ *    (modelo, prompt template, input redacted, output, decisiÃ³n humana,
  *    costo, latencia). Sin esta tabla, cualquier agente que conectemos
  *    es ciego.
  *
@@ -1246,23 +1246,23 @@ const V2_ALTERS = `
  *    A/B testing.
  *
  * 3) delivery_facts: tabla denormalizada por (fact_date, employee_id)
- *    con métricas planas para forecasting y reportes pesados. Refresca
- *    nocturno via función `refresh_delivery_facts(date_from, date_to)`.
+ *    con mÃ©tricas planas para forecasting y reportes pesados. Refresca
+ *    nocturno via funciÃ³n `refresh_delivery_facts(date_from, date_to)`.
  *
  * 4) Embeddings (pgvector): columnas vector(1536) en skills, employees,
  *    resource_requests, opportunities, contracts, quotations.
- *    Activadas SOLO si la extensión vector está disponible. Sin
- *    pgvector, las columnas no se crean — el resto sigue funcionando.
+ *    Activadas SOLO si la extensiÃ³n vector estÃ¡ disponible. Sin
+ *    pgvector, las columnas no se crean â€” el resto sigue funcionando.
  *
  * 5) Slugs: identificadores URL-friendly en clients, opportunities,
- *    contracts, employees. Más legibles para LLMs y humanos que UUID.
+ *    contracts, employees. MÃ¡s legibles para LLMs y humanos que UUID.
  *
  * 6) Narrative fields: campos descriptivos enriquecidos en areas y
- *    skills para que RAG tenga contexto real, no sólo el nombre.
+ *    skills para que RAG tenga contexto real, no sÃ³lo el nombre.
  *
  * 7) CHECK constraints adicionales: weekly_capacity_hours <= 80,
- *    hours_per_week en quotation_lines, etc. Antes la validación
- *    vivía sólo en código.
+ *    hours_per_week en quotation_lines, etc. Antes la validaciÃ³n
+ *    vivÃ­a sÃ³lo en cÃ³digo.
  */
 const AI_READINESS_SQL = `
   -- 1) AI interactions log
@@ -1322,7 +1322,7 @@ const AI_READINESS_SQL = `
     utilization       NUMERIC(5,4) NULL,
     is_overbooked     BOOLEAN NOT NULL DEFAULT false,
     -- dimensiones snapshotted (datos desnormalizados para que el reporte
-    -- no requiera join — escala mejor para forecasting ML).
+    -- no requiera join â€” escala mejor para forecasting ML).
     area_id           INT NULL,
     area_name         VARCHAR(100) NULL,
     squad_id          UUID NULL,
@@ -1367,7 +1367,7 @@ const AI_READINESS_SQL = `
         CHECK (hours_per_week IS NULL OR (hours_per_week >= 0 AND hours_per_week <= 168));
     END IF;
   END $$;
-  -- quotation_lines.duration_months razonable (0..120, 10 años)
+  -- quotation_lines.duration_months razonable (0..120, 10 aÃ±os)
   DO $$
   BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'quotation_lines_duration_bounds_check') THEN
@@ -1399,7 +1399,7 @@ const AI_READINESS_SQL = `
         CHECK (weekly_hours > 0 AND weekly_hours <= 80);
     END IF;
   END $$;
-  -- date sanity: end >= start cuando ambos están
+  -- date sanity: end >= start cuando ambos estÃ¡n
   DO $$
   BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'assignments_date_order_check') THEN
@@ -1457,7 +1457,7 @@ const AI_READINESS_SQL = `
 
   -- 9) Function para refrescar delivery_facts en una ventana de fechas.
   -- Idempotente: borra+inserta el rango. Llamar via cron job nocturno
-  -- (no se ejecuta automáticamente desde DDL).
+  -- (no se ejecuta automÃ¡ticamente desde DDL).
   CREATE OR REPLACE FUNCTION refresh_delivery_facts(p_from DATE, p_to DATE)
   RETURNS INT AS $$
   DECLARE
@@ -1465,8 +1465,8 @@ const AI_READINESS_SQL = `
   BEGIN
     DELETE FROM delivery_facts WHERE fact_date BETWEEN p_from AND p_to;
 
-    -- Por cada (día, empleado), calcular planned_hours sumando assignments
-    -- activos cuyo rango cubre el día. Capacidad y demás dimensiones se
+    -- Por cada (dÃ­a, empleado), calcular planned_hours sumando assignments
+    -- activos cuyo rango cubre el dÃ­a. Capacidad y demÃ¡s dimensiones se
     -- snapshottean del estado actual del empleado.
     INSERT INTO delivery_facts
       (fact_date, employee_id, capacity_hours, planned_hours, planned_pct,
@@ -1517,27 +1517,27 @@ const AI_READINESS_SQL = `
   END;
   $$ LANGUAGE plpgsql;
 
-  -- 10) Documentación a nivel de DB (COMMENT ON). Sólo lo más útil — un
-  -- agente que abre la DB ahora puede leer la intención de cada tabla.
-  COMMENT ON TABLE  ai_interactions       IS 'Log estructurado de cada llamada a un agente IA (modelo, prompt, input/output, decisión humana, costo).';
+  -- 10) DocumentaciÃ³n a nivel de DB (COMMENT ON). SÃ³lo lo mÃ¡s Ãºtil â€” un
+  -- agente que abre la DB ahora puede leer la intenciÃ³n de cada tabla.
+  COMMENT ON TABLE  ai_interactions       IS 'Log estructurado de cada llamada a un agente IA (modelo, prompt, input/output, decisiÃ³n humana, costo).';
   COMMENT ON TABLE  ai_prompt_templates   IS 'Versiones de prompts. ai_interactions referencia (name, version) para reproducibilidad y A/B testing.';
   COMMENT ON TABLE  delivery_facts        IS 'Tabla denormalizada por (fact_date, employee_id) para forecasting y reportes pesados. Refrescar con SELECT refresh_delivery_facts(from, to).';
   COMMENT ON TABLE  events                IS 'Audit log estructurado V2. Append-only. Reemplaza audit_log gradualmente.';
-  COMMENT ON TABLE  weekly_time_allocations IS 'Time tracking por % semanal (Time-MVP-00.1). Coexiste con time_entries (horas diarias). Eng team consolidará.';
+  COMMENT ON TABLE  weekly_time_allocations IS 'Time tracking por % semanal (Time-MVP-00.1). Coexiste con time_entries (horas diarias). Eng team consolidarÃ¡.';
   COMMENT ON TABLE  time_entries          IS 'Time tracking por horas diarias (V2 ET-*). Coexiste con weekly_time_allocations.';
-  COMMENT ON TABLE  audit_log             IS 'Audit log V1 legacy. Para escrituras nuevas usar events. No agregar features nuevos aquí.';
+  COMMENT ON TABLE  audit_log             IS 'Audit log V1 legacy. Para escrituras nuevas usar events. No agregar features nuevos aquÃ­.';
 
-  COMMENT ON COLUMN employees.user_id     IS 'NULL si el empleado no tiene cuenta de login. La distinción User vs Employee es por diseño.';
-  COMMENT ON COLUMN employees.slug        IS 'URL-friendly identifier, generado por server/utils/slug.js. Útil para LLMs y URLs legibles.';
-  COMMENT ON COLUMN contracts.metadata    IS 'JSONB libre. Convención: kick_off_date, kicked_off_at, kicked_off_by se persisten aquí. Validación pendiente.';
-  COMMENT ON COLUMN assignments.override_reason IS 'Justificación del admin cuando bypassea una validación. Capturado para que la IA aprenda de overrides.';
-  COMMENT ON COLUMN ai_interactions.input_payload  IS 'Prompt + contexto (REDACTED — sin PII directa). JSON.';
+  COMMENT ON COLUMN employees.user_id     IS 'NULL si el empleado no tiene cuenta de login. La distinciÃ³n User vs Employee es por diseÃ±o.';
+  COMMENT ON COLUMN employees.slug        IS 'URL-friendly identifier, generado por server/utils/slug.js. Ãštil para LLMs y URLs legibles.';
+  COMMENT ON COLUMN contracts.metadata    IS 'JSONB libre. ConvenciÃ³n: kick_off_date, kicked_off_at, kicked_off_by se persisten aquÃ­. ValidaciÃ³n pendiente.';
+  COMMENT ON COLUMN assignments.override_reason IS 'JustificaciÃ³n del admin cuando bypassea una validaciÃ³n. Capturado para que la IA aprenda de overrides.';
+  COMMENT ON COLUMN ai_interactions.input_payload  IS 'Prompt + contexto (REDACTED â€” sin PII directa). JSON.';
   COMMENT ON COLUMN ai_interactions.output_payload IS 'Respuesta del modelo. JSON.';
-  COMMENT ON COLUMN ai_interactions.human_decision IS 'Si el humano aceptó/rechazó/modificó la sugerencia. Pending hasta que el usuario decida. Esencial para feedback loop.';
+  COMMENT ON COLUMN ai_interactions.human_decision IS 'Si el humano aceptÃ³/rechazÃ³/modificÃ³ la sugerencia. Pending hasta que el usuario decida. Esencial para feedback loop.';
 `;
 
 /* ==================================================================
- * pgvector — extensión opcional. Si está disponible, agregamos columnas
+ * pgvector â€” extensiÃ³n opcional. Si estÃ¡ disponible, agregamos columnas
  * de embedding. Si no, las saltamos sin romper el resto del schema.
  * ================================================================== */
 const PGVECTOR_SQL = `
@@ -1549,11 +1549,11 @@ const PGVECTOR_SQL = `
   ALTER TABLE contracts         ADD COLUMN IF NOT EXISTS context_embedding       vector(1536);
   ALTER TABLE quotations        ADD COLUMN IF NOT EXISTS summary_embedding       vector(1536);
 
-  -- HNSW indexes para búsqueda semántica O(log n).
-  -- Sólo se crean si la columna existe Y tiene datos NO NULL en al menos
-  -- una row (postgres permite el index vacío, pero para ahorrar I/O en
-  -- entornos donde nadie ha generado embeddings todavía, los marcamos
-  -- como índices "lazy" — se construyen instantly porque están vacíos).
+  -- HNSW indexes para bÃºsqueda semÃ¡ntica O(log n).
+  -- SÃ³lo se crean si la columna existe Y tiene datos NO NULL en al menos
+  -- una row (postgres permite el index vacÃ­o, pero para ahorrar I/O en
+  -- entornos donde nadie ha generado embeddings todavÃ­a, los marcamos
+  -- como Ã­ndices "lazy" â€” se construyen instantly porque estÃ¡n vacÃ­os).
   CREATE INDEX IF NOT EXISTS skills_name_embed_idx
     ON skills USING hnsw (name_embedding vector_cosine_ops);
   CREATE INDEX IF NOT EXISTS employees_skill_profile_embed_idx
@@ -1574,10 +1574,10 @@ const PGVECTOR_SQL = `
 `;
 
 /* ==================================================================
- * Seeds — idempotent catalogues and parameters
+ * Seeds â€” idempotent catalogues and parameters
  * ================================================================== */
 const V2_SEEDS_SQL = `
-  -- Areas — 9 canonical DVPNYX specialties
+  -- Areas â€” 9 canonical DVPNYX specialties
   INSERT INTO areas (key, name, sort_order) VALUES
     ('development',           'Desarrollo',            1),
     ('infra_security',        'Infra & Seguridad',     2),
@@ -1586,11 +1586,11 @@ const V2_SEEDS_SQL = `
     ('project_management',    'Project Management',    5),
     ('data_ai',               'Data & AI',             6),
     ('ux_ui',                 'UX/UI',                 7),
-    ('functional_analysis',   'Análisis Funcional',    8),
+    ('functional_analysis',   'AnÃ¡lisis Funcional',    8),
     ('devops_sre',            'DevOps/SRE',            9)
   ON CONFLICT (key) DO NOTHING;
 
-  -- Skills — starter catalogue (~60 entries across 8 categories)
+  -- Skills â€” starter catalogue (~60 entries across 8 categories)
   INSERT INTO skills (name, category) VALUES
     -- languages
     ('JavaScript','language'),('TypeScript','language'),('Python','language'),
@@ -1618,31 +1618,31 @@ const V2_SEEDS_SQL = `
     ('Scrum','methodology'),('Kanban','methodology'),('SAFe','methodology'),
     ('Design Thinking','methodology'),('DevOps','methodology'),
     -- soft
-    ('Inglés','soft'),('Liderazgo','soft'),
-    ('Comunicación cliente','soft'),('Mentoría','soft')
+    ('InglÃ©s','soft'),('Liderazgo','soft'),
+    ('ComunicaciÃ³n cliente','soft'),('MentorÃ­a','soft')
   ON CONFLICT (LOWER(name)) DO NOTHING;
 
   -- New parameter categories: time_tracking and reports
   INSERT INTO parameters (category, key, value, label, note, sort_order) VALUES
-    ('time_tracking','backfill_window_days',       30,'Días retroactivos máx','Ventana para registrar horas hacia atrás',1),
-    ('time_tracking','edit_window_days',           30,'Días de edición','Ventana durante la cual un entry es editable sin admin',2),
-    ('time_tracking','max_daily_hours',            16,'Máx horas/día','Tope de horas sumadas por empleado por día',3),
+    ('time_tracking','backfill_window_days',       30,'DÃ­as retroactivos mÃ¡x','Ventana para registrar horas hacia atrÃ¡s',1),
+    ('time_tracking','edit_window_days',           30,'DÃ­as de ediciÃ³n','Ventana durante la cual un entry es editable sin admin',2),
+    ('time_tracking','max_daily_hours',            16,'MÃ¡x horas/dÃ­a','Tope de horas sumadas por empleado por dÃ­a',3),
     ('time_tracking','min_weekly_hours_reminder',  32,'Umbral recordatorio semanal','Horas bajo las cuales se notifica',4),
-    ('time_tracking','default_entry_category',      0,'Categoría default','Ver constantes en código (0 = delivery)',5),
+    ('time_tracking','default_entry_category',      0,'CategorÃ­a default','Ver constantes en cÃ³digo (0 = delivery)',5),
 
-    ('reports','bench_threshold_pct',              60,'Umbral bench %','Utilización bajo la cual se considera bench',1),
-    ('reports','overbooking_threshold_pct',       100,'Umbral sobrecarga %','Utilización sobre la cual se considera overbooking',2),
-    ('reports','hiring_needs_window_days',          90,'Ventana necesidades','Días hacia adelante para necesidades de contratación',3),
+    ('reports','bench_threshold_pct',              60,'Umbral bench %','UtilizaciÃ³n bajo la cual se considera bench',1),
+    ('reports','overbooking_threshold_pct',       100,'Umbral sobrecarga %','UtilizaciÃ³n sobre la cual se considera overbooking',2),
+    ('reports','hiring_needs_window_days',          90,'Ventana necesidades','DÃ­as hacia adelante para necesidades de contrataciÃ³n',3),
     ('reports','materialized_view_refresh_minutes', 15,'Refresh MV','Frecuencia de refresh de vistas materializadas',4),
-    ('reports','default_report_period_days',        30,'Período default','Período default para reportes',5),
+    ('reports','default_report_period_days',        30,'PerÃ­odo default','PerÃ­odo default para reportes',5),
 
-    ('utilization','bench_threshold',            0.50,'Umbral bench','Utilización ≤ este valor → bench',1),
-    ('utilization','overallocation_threshold',   1.00,'Umbral sobrecarga','Utilización > este valor → sobrecargado',2)
+    ('utilization','bench_threshold',            0.50,'Umbral bench','UtilizaciÃ³n â‰¤ este valor â†’ bench',1),
+    ('utilization','overallocation_threshold',   1.00,'Umbral sobrecarga','UtilizaciÃ³n > este valor â†’ sobrecargado',2)
   ON CONFLICT (category, key) DO NOTHING;
 `;
 
 /* ==================================================================
- * SPEC-II-00 — Internal Initiatives, Novelties & Idle Time
+ * SPEC-II-00 â€” Internal Initiatives, Novelties & Idle Time
  * ==================================================================
  *
  * Adds three coupled modules and one infra catalogue:
@@ -1658,16 +1658,16 @@ const V2_SEEDS_SQL = `
  *   - assignments y resource_requests NO se refactorizan a XOR. Las
  *     asignaciones internas viven exclusivamente en
  *     internal_initiative_assignments. El idle engine suma ambas.
- *   - hourly_rate_usd se deriva del último employee_costs.cost_usd con
- *     valor / horas mensuales estimadas (weekly_capacity_hours × 52/12).
- *     Si falta → idle_cost_usd = 0 con flag missing_rate.
+ *   - hourly_rate_usd se deriva del Ãºltimo employee_costs.cost_usd con
+ *     valor / horas mensuales estimadas (weekly_capacity_hours Ã— 52/12).
+ *     Si falta â†’ idle_cost_usd = 0 con flag missing_rate.
  *   - country_id ISO-2 se backfill-ea desde employees.country (nombre
- *     en español) mediante CASE WHEN.
+ *     en espaÃ±ol) mediante CASE WHEN.
  *   - S3 attachments en novedades quedan como URL externa (Drive/SP) en
  *     attachment_url; sin presigned upload en MVP.
  * ================================================================== */
 const SPEC_II_00_SQL = `
-  /* ----- Catálogos ------------------------------------------------ */
+  /* ----- CatÃ¡logos ------------------------------------------------ */
   CREATE TABLE IF NOT EXISTS business_areas (
     id          TEXT PRIMARY KEY,
     label_es    TEXT NOT NULL,
@@ -1683,7 +1683,7 @@ const SPEC_II_00_SQL = `
     ('hr',          'RRHH',        'HR',         3),
     ('finance',     'Finanzas',    'Finance',    4),
     ('commercial',  'Comercial',   'Commercial', 5),
-    ('technology', 'Tecnología',   'Technology', 6)
+    ('technology', 'TecnologÃ­a',   'Technology', 6)
   ON CONFLICT (id) DO NOTHING;
 
   CREATE TABLE IF NOT EXISTS novelty_types (
@@ -1692,8 +1692,8 @@ const SPEC_II_00_SQL = `
     label_en                        TEXT NOT NULL,
     is_paid_time                    BOOLEAN NOT NULL DEFAULT true,
     requires_attachment_recommended BOOLEAN NOT NULL DEFAULT false,
-    -- counts_in_capacity = true  → las horas se cuentan como asignadas (training).
-    -- counts_in_capacity = false → las horas se restan del available (vacación, etc).
+    -- counts_in_capacity = true  â†’ las horas se cuentan como asignadas (training).
+    -- counts_in_capacity = false â†’ las horas se restan del available (vacaciÃ³n, etc).
     counts_in_capacity              BOOLEAN NOT NULL DEFAULT false,
     sort_order                      INTEGER NOT NULL,
     is_active                       BOOLEAN NOT NULL DEFAULT true,
@@ -1702,12 +1702,12 @@ const SPEC_II_00_SQL = `
 
   INSERT INTO novelty_types (id, label_es, label_en, is_paid_time, requires_attachment_recommended, counts_in_capacity, sort_order) VALUES
     ('vacation',          'Vacaciones',                 'Vacation',                  true,  false, false, 1),
-    ('sick_leave',        'Incapacidad médica',         'Sick Leave',                true,  true,  false, 2),
+    ('sick_leave',        'Incapacidad mÃ©dica',         'Sick Leave',                true,  true,  false, 2),
     ('parental_leave',    'Licencia maternidad/pat.',   'Parental Leave',            true,  true,  false, 3),
     ('unpaid_leave',      'Permiso sin goce',           'Unpaid Leave',              false, false, false, 4),
-    ('bereavement',       'Calamidad doméstica',        'Bereavement',               true,  false, false, 5),
+    ('bereavement',       'Calamidad domÃ©stica',        'Bereavement',               true,  false, false, 5),
     ('legal_leave',       'Licencia de ley',            'Legal Leave',               true,  false, false, 6),
-    ('corporate_training','Capacitación corporativa',   'Corporate Training',        true,  false, true,  7),
+    ('corporate_training','CapacitaciÃ³n corporativa',   'Corporate Training',        true,  false, true,  7),
     ('unavailable_other', 'No disponible (otro)',       'Unavailable (Other)',       true,  false, false, 8)
   ON CONFLICT (id) DO NOTHING;
 
@@ -1723,11 +1723,11 @@ const SPEC_II_00_SQL = `
 
   INSERT INTO countries (id, label_es, label_en, standard_workday_hours, standard_workdays_per_week) VALUES
     ('CO','Colombia','Colombia',8,5),
-    ('MX','México','Mexico',8,5),
+    ('MX','MÃ©xico','Mexico',8,5),
     ('GT','Guatemala','Guatemala',8,5),
     ('EC','Ecuador','Ecuador',8,5),
-    ('PA','Panamá','Panama',8,5),
-    ('PE','Perú','Peru',8,5),
+    ('PA','PanamÃ¡','Panama',8,5),
+    ('PE','PerÃº','Peru',8,5),
     ('US','EE.UU.','USA',8,5)
   ON CONFLICT (id) DO NOTHING;
 
@@ -1735,10 +1735,10 @@ const SPEC_II_00_SQL = `
   ALTER TABLE employees ADD COLUMN IF NOT EXISTS country_id TEXT NULL REFERENCES countries(id);
 
   -- Backfill best-effort. La columna 'country' legacy es VARCHAR(100) con
-  -- el nombre en español/inglés según vino de RRHH; mapeamos los nombres
-  -- conocidos. Si no matchea ningún país, queda NULL y el idle engine usa
-  -- 'CO' como fallback (la mayoría del staff es colombiano). Nuevos
-  -- empleados deben setear country_id explícitamente desde la UI.
+  -- el nombre en espaÃ±ol/inglÃ©s segÃºn vino de RRHH; mapeamos los nombres
+  -- conocidos. Si no matchea ningÃºn paÃ­s, queda NULL y el idle engine usa
+  -- 'CO' como fallback (la mayorÃ­a del staff es colombiano). Nuevos
+  -- empleados deben setear country_id explÃ­citamente desde la UI.
   UPDATE employees SET country_id = CASE
     WHEN country ILIKE 'colombia%'                                           THEN 'CO'
     WHEN country ILIKE 'm%xico%' OR country ILIKE 'mexico%'                  THEN 'MX'
@@ -1800,9 +1800,9 @@ const SPEC_II_00_SQL = `
   CREATE INDEX IF NOT EXISTS ii_owner_idx  ON internal_initiatives(operations_owner_id) WHERE deleted_at IS NULL;
 
   /* ----- internal_initiative_assignments ------------------------- */
-  -- Convención: employee_id + weekly_hours (NO user_id + allocation_pct),
+  -- ConvenciÃ³n: employee_id + weekly_hours (NO user_id + allocation_pct),
   -- coherente con la tabla 'assignments' existente. Si en el futuro hay
-  -- que homologar reportería entre ambas, se hace via VIEW.
+  -- que homologar reporterÃ­a entre ambas, se hace via VIEW.
   CREATE TABLE IF NOT EXISTS internal_initiative_assignments (
     id                       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     internal_initiative_id   UUID NOT NULL REFERENCES internal_initiatives(id) ON DELETE RESTRICT,
@@ -1811,9 +1811,9 @@ const SPEC_II_00_SQL = `
     end_date                 DATE NULL,
     weekly_hours             NUMERIC(5,2) NOT NULL CHECK (weekly_hours > 0 AND weekly_hours <= 80),
     -- Snapshot de la tarifa interna del empleado al momento de asignar.
-    -- Evita que cambios futuros de costo afecten cálculos retroactivos.
-    -- Puede ser NULL si el empleado no tenía employee_cost al asignar:
-    -- el idle_engine lo verá como missing_rate y costeará en 0.
+    -- Evita que cambios futuros de costo afecten cÃ¡lculos retroactivos.
+    -- Puede ser NULL si el empleado no tenÃ­a employee_cost al asignar:
+    -- el idle_engine lo verÃ¡ como missing_rate y costearÃ¡ en 0.
     hourly_rate_usd          NUMERIC(18,4) NULL,
     status                   TEXT NOT NULL DEFAULT 'planned'
                              CHECK (status IN ('planned','active','ended','cancelled')),
@@ -1861,7 +1861,7 @@ const SPEC_II_00_SQL = `
   CREATE INDEX IF NOT EXISTS novelties_type_idx ON employee_novelties(novelty_type_id);
 
   -- Trigger: prevenir overlap de novedades aprobadas para el mismo empleado.
-  -- Usamos daterange + && (overlap operator) — funciona con cualquier postgres
+  -- Usamos daterange + && (overlap operator) â€” funciona con cualquier postgres
   -- moderno sin necesidad de btree_gist.
   CREATE OR REPLACE FUNCTION prevent_novelty_overlap()
   RETURNS TRIGGER AS $$
@@ -1895,7 +1895,7 @@ const SPEC_II_00_SQL = `
 
   /* ----- idle_time_calculations ---------------------------------- */
   -- Snapshots inmutables al pasar a 'final'. Recalcular un mes 'final'
-  -- requiere endpoint admin que crea un audit_log explícito.
+  -- requiere endpoint admin que crea un audit_log explÃ­cito.
   CREATE TABLE IF NOT EXISTS idle_time_calculations (
     id                        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     employee_id               UUID NOT NULL REFERENCES employees(id),
@@ -1924,10 +1924,10 @@ const SPEC_II_00_SQL = `
   CREATE INDEX IF NOT EXISTS itc_employee_idx ON idle_time_calculations(employee_id);
   CREATE INDEX IF NOT EXISTS itc_status_idx ON idle_time_calculations(calculation_status);
 
-  -- Inmutabilidad: una vez calculation_status='final', ningún campo numérico
-  -- ni el status puede cambiar. UPDATE silenciosos al breakdown sí permitidos
+  -- Inmutabilidad: una vez calculation_status='final', ningÃºn campo numÃ©rico
+  -- ni el status puede cambiar. UPDATE silenciosos al breakdown sÃ­ permitidos
   -- (para enriquecer metadata). Cambios reales requieren admin endpoint que
-  -- crea un nuevo row con status='preliminary' para el siguiente período.
+  -- crea un nuevo row con status='preliminary' para el siguiente perÃ­odo.
   CREATE OR REPLACE FUNCTION enforce_idle_time_immutability()
   RETURNS TRIGGER AS $$
   BEGIN
@@ -1962,183 +1962,183 @@ const SPEC_II_00_SQL = `
 `;
 
 /* ==================================================================
- * SPEC-II-00 — Holiday seed (Colombia / México / Guatemala / Ecuador
- * / Panamá / Perú / EE.UU., 2026 + 2027). Idempotente vía ON CONFLICT.
+ * SPEC-II-00 â€” Holiday seed (Colombia / MÃ©xico / Guatemala / Ecuador
+ * / PanamÃ¡ / PerÃº / EE.UU., 2026 + 2027). Idempotente vÃ­a ON CONFLICT.
  *
  * Fuente: leyes laborales vigentes a abril 2026. Festivos trasladables
- * de Colombia ya están aplicados al lunes correspondiente. Para 2027
- * los trasladables se recalcularán cuando se publique el calendario
- * oficial; los aquí cargados son una proyección razonable.
+ * de Colombia ya estÃ¡n aplicados al lunes correspondiente. Para 2027
+ * los trasladables se recalcularÃ¡n cuando se publique el calendario
+ * oficial; los aquÃ­ cargados son una proyecciÃ³n razonable.
  * ================================================================== */
 const SPEC_II_00_HOLIDAY_SEED_SQL = `
   INSERT INTO country_holidays (country_id, holiday_date, label, holiday_type, year) VALUES
     -- COLOMBIA 2026 (18 festivos, trasladables al lunes)
-    ('CO','2026-01-01','Año Nuevo','national',2026),
-    ('CO','2026-01-12','Día de los Reyes Magos','national',2026),
-    ('CO','2026-03-23','Día de San José','national',2026),
+    ('CO','2026-01-01','AÃ±o Nuevo','national',2026),
+    ('CO','2026-01-12','DÃ­a de los Reyes Magos','national',2026),
+    ('CO','2026-03-23','DÃ­a de San JosÃ©','national',2026),
     ('CO','2026-04-02','Jueves Santo','national',2026),
     ('CO','2026-04-03','Viernes Santo','national',2026),
-    ('CO','2026-05-01','Día del Trabajo','national',2026),
-    ('CO','2026-05-18','Día de la Ascensión','national',2026),
+    ('CO','2026-05-01','DÃ­a del Trabajo','national',2026),
+    ('CO','2026-05-18','DÃ­a de la AscensiÃ³n','national',2026),
     ('CO','2026-06-08','Corpus Christi','national',2026),
-    ('CO','2026-06-15','Sagrado Corazón','national',2026),
+    ('CO','2026-06-15','Sagrado CorazÃ³n','national',2026),
     ('CO','2026-06-29','San Pedro y San Pablo','national',2026),
-    ('CO','2026-07-20','Día de la Independencia','national',2026),
-    ('CO','2026-08-07','Batalla de Boyacá','national',2026),
-    ('CO','2026-08-17','Asunción de la Virgen','national',2026),
-    ('CO','2026-10-12','Día de la Raza','national',2026),
+    ('CO','2026-07-20','DÃ­a de la Independencia','national',2026),
+    ('CO','2026-08-07','Batalla de BoyacÃ¡','national',2026),
+    ('CO','2026-08-17','AsunciÃ³n de la Virgen','national',2026),
+    ('CO','2026-10-12','DÃ­a de la Raza','national',2026),
     ('CO','2026-11-02','Todos los Santos','national',2026),
     ('CO','2026-11-16','Independencia de Cartagena','national',2026),
-    ('CO','2026-12-08','Inmaculada Concepción','national',2026),
+    ('CO','2026-12-08','Inmaculada ConcepciÃ³n','national',2026),
     ('CO','2026-12-25','Navidad','national',2026),
     -- COLOMBIA 2027
-    ('CO','2027-01-01','Año Nuevo','national',2027),
-    ('CO','2027-01-11','Día de los Reyes Magos','national',2027),
-    ('CO','2027-03-22','Día de San José','national',2027),
+    ('CO','2027-01-01','AÃ±o Nuevo','national',2027),
+    ('CO','2027-01-11','DÃ­a de los Reyes Magos','national',2027),
+    ('CO','2027-03-22','DÃ­a de San JosÃ©','national',2027),
     ('CO','2027-03-25','Jueves Santo','national',2027),
     ('CO','2027-03-26','Viernes Santo','national',2027),
-    ('CO','2027-05-01','Día del Trabajo','national',2027),
-    ('CO','2027-05-10','Día de la Ascensión','national',2027),
+    ('CO','2027-05-01','DÃ­a del Trabajo','national',2027),
+    ('CO','2027-05-10','DÃ­a de la AscensiÃ³n','national',2027),
     ('CO','2027-05-31','Corpus Christi','national',2027),
-    ('CO','2027-06-07','Sagrado Corazón','national',2027),
+    ('CO','2027-06-07','Sagrado CorazÃ³n','national',2027),
     ('CO','2027-07-05','San Pedro y San Pablo','national',2027),
-    ('CO','2027-07-20','Día de la Independencia','national',2027),
-    ('CO','2027-08-07','Batalla de Boyacá','national',2027),
-    ('CO','2027-08-16','Asunción de la Virgen','national',2027),
-    ('CO','2027-10-18','Día de la Raza','national',2027),
+    ('CO','2027-07-20','DÃ­a de la Independencia','national',2027),
+    ('CO','2027-08-07','Batalla de BoyacÃ¡','national',2027),
+    ('CO','2027-08-16','AsunciÃ³n de la Virgen','national',2027),
+    ('CO','2027-10-18','DÃ­a de la Raza','national',2027),
     ('CO','2027-11-01','Todos los Santos','national',2027),
     ('CO','2027-11-15','Independencia de Cartagena','national',2027),
-    ('CO','2027-12-08','Inmaculada Concepción','national',2027),
+    ('CO','2027-12-08','Inmaculada ConcepciÃ³n','national',2027),
     ('CO','2027-12-25','Navidad','national',2027),
 
-    -- MÉXICO 2026 (festivos oficiales LFT art. 74)
-    ('MX','2026-01-01','Año Nuevo','national',2026),
-    ('MX','2026-02-02','Día de la Constitución','national',2026),
-    ('MX','2026-03-16','Natalicio de Benito Juárez','national',2026),
-    ('MX','2026-05-01','Día del Trabajo','national',2026),
-    ('MX','2026-09-16','Día de la Independencia','national',2026),
-    ('MX','2026-11-02','Día de los Muertos','national',2026),
-    ('MX','2026-11-16','Día de la Revolución','national',2026),
+    -- MÃ‰XICO 2026 (festivos oficiales LFT art. 74)
+    ('MX','2026-01-01','AÃ±o Nuevo','national',2026),
+    ('MX','2026-02-02','DÃ­a de la ConstituciÃ³n','national',2026),
+    ('MX','2026-03-16','Natalicio de Benito JuÃ¡rez','national',2026),
+    ('MX','2026-05-01','DÃ­a del Trabajo','national',2026),
+    ('MX','2026-09-16','DÃ­a de la Independencia','national',2026),
+    ('MX','2026-11-02','DÃ­a de los Muertos','national',2026),
+    ('MX','2026-11-16','DÃ­a de la RevoluciÃ³n','national',2026),
     ('MX','2026-12-25','Navidad','national',2026),
-    -- MÉXICO 2027
-    ('MX','2027-01-01','Año Nuevo','national',2027),
-    ('MX','2027-02-01','Día de la Constitución','national',2027),
-    ('MX','2027-03-15','Natalicio de Benito Juárez','national',2027),
-    ('MX','2027-05-01','Día del Trabajo','national',2027),
-    ('MX','2027-09-16','Día de la Independencia','national',2027),
-    ('MX','2027-11-02','Día de los Muertos','national',2027),
-    ('MX','2027-11-15','Día de la Revolución','national',2027),
+    -- MÃ‰XICO 2027
+    ('MX','2027-01-01','AÃ±o Nuevo','national',2027),
+    ('MX','2027-02-01','DÃ­a de la ConstituciÃ³n','national',2027),
+    ('MX','2027-03-15','Natalicio de Benito JuÃ¡rez','national',2027),
+    ('MX','2027-05-01','DÃ­a del Trabajo','national',2027),
+    ('MX','2027-09-16','DÃ­a de la Independencia','national',2027),
+    ('MX','2027-11-02','DÃ­a de los Muertos','national',2027),
+    ('MX','2027-11-15','DÃ­a de la RevoluciÃ³n','national',2027),
     ('MX','2027-12-25','Navidad','national',2027),
 
     -- GUATEMALA 2026
-    ('GT','2026-01-01','Año Nuevo','national',2026),
+    ('GT','2026-01-01','AÃ±o Nuevo','national',2026),
     ('GT','2026-04-02','Jueves Santo','national',2026),
     ('GT','2026-04-03','Viernes Santo','national',2026),
-    ('GT','2026-04-04','Sábado de Gloria','national',2026),
-    ('GT','2026-05-01','Día del Trabajo','national',2026),
-    ('GT','2026-06-30','Día del Ejército','national',2026),
-    ('GT','2026-09-15','Día de la Independencia','national',2026),
-    ('GT','2026-10-20','Revolución de 1944','national',2026),
-    ('GT','2026-11-01','Día de Todos los Santos','national',2026),
+    ('GT','2026-04-04','SÃ¡bado de Gloria','national',2026),
+    ('GT','2026-05-01','DÃ­a del Trabajo','national',2026),
+    ('GT','2026-06-30','DÃ­a del EjÃ©rcito','national',2026),
+    ('GT','2026-09-15','DÃ­a de la Independencia','national',2026),
+    ('GT','2026-10-20','RevoluciÃ³n de 1944','national',2026),
+    ('GT','2026-11-01','DÃ­a de Todos los Santos','national',2026),
     ('GT','2026-12-24','Nochebuena','national',2026),
     ('GT','2026-12-25','Navidad','national',2026),
-    ('GT','2026-12-31','Fin de Año','national',2026),
+    ('GT','2026-12-31','Fin de AÃ±o','national',2026),
     -- GUATEMALA 2027
-    ('GT','2027-01-01','Año Nuevo','national',2027),
+    ('GT','2027-01-01','AÃ±o Nuevo','national',2027),
     ('GT','2027-03-25','Jueves Santo','national',2027),
     ('GT','2027-03-26','Viernes Santo','national',2027),
-    ('GT','2027-03-27','Sábado de Gloria','national',2027),
-    ('GT','2027-05-01','Día del Trabajo','national',2027),
-    ('GT','2027-06-30','Día del Ejército','national',2027),
-    ('GT','2027-09-15','Día de la Independencia','national',2027),
-    ('GT','2027-10-20','Revolución de 1944','national',2027),
-    ('GT','2027-11-01','Día de Todos los Santos','national',2027),
+    ('GT','2027-03-27','SÃ¡bado de Gloria','national',2027),
+    ('GT','2027-05-01','DÃ­a del Trabajo','national',2027),
+    ('GT','2027-06-30','DÃ­a del EjÃ©rcito','national',2027),
+    ('GT','2027-09-15','DÃ­a de la Independencia','national',2027),
+    ('GT','2027-10-20','RevoluciÃ³n de 1944','national',2027),
+    ('GT','2027-11-01','DÃ­a de Todos los Santos','national',2027),
     ('GT','2027-12-24','Nochebuena','national',2027),
     ('GT','2027-12-25','Navidad','national',2027),
-    ('GT','2027-12-31','Fin de Año','national',2027),
+    ('GT','2027-12-31','Fin de AÃ±o','national',2027),
 
     -- ECUADOR 2026
-    ('EC','2026-01-01','Año Nuevo','national',2026),
+    ('EC','2026-01-01','AÃ±o Nuevo','national',2026),
     ('EC','2026-02-16','Carnaval','national',2026),
     ('EC','2026-02-17','Carnaval','national',2026),
     ('EC','2026-04-03','Viernes Santo','national',2026),
-    ('EC','2026-05-01','Día del Trabajo','national',2026),
+    ('EC','2026-05-01','DÃ­a del Trabajo','national',2026),
     ('EC','2026-05-24','Batalla de Pichincha','national',2026),
     ('EC','2026-08-10','Primer Grito de Independencia','national',2026),
     ('EC','2026-10-09','Independencia de Guayaquil','national',2026),
-    ('EC','2026-11-02','Día de los Difuntos','national',2026),
+    ('EC','2026-11-02','DÃ­a de los Difuntos','national',2026),
     ('EC','2026-11-03','Independencia de Cuenca','national',2026),
     ('EC','2026-12-25','Navidad','national',2026),
     -- ECUADOR 2027
-    ('EC','2027-01-01','Año Nuevo','national',2027),
+    ('EC','2027-01-01','AÃ±o Nuevo','national',2027),
     ('EC','2027-02-08','Carnaval','national',2027),
     ('EC','2027-02-09','Carnaval','national',2027),
     ('EC','2027-03-26','Viernes Santo','national',2027),
-    ('EC','2027-05-01','Día del Trabajo','national',2027),
+    ('EC','2027-05-01','DÃ­a del Trabajo','national',2027),
     ('EC','2027-05-24','Batalla de Pichincha','national',2027),
     ('EC','2027-08-10','Primer Grito de Independencia','national',2027),
     ('EC','2027-10-09','Independencia de Guayaquil','national',2027),
-    ('EC','2027-11-02','Día de los Difuntos','national',2027),
+    ('EC','2027-11-02','DÃ­a de los Difuntos','national',2027),
     ('EC','2027-11-03','Independencia de Cuenca','national',2027),
     ('EC','2027-12-25','Navidad','national',2027),
 
-    -- PANAMÁ 2026
-    ('PA','2026-01-01','Año Nuevo','national',2026),
-    ('PA','2026-01-09','Día de los Mártires','national',2026),
+    -- PANAMÃ 2026
+    ('PA','2026-01-01','AÃ±o Nuevo','national',2026),
+    ('PA','2026-01-09','DÃ­a de los MÃ¡rtires','national',2026),
     ('PA','2026-02-17','Carnaval','national',2026),
     ('PA','2026-04-03','Viernes Santo','national',2026),
-    ('PA','2026-05-01','Día del Trabajo','national',2026),
-    ('PA','2026-11-03','Separación de Colombia','national',2026),
-    ('PA','2026-11-04','Día de los Símbolos Patrios','national',2026),
-    ('PA','2026-11-05','Día de Colón','national',2026),
+    ('PA','2026-05-01','DÃ­a del Trabajo','national',2026),
+    ('PA','2026-11-03','SeparaciÃ³n de Colombia','national',2026),
+    ('PA','2026-11-04','DÃ­a de los SÃ­mbolos Patrios','national',2026),
+    ('PA','2026-11-05','DÃ­a de ColÃ³n','national',2026),
     ('PA','2026-11-10','Primer Grito de Independencia','national',2026),
-    ('PA','2026-11-28','Independencia de España','national',2026),
-    ('PA','2026-12-08','Día de las Madres','national',2026),
+    ('PA','2026-11-28','Independencia de EspaÃ±a','national',2026),
+    ('PA','2026-12-08','DÃ­a de las Madres','national',2026),
     ('PA','2026-12-25','Navidad','national',2026),
-    -- PANAMÁ 2027
-    ('PA','2027-01-01','Año Nuevo','national',2027),
-    ('PA','2027-01-09','Día de los Mártires','national',2027),
+    -- PANAMÃ 2027
+    ('PA','2027-01-01','AÃ±o Nuevo','national',2027),
+    ('PA','2027-01-09','DÃ­a de los MÃ¡rtires','national',2027),
     ('PA','2027-02-09','Carnaval','national',2027),
     ('PA','2027-03-26','Viernes Santo','national',2027),
-    ('PA','2027-05-01','Día del Trabajo','national',2027),
-    ('PA','2027-11-03','Separación de Colombia','national',2027),
-    ('PA','2027-11-04','Día de los Símbolos Patrios','national',2027),
-    ('PA','2027-11-05','Día de Colón','national',2027),
+    ('PA','2027-05-01','DÃ­a del Trabajo','national',2027),
+    ('PA','2027-11-03','SeparaciÃ³n de Colombia','national',2027),
+    ('PA','2027-11-04','DÃ­a de los SÃ­mbolos Patrios','national',2027),
+    ('PA','2027-11-05','DÃ­a de ColÃ³n','national',2027),
     ('PA','2027-11-10','Primer Grito de Independencia','national',2027),
-    ('PA','2027-11-28','Independencia de España','national',2027),
-    ('PA','2027-12-08','Día de las Madres','national',2027),
+    ('PA','2027-11-28','Independencia de EspaÃ±a','national',2027),
+    ('PA','2027-12-08','DÃ­a de las Madres','national',2027),
     ('PA','2027-12-25','Navidad','national',2027),
 
-    -- PERÚ 2026
-    ('PE','2026-01-01','Año Nuevo','national',2026),
+    -- PERÃš 2026
+    ('PE','2026-01-01','AÃ±o Nuevo','national',2026),
     ('PE','2026-04-02','Jueves Santo','national',2026),
     ('PE','2026-04-03','Viernes Santo','national',2026),
-    ('PE','2026-05-01','Día del Trabajo','national',2026),
+    ('PE','2026-05-01','DÃ­a del Trabajo','national',2026),
     ('PE','2026-06-29','San Pedro y San Pablo','national',2026),
-    ('PE','2026-07-23','Batalla de Junín','national',2026),
-    ('PE','2026-07-28','Día de la Independencia','national',2026),
-    ('PE','2026-07-29','Día de la Independencia','national',2026),
+    ('PE','2026-07-23','Batalla de JunÃ­n','national',2026),
+    ('PE','2026-07-28','DÃ­a de la Independencia','national',2026),
+    ('PE','2026-07-29','DÃ­a de la Independencia','national',2026),
     ('PE','2026-08-06','Batalla de Ayacucho','national',2026),
     ('PE','2026-08-30','Santa Rosa de Lima','national',2026),
     ('PE','2026-10-08','Combate de Angamos','national',2026),
-    ('PE','2026-11-01','Día de Todos los Santos','national',2026),
-    ('PE','2026-12-08','Inmaculada Concepción','national',2026),
+    ('PE','2026-11-01','DÃ­a de Todos los Santos','national',2026),
+    ('PE','2026-12-08','Inmaculada ConcepciÃ³n','national',2026),
     ('PE','2026-12-09','Batalla de Ayacucho','national',2026),
     ('PE','2026-12-25','Navidad','national',2026),
-    -- PERÚ 2027
-    ('PE','2027-01-01','Año Nuevo','national',2027),
+    -- PERÃš 2027
+    ('PE','2027-01-01','AÃ±o Nuevo','national',2027),
     ('PE','2027-03-25','Jueves Santo','national',2027),
     ('PE','2027-03-26','Viernes Santo','national',2027),
-    ('PE','2027-05-01','Día del Trabajo','national',2027),
+    ('PE','2027-05-01','DÃ­a del Trabajo','national',2027),
     ('PE','2027-06-29','San Pedro y San Pablo','national',2027),
-    ('PE','2027-07-23','Batalla de Junín','national',2027),
-    ('PE','2027-07-28','Día de la Independencia','national',2027),
-    ('PE','2027-07-29','Día de la Independencia','national',2027),
+    ('PE','2027-07-23','Batalla de JunÃ­n','national',2027),
+    ('PE','2027-07-28','DÃ­a de la Independencia','national',2027),
+    ('PE','2027-07-29','DÃ­a de la Independencia','national',2027),
     ('PE','2027-08-06','Batalla de Ayacucho','national',2027),
     ('PE','2027-08-30','Santa Rosa de Lima','national',2027),
     ('PE','2027-10-08','Combate de Angamos','national',2027),
-    ('PE','2027-11-01','Día de Todos los Santos','national',2027),
-    ('PE','2027-12-08','Inmaculada Concepción','national',2027),
+    ('PE','2027-11-01','DÃ­a de Todos los Santos','national',2027),
+    ('PE','2027-12-08','Inmaculada ConcepciÃ³n','national',2027),
     ('PE','2027-12-09','Batalla de Ayacucho','national',2027),
     ('PE','2027-12-25','Navidad','national',2027),
 
@@ -2170,7 +2170,7 @@ const SPEC_II_00_HOLIDAY_SEED_SQL = `
 `;
 
 // ---------------------------------------------------------------------------
-// ASSIGNMENT-RATES — client_rate + client_rate_currency en assignments
+// ASSIGNMENT-RATES â€” client_rate + client_rate_currency en assignments
 // ---------------------------------------------------------------------------
 const ASSIGNMENT_RATES_SQL = `
 -- client_rate: tarifa mensual acordada con el cliente para contratos de capacidad.
@@ -2178,10 +2178,10 @@ const ASSIGNMENT_RATES_SQL = `
 ALTER TABLE assignments ADD COLUMN IF NOT EXISTS client_rate          NUMERIC(18,4) NULL;
 ALTER TABLE assignments ADD COLUMN IF NOT EXISTS client_rate_currency VARCHAR(3)    NULL DEFAULT 'USD';
 
--- Historial de tarifas por asignación: permite registrar cambios de tarifa
+-- Historial de tarifas por asignaciÃ³n: permite registrar cambios de tarifa
 -- a lo largo del tiempo (ascensos, incrementos anuales, renegociaciones).
--- effective_date indica desde cuándo aplica cada tarifa. La proyección de
--- revenue usa la tarifa vigente para cada mes según effective_date.
+-- effective_date indica desde cuÃ¡ndo aplica cada tarifa. La proyecciÃ³n de
+-- revenue usa la tarifa vigente para cada mes segÃºn effective_date.
 CREATE TABLE IF NOT EXISTS assignment_rate_history (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   assignment_id UUID NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
@@ -2198,7 +2198,7 @@ CREATE INDEX IF NOT EXISTS arh_assignment_idx
 -- Back-fill: create initial rate history entry for existing assignments
 -- that have a client_rate but no history yet.
 INSERT INTO assignment_rate_history (assignment_id, effective_date, client_rate, client_rate_currency, reason, created_by)
-  SELECT a.id, a.start_date, a.client_rate, COALESCE(a.client_rate_currency, 'USD'), 'Tarifa inicial (migración)', a.created_by
+  SELECT a.id, a.start_date, a.client_rate, COALESCE(a.client_rate_currency, 'USD'), 'Tarifa inicial (migraciÃ³n)', a.created_by
     FROM assignments a
    WHERE a.client_rate IS NOT NULL
      AND a.deleted_at IS NULL
@@ -2207,11 +2207,11 @@ ON CONFLICT DO NOTHING;
 `;
 
 // ---------------------------------------------------------------------------
-// SPEC-CRM-01 — Contacts, Activities, Budgets + Opportunity enrichment
+// SPEC-CRM-01 â€” Contacts, Activities, Budgets + Opportunity enrichment
 // ---------------------------------------------------------------------------
 const SPEC_CRM_01_SQL = `
 -- ====================================================================
--- SPEC-CRM-01 — Contacts, Activities, Budgets + Opportunity enrichment
+-- SPEC-CRM-01 â€” Contacts, Activities, Budgets + Opportunity enrichment
 -- ====================================================================
 
 -- 1. Contacts: personas de contacto asociadas a clientes
@@ -2326,30 +2326,30 @@ ALTER TABLE clients ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NULL;
 -- 6. Opportunity context brief (insumo estructurado para preventa)
 -- Nace del input que la country manager dio en chat para BBVA Colombia:
 -- contexto del cliente, alcance, pains, requisitos del nuevo proveedor y
--- política/siguientes pasos. Cada sección es texto libre opcional; la UI
--- guía con placeholders. El campo legacy "description" se mantiene para
--- compat — es un resumen de una línea, mientras que estos 5 son el brief.
+-- polÃ­tica/siguientes pasos. Cada secciÃ³n es texto libre opcional; la UI
+-- guÃ­a con placeholders. El campo legacy "description" se mantiene para
+-- compat â€” es un resumen de una lÃ­nea, mientras que estos 5 son el brief.
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_client       TEXT NULL;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_scope        TEXT NULL;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_pains        TEXT NULL;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_requirements TEXT NULL;
 ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS context_politics     TEXT NULL;
 
--- 7. Reset masivo de employees.end_date → NULL (mayo 2026)
--- Decisión de negocio: por defecto los empleados deben tener fecha de fin
--- "indefinida" (NULL). Sólo se pone fecha cuando hay contrato a término
+-- 7. Reset masivo de employees.end_date â†’ NULL (mayo 2026)
+-- DecisiÃ³n de negocio: por defecto los empleados deben tener fecha de fin
+-- "indefinida" (NULL). SÃ³lo se pone fecha cuando hay contrato a tÃ©rmino
 -- fijo o cuando renuncian/despiden. El reset previo evita que comerciales
--- hayan puesto fechas por inercia (lo que después del fix 36a8b37 los
--- marcaba como inactivos automáticamente cuando esas fechas pasaban).
+-- hayan puesto fechas por inercia (lo que despuÃ©s del fix 36a8b37 los
+-- marcaba como inactivos automÃ¡ticamente cuando esas fechas pasaban).
 --
--- Mecánica:
+-- MecÃ¡nica:
 --   1. Snapshot del estado previo en employee_end_date_audit_2026_05
---      (idempotente vía CREATE TABLE IF NOT EXISTS + INSERT … ON CONFLICT
---      DO NOTHING — la migración puede correrse N veces sin duplicar).
---   2. UPDATE … SET end_date = NULL.
---   3. La auditoría es la fuente de verdad si alguien necesita recuperar
---      fechas legítimas (Andrew, etc.); el operations_owner re-ingresará
---      manualmente las fechas reales después del reset.
+--      (idempotente vÃ­a CREATE TABLE IF NOT EXISTS + INSERT â€¦ ON CONFLICT
+--      DO NOTHING â€” la migraciÃ³n puede correrse N veces sin duplicar).
+--   2. UPDATE â€¦ SET end_date = NULL.
+--   3. La auditorÃ­a es la fuente de verdad si alguien necesita recuperar
+--      fechas legÃ­timas (Andrew, etc.); el operations_owner re-ingresarÃ¡
+--      manualmente las fechas reales despuÃ©s del reset.
 CREATE TABLE IF NOT EXISTS employee_end_date_audit_2026_05 (
   employee_id   UUID PRIMARY KEY REFERENCES employees(id),
   previous_end_date DATE NOT NULL,
@@ -2363,7 +2363,7 @@ INSERT INTO employee_end_date_audit_2026_05 (employee_id, previous_end_date)
 UPDATE employees SET end_date = NULL, updated_at = NOW() WHERE end_date IS NOT NULL;
 
 -- 8. Opportunity contract_type + deal_type cleanup + resell subtypes
--- contract_type indica qué tipo de contrato se creará cuando la oportunidad
+-- contract_type indica quÃ© tipo de contrato se crearÃ¡ cuando la oportunidad
 -- se gane: proyecto, capacidad o reventa. Reemplaza conceptualmente al
 -- revenue_type en el flujo de oportunidades (revenue_type se mantiene en
 -- DB por compat pero la UI ya no lo expone).
@@ -2395,7 +2395,7 @@ $do_deal_type_v2$;
 --
 -- The original migration (line ~1062) created the constraint as
 -- contracts_subtype_check, but the v2 block below was checking for a
--- constraint named contracts_subtype_valid — a different name that never
+-- constraint named contracts_subtype_valid â€” a different name that never
 -- existed. The result: the stale contracts_subtype_check (only 6 values,
 -- no resell subtypes) was never dropped, a new contracts_subtype_valid
 -- was added on top, and inserts with aws/azure/gcp/other failed
@@ -2411,7 +2411,7 @@ BEGIN
   END IF;
 
   -- Create the v2 constraint if absent. We don't drop+re-add when it
-  -- already matches — re-adding triggers a full table scan.
+  -- already matches â€” re-adding triggers a full table scan.
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'contracts_subtype_valid') THEN
     ALTER TABLE contracts ADD CONSTRAINT contracts_subtype_valid
       CHECK (
@@ -2426,16 +2426,16 @@ END
 $do_subtype_v2$;
 
 COMMENT ON COLUMN contracts.contract_subtype IS
-  'Clasificación dentro del type. capacity → staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project → fixed_scope|hour_pool. resell → aws|azure|gcp|other. Coherencia type↔subtype validada en server/routes/contracts.js.';
+  'ClasificaciÃ³n dentro del type. capacity â†’ staff_augmentation|mission_driven_squad|managed_service|time_and_materials. project â†’ fixed_scope|hour_pool. resell â†’ aws|azure|gcp|other. Coherencia typeâ†”subtype validada en server/routes/contracts.js.';
 `;
 
 /**
- * Intenta crear la extensión pgvector. Si no está disponible (no instalada
+ * Intenta crear la extensiÃ³n pgvector. Si no estÃ¡ disponible (no instalada
  * en la imagen postgres, o falta privilegio), captura el error y devuelve
- * false. El schema base sigue funcionando sin pgvector — sólo se pierde
- * la capa de embeddings hasta que alguien instale la extensión.
+ * false. El schema base sigue funcionando sin pgvector â€” sÃ³lo se pierde
+ * la capa de embeddings hasta que alguien instale la extensiÃ³n.
  *
- * Importante: esto se ejecuta FUERA de la transacción principal porque
+ * Importante: esto se ejecuta FUERA de la transacciÃ³n principal porque
  * CREATE EXTENSION puede requerir lock que no convive bien con BEGIN
  * abierto en algunas configuraciones (RDS).
  */
@@ -2451,14 +2451,14 @@ async function ensurePgVector(client) {
     console.warn(
       '[migrate] pgvector NO disponible (',
       err && err.message ? err.message : err,
-      '). Schema continuará sin columnas de embeddings.'
+      '). Schema continuarÃ¡ sin columnas de embeddings.'
     );
     return false;
   }
 }
 
 /* ==================================================================
- * GOOGLE_OAUTH — federated login via Google Workspace
+ * GOOGLE_OAUTH â€” federated login via Google Workspace
  * ================================================================== */
 const GOOGLE_OAUTH_SQL = `
   ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(255) NULL;
@@ -2472,7 +2472,7 @@ const GOOGLE_OAUTH_SQL = `
 `;
 
 /* ==================================================================
- * SPEC-EMP-00 — Employee self-service portal
+ * SPEC-EMP-00 â€” Employee self-service portal
  * ================================================================== */
 const SPEC_EMP_00_SQL = `
   -- Profile fields on employees
@@ -2536,13 +2536,13 @@ const SPEC_EMP_00_SQL = `
     -- additional methodologies
     ('ITIL','methodology'),('Lean','methodology'),('OKRs','methodology'),
     -- additional soft skills
-    ('Gestión de stakeholders','soft'),('Presentaciones','soft'),
-    ('Negociación','soft'),('Trabajo remoto','soft'),
-    ('Resolución de conflictos','soft')
+    ('GestiÃ³n de stakeholders','soft'),('Presentaciones','soft'),
+    ('NegociaciÃ³n','soft'),('Trabajo remoto','soft'),
+    ('ResoluciÃ³n de conflictos','soft')
   ON CONFLICT (LOWER(name)) DO NOTHING;
 `;
 
-// ── SPEC-RM-00 — Resource Management: locks + bulk assignments ──────
+// â”€â”€ SPEC-RM-00 â€” Resource Management: locks + bulk assignments â”€â”€â”€â”€â”€â”€
 const SPEC_RM_00_SQL = `
   -- assignment_locks: tracks which (employee, week) pairs are locked
   CREATE TABLE IF NOT EXISTS assignment_locks (
@@ -2650,7 +2650,7 @@ const migrate = async () => {
   try {
     client = await pool.connect();
 
-    // pgvector primero (fuera de transacción) — best effort.
+    // pgvector primero (fuera de transacciÃ³n) â€” best effort.
     const hasPgVector = await ensurePgVector(client);
 
     await client.query('BEGIN');
@@ -2674,7 +2674,7 @@ const migrate = async () => {
       try {
         await client.query(sql);
         // eslint-disable-next-line no-console
-        console.log(`[migrate] ${label} ✓`);
+        console.log(`[migrate] ${label} âœ“`);
       } catch (blockErr) {
         // eslint-disable-next-line no-console
         console.error(`[migrate] ${label} FAILED:`, blockErr.message);
@@ -2683,7 +2683,7 @@ const migrate = async () => {
     }
 
     // Normalizar nombres de empleados a Title Case (primera letra de cada
-    // palabra en mayúscula, resto en minúscula). Idempotente: initcap(lower())
+    // palabra en mayÃºscula, resto en minÃºscula). Idempotente: initcap(lower())
     // sobre un nombre ya en Title Case produce el mismo resultado.
     await client.query(`
       UPDATE employees
@@ -2693,10 +2693,39 @@ const migrate = async () => {
           OR last_name  <> initcap(lower(last_name))
     `);
 
+    // Backfill: para oportunidades ganadas, sobrescribir
+    // booking_amount_usd y weighted_amount_usd con el total de la
+    // cotización ganadora (GREATEST de quotation_lines.total para
+    // staff_aug y quotation_milestones.amount para fixed_scope). El
+    // monto inicial del proceso comercial era solo de referencia: lo
+    // que vale es la cotización ganadora. Idempotente: el WHERE filtra
+    // por diferencia, así que correr dos veces da el mismo resultado.
+    await client.query(`
+      UPDATE opportunities o
+         SET booking_amount_usd  = qt.total_usd,
+             weighted_amount_usd = qt.total_usd,
+             updated_at          = NOW()
+        FROM (
+          SELECT q.id AS quotation_id,
+                 GREATEST(
+                   COALESCE((SELECT SUM(total) FROM quotation_lines
+                              WHERE quotation_id = q.id), 0),
+                   COALESCE((SELECT SUM(amount) FROM quotation_milestones
+                              WHERE quotation_id = q.id AND deleted_at IS NULL), 0)
+                 )::numeric AS total_usd
+            FROM quotations q
+        ) qt
+       WHERE o.status = 'closed_won'
+         AND o.winning_quotation_id IS NOT NULL
+         AND o.winning_quotation_id = qt.quotation_id
+         AND o.deleted_at IS NULL
+         AND ABS(COALESCE(o.booking_amount_usd, 0) - qt.total_usd) > 0.01
+    `);
+
     await client.query('COMMIT');
 
-    // Embeddings se aplican fuera de la transacción principal: si fallan
-    // no debe abortar el resto de la migración.
+    // Embeddings se aplican fuera de la transacciÃ³n principal: si fallan
+    // no debe abortar el resto de la migraciÃ³n.
     if (hasPgVector) {
       try {
         await client.query(PGVECTOR_SQL);
@@ -2709,6 +2738,16 @@ const migrate = async () => {
     }
 
     // eslint-disable-next-line no-console
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key         VARCHAR(100) PRIMARY KEY,
+        value       TEXT         NULL,
+        updated_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+        updated_by  UUID         NULL REFERENCES users(id)
+      )
+    `);
+
     console.log(`Migration completed successfully (V1 + V2 + AI-readiness + SPEC-II-00 + SPEC-CRM-01${hasPgVector ? ' + pgvector' : ''}).`);
   } catch (err) {
     if (client) await client.query('ROLLBACK');

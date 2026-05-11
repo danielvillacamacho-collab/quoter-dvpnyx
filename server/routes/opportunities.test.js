@@ -528,14 +528,16 @@ describe('POST /api/opportunities/:id/status', () => {
     queryQueue.push({ rows: [{ id: 'q1', status: 'sent', type: 'staff_aug', project_name: 'P1' }] }); // quotation lookup
     queryQueue.push({ rows: [{ id: 'q1' }] });                                   // UPDATE quotations -> approved
     queryQueue.push({ rows: [] });                                               // RR-MVP: SELECT existing contract (empty)
-    queryQueue.push({ rows: [{ total: 5000 }] });                                // RR-MVP: SUM lines
-    queryQueue.push({ rows: [{ id: 'k1', name: 'P1', type: 'capacity', total_value_usd: 5000 }] }); // RR-MVP: INSERT contract
+    queryQueue.push({ rows: [{ total: 0 }] });                                   // RR-MVP: GREATEST(SUM lines, SUM milestones) → 0
+    queryQueue.push({ rows: [{ id: 'k1', name: 'P1', type: 'capacity', total_value_usd: 0 }] }); // RR-MVP: INSERT contract
     queryQueue.push({ rows: [{ id: 'o1', status: 'closed_won', booking_amount_usd: 0, winning_quotation_id: 'q1' }] }); // UPDATE opp
     const res = await client.call('POST', '/api/opportunities/o1/status', {
       new_status: 'closed_won', winning_quotation_id: 'q1',
     });
     expect(res.status).toBe(200);
-    // amount_zero warning porque booking_amount_usd=0
+    // amount_zero warning porque la cotización ganadora no tiene total
+    // (booking_amount_usd se sobrescribe con el total de la cotización
+    // y queda en 0).
     expect(res.body.warnings.some((w) => w.code === 'amount_zero')).toBe(true);
   });
 
@@ -569,7 +571,7 @@ describe('POST /api/opportunities/:id/status', () => {
     queryQueue.push({ rows: [{ id: 'q1', status: 'sent', type: 'fixed_scope', project_name: 'P1' }] }); // quotation lookup
     queryQueue.push({ rows: [{ id: 'q1' }] });                              // UPDATE quotations -> approved
     queryQueue.push({ rows: [] });                                          // RR-MVP: SELECT existing contract (empty)
-    queryQueue.push({ rows: [{ total: 12000 }] });                          // RR-MVP: SUM lines
+    queryQueue.push({ rows: [{ total: 12000 }] });                          // RR-MVP: GREATEST(SUM lines, SUM milestones)
     queryQueue.push({ rows: [{ id: 'k1', name: 'P1', type: 'project', total_value_usd: 12000 }] }); // RR-MVP: INSERT contract
     queryQueue.push({ rows: [{ id: 'o1', status: 'closed_won', winning_quotation_id: 'q1' }] }); // UPDATE opp
     const res = await client.call('POST', '/api/opportunities/o1/status', {
@@ -589,11 +591,13 @@ describe('POST /api/opportunities/:id/status', () => {
     queryQueue.push({ rows: [{ id: 'q1', status: 'sent', type: 'fixed_scope', project_name: 'P1' }] }); // quotation lookup
     queryQueue.push({ rows: [{ id: 'q1' }] });                              // UPDATE quotations -> approved
     queryQueue.push({ rows: [{ id: 'k-existing' }] });                      // existing contract found → no INSERT
-    queryQueue.push({ rows: [{ id: 'o1', status: 'closed_won', winning_quotation_id: 'q1' }] }); // UPDATE opp
+    queryQueue.push({ rows: [{ total: 12000 }] });                          // GREATEST(SUM lines, SUM milestones) — corre siempre para sobrescribir booking_amount_usd
+    queryQueue.push({ rows: [{ id: 'o1', status: 'closed_won', winning_quotation_id: 'q1', booking_amount_usd: 12000, weighted_amount_usd: 12000 }] }); // UPDATE opp
     const res = await client.call('POST', '/api/opportunities/o1/status', {
       new_status: 'closed_won', winning_quotation_id: 'q1',
     });
     expect(res.status).toBe(200);
+    expect(res.body.booking_amount_usd).toBe(12000);
   });
 
   it('marks as lost, rejects sent quotations, emits opportunity.lost', async () => {

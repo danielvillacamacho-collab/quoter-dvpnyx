@@ -590,4 +590,229 @@ router.post('/copy-week', async (req, res) => {
   }
 });
 
+
+/**
+ * Crea o resuelve notificaciones in-app de horas pendientes.
+ *   pendingRows : resultado de la consulta pending-hours (puede ser vacío)
+ *   targetUserIds : array de user_ids que deben recibir la notif de admin/lead
+ *   employeeRows  : filas con { user_id } de los propios empleados pendientes
+ */
+const PENDING_HOURS_SQL = `
+  SELECT DISTINCT e.id AS employee_id, (e.first_name || ' ' || e.last_name) AS employee_name,
+         u.id AS user_id, COALESCE(u.email, e.corporate_email) AS email
+  FROM employees e
+  LEFT JOIN users u ON u.id = e.user_id AND u.deleted_at IS NULL
+  WHERE e.deleted_at IS NULL
+    AND EXISTS (
+      SELECT 1 FROM assignments a
+      WHERE a.employee_id = e.id AND a.deleted_at IS NULL
+        AND a.status IN ('active', 'planned', 'ended')
+    )
+    AND (
+      NOT EXISTS (
+        SELECT 1 FROM time_entries te WHERE te.employee_id = e.id AND te.deleted_at IS NULL
+          AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '7 days')::date
+                               AND (date_trunc('week', CURRENT_DATE - INTERVAL '7 days') + INTERVAL '6 days')::date
+      )
+      OR
+      NOT EXISTS (
+        SELECT 1 FROM time_entries te WHERE te.employee_id = e.id AND te.deleted_at IS NULL
+          AND te.work_date BETWEEN date_trunc('week', CURRENT_DATE - INTERVAL '14 days')::date
+                               AND (date_trunc('week', CURRENT_DATE - INTERVAL '14 days') + INTERVAL '6 days')::date
+      )
+    )
+  ORDER BY e.first_name, e.last_name
+`;
+
+async function syncPendingHoursNotifications(pool, pendingRows, targetUserIds, employeeRows) {
+  if (pendingRows.length > 0) {
+    const nameList = pendingRows.slice(0, 5).map(r => r.employee_name).join(', ')
+      + (pendingRows.length > 5 ? ` y ${pendingRows.length - 5} más` : '');
+    const title = `${pendingRows.length} empleado${pendingRows.length !== 1 ? 's' : ''} sin horas registradas`;
+    const body  = `Sin horas en las últimas 2 semanas: ${nameList}.`;
+
+    // Notificación para cada admin/lead
+    for (const uid of targetUserIds) {
+      await pool.query(
+        `INSERT INTO notifications (user_id, type, title, body, link, entity_type, created_at)
+         SELECT $1, 'pending_hours', $2, $3, '/time/admin', 'time_entry', NOW()
+         WHERE NOT EXISTS (
+           SELECT 1 FROM notifications
+           WHERE user_id = $1 AND type = 'pending_hours' AND read_at IS NULL
+         )`,
+        [uid, title, body]
+      );
+    }
+
+    // Notificación para cada empleado sin horas (si tiene cuenta)
+    for (const emp of employeeRows) {
+      if (!emp.user_id) continue;
+      await pool.query(
+        `INSERT INTO notifications (user_id, type, title, body, link, entity_type, created_at)
+         SELECT $1, 'pending_hours_employee', $2, $3, '/time/me', 'time_entry', NOW()
+         WHERE NOT EXISTS (
+           SELECT 1 FROM notifications
+           WHERE user_id = $1 AND type = 'pending_hours_employee' AND read_at IS NULL
+         )`,
+        [emp.user_id, 'Tenés horas sin registrar', 'No registraste horas en las últimas 2 semanas. Ingresá a Mis horas para completarlas.']
+      );
+    }
+  } else {
+    // Todos al día: marcar como leídas las notificaciones activas
+    if (targetUserIds.length > 0) {
+      await pool.query(
+        `UPDATE notifications SET read_at = NOW()
+         WHERE user_id = ANY($1) AND type = 'pending_hours' AND read_at IS NULL`,
+        [targetUserIds]
+      );
+    }
+    for (const emp of employeeRows) {
+      if (!emp.user_id) continue;
+      await pool.query(
+        `UPDATE notifications SET read_at = NOW()
+         WHERE user_id = $1 AND type = 'pending_hours_employee' AND read_at IS NULL`,
+        [emp.user_id]
+      );
+    }
+  }
+}
+
+// ─── GET /pending-hours ─────────────────────────────────────────────────────
+router.get('/pending-hours', auth, async (req, res) => {
+  const role = req.user.role;
+  if (!['admin', 'superadmin', 'lead'].includes(role)) {
+    return res.status(403).json({ error: 'Acceso denegado' });
+  }
+  try {
+    let squadFilter = '';
+    let params = [];
+    if (role === 'lead') {
+      const sq = await pool.query(
+        `SELECT e.squad_id FROM employees e WHERE e.user_id = $1 AND e.deleted_at IS NULL LIMIT 1`,
+        [req.user.id]
+      );
+      if (!sq.rows.length) return res.json({ data: [], week_start: null });
+      squadFilter = 'AND e.squad_id = $1';
+      params = [sq.rows[0].squad_id];
+    }
+    const squadSql = squadFilter
+      ? PENDING_HOURS_SQL.replace('ORDER BY', `AND e.squad_id = $1\n  ORDER BY`)
+      : PENDING_HOURS_SQL;
+    const { rows } = await pool.query(squadSql, params);
+
+    // Obtener todos los user_ids con rol admin/superadmin/lead para notificarlos
+    const { rows: adminLeads } = await pool.query(
+      `SELECT id FROM users WHERE deleted_at IS NULL AND role IN ('admin', 'superadmin', 'lead')`
+    );
+    await syncPendingHoursNotifications(pool, rows, adminLeads.map(r => r.id), rows);
+
+    res.json({
+      data: rows.map(r => ({
+        employee_id: r.employee_id,
+        employee_name: r.employee_name,
+        user_id: r.user_id,
+        email: r.email,
+      })),
+      employee_count: rows.length,
+    });
+  } catch (err) {
+    serverError(res, 'GET /time-entries/pending-hours', err);
+  }
+});
+
+// ─── POST /send-reminders ────────────────────────────────────────────────────
+router.post('/send-reminders', auth, async (req, res) => {
+  const role = req.user.role;
+  if (!['admin', 'superadmin', 'lead'].includes(role)) {
+    return res.status(403).json({ error: 'Acceso denegado' });
+  }
+  try {
+    const { rows: settings } = await pool.query('SELECT key, value FROM app_settings');
+    const cfg = {};
+    for (const r of settings) cfg[r.key] = r.value;
+    if (cfg.sns_enabled !== 'true') {
+      return res.status(422).json({ sent: false, reason: 'SNS no está activado. Configuralo en Ajustes → Integración SNS.' });
+    }
+    if (!cfg.aws_access_key_id || !cfg.aws_secret_access_key || !cfg.aws_region || !cfg.sns_topic_arn) {
+      return res.status(422).json({ sent: false, reason: 'Configuración de SNS incompleta.' });
+    }
+    const { rows } = await pool.query(PENDING_HOURS_SQL);
+    if (!rows.length) return res.json({ sent: false, reason: 'No hay empleados con horas pendientes.' });
+    const names = rows.map(r => `* ${r.employee_name}`).join('\n');
+    const message = `Recordatorio DVPNYX: Los siguientes empleados no han registrado horas en las últimas 2 semanas:\n\n${names}\n\nPor favor registra tus horas en el sistema.`;
+    // eslint-disable-next-line
+    const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
+    const snsClient = new SNSClient({
+      region: cfg.aws_region,
+      credentials: { accessKeyId: cfg.aws_access_key_id, secretAccessKey: cfg.aws_secret_access_key },
+    });
+    await snsClient.send(new PublishCommand({
+      TopicArn: cfg.sns_topic_arn,
+      Subject: `DVPNYX - ${rows.length} empleado${rows.length !== 1 ? 's' : ''} con horas pendientes`,
+      Message: message,
+    }));
+    await emitEvent(pool, 'time_entry.reminders_sent', 'time_entry', null, req.user.id, {
+      employee_count: rows.length, weeks_checked: 2,
+    });
+    res.json({ sent: true, employee_count: rows.length });
+  } catch (err) {
+    serverError(res, 'POST /time-entries/send-reminders', err);
+  }
+});
+
+// ─── POST /cron-send-reminders ───────────────────────────────────────────────
+// Called by GitHub Actions on Monday 08:00 Colombia (13:00 UTC).
+// Auth: X-Cron-Secret header matched against app_settings.cron_secret.
+// No JWT required — intended for server-to-server use only.
+router.post('/cron-send-reminders', async (req, res) => {
+  const headerSecret = req.headers['x-cron-secret'];
+  if (!headerSecret) return res.status(401).json({ error: 'Missing X-Cron-Secret header' });
+  try {
+    const { rows: settings } = await pool.query('SELECT key, value FROM app_settings');
+    const cfg = {};
+    for (const r of settings) cfg[r.key] = r.value;
+    if (!cfg.cron_secret || cfg.cron_secret !== headerSecret) {
+      return res.status(401).json({ error: 'Invalid cron secret' });
+    }
+    if (cfg.sns_enabled !== 'true') {
+      return res.json({ sent: false, reason: 'SNS disabled' });
+    }
+    if (!cfg.aws_access_key_id || !cfg.aws_secret_access_key || !cfg.aws_region || !cfg.sns_topic_arn) {
+      return res.status(422).json({ sent: false, reason: 'Incomplete SNS config' });
+    }
+    const { rows } = await pool.query(PENDING_HOURS_SQL);
+    if (!rows.length) return res.json({ sent: false, reason: 'No pending employees' });
+    const names = rows.map(r => `* ${r.employee_name}`).join('\n');
+    const message = `Recordatorio DVPNYX: Los siguientes empleados no han registrado horas en las últimas 2 semanas:\n\n${names}\n\nPor favor registra tus horas en el sistema.`;
+    // eslint-disable-next-line
+    const { SNSClient, PublishCommand } = require('@aws-sdk/client-sns');
+    const snsClient = new SNSClient({
+      region: cfg.aws_region,
+      credentials: { accessKeyId: cfg.aws_access_key_id, secretAccessKey: cfg.aws_secret_access_key },
+    });
+    await snsClient.send(new PublishCommand({
+      TopicArn: cfg.sns_topic_arn,
+      Subject: `DVPNYX - ${rows.length} empleado${rows.length !== 1 ? 's' : ''} con horas pendientes`,
+      Message: message,
+    }));
+    // Notificaciones in-app para todos los admins/leads y empleados afectados
+    const { rows: empWithUsers } = await pool.query(
+      `SELECT e.id AS employee_id, u.id AS user_id
+       FROM employees e JOIN users u ON u.id = e.user_id
+       WHERE e.id = ANY($1) AND e.deleted_at IS NULL AND u.deleted_at IS NULL`,
+      [rows.map(r => r.employee_id)]
+    );
+    const { rows: adminLeads } = await pool.query(
+      `SELECT id FROM users WHERE deleted_at IS NULL AND role IN ('admin', 'superadmin', 'lead')`
+    );
+    await syncPendingHoursNotifications(pool, rows, adminLeads.map(r => r.id), empWithUsers);
+    await emitEvent(pool, 'time_entry.cron_reminders_sent', 'time_entry', null, null, {
+      employee_count: rows.length, weeks_checked: 2, triggered_by: 'cron',
+    });
+    res.json({ sent: true, employee_count: rows.length });
+  } catch (err) {
+    serverError(res, 'POST /time-entries/cron-send-reminders', err);
+  }
+});
+
 module.exports = router;

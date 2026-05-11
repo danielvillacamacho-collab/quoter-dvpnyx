@@ -20,6 +20,9 @@ const ds = {
   kpiLabel: { fontSize: 11, color: 'var(--ds-text-soft, var(--text-light))', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600 },
   kpiValue: { fontSize: 26, fontWeight: 700, color: 'var(--ds-accent, var(--purple-dark))', marginTop: 4, fontFamily: 'var(--font-mono, ui-monospace, Menlo, monospace)', fontFeatureSettings: "'tnum'" },
   row:      { cursor: 'pointer', transition: 'background .12s' },
+  searchBar:   { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' },
+  searchInput: { flex: '1 1 280px', maxWidth: 420, padding: '8px 12px', fontSize: 13, background: 'var(--ds-surface, #fff)', border: '1px solid var(--ds-border)', borderRadius: 'var(--ds-radius, 8px)', color: 'var(--ds-text)' },
+  searchHint:  { fontSize: 12, color: 'var(--ds-text-soft, var(--text-light))' },
 };
 
 const healthColors = {
@@ -52,6 +55,7 @@ export default function ProjectHealth() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
+  const [search, setSearch] = useState('');
   const nav = useNavigate();
 
   const load = useCallback(async () => {
@@ -71,12 +75,20 @@ export default function ProjectHealth() {
 
   const { projects } = data;
 
-  // Summary KPIs
+  // Summary KPIs (sobre todo el portafolio, no se filtran)
   const total = projects.length;
   const withBaseline = projects.filter(p => p.has_baseline).length;
   const red = projects.filter(p => p.overall_health === 'red').length;
   const yellow = projects.filter(p => p.overall_health === 'yellow').length;
   const green = projects.filter(p => p.overall_health === 'green').length;
+
+  const q = search.trim().toLowerCase();
+  const filtered = q
+    ? projects.filter(p => (
+        (p.contract_name || '').toLowerCase().includes(q)
+        || (p.client_name || '').toLowerCase().includes(q)
+      ))
+    : projects;
 
   return (
     <div style={ds.page}>
@@ -107,6 +119,23 @@ export default function ProjectHealth() {
         </div>
       </div>
 
+      {/* Search bar */}
+      <div style={ds.searchBar}>
+        <input
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Buscar proyecto o cliente…"
+          aria-label="Buscar proyecto o cliente"
+          style={ds.searchInput}
+        />
+        {q && (
+          <span style={ds.searchHint}>
+            {filtered.length} de {projects.length}
+          </span>
+        )}
+      </div>
+
       {/* Projects table */}
       <div style={ds.card}>
         <table className={TABLE_CLASS} style={{ width: '100%' }}>
@@ -127,7 +156,12 @@ export default function ProjectHealth() {
                 No hay proyectos fixed_scope activos
               </td></tr>
             )}
-            {projects.map(p => {
+            {projects.length > 0 && filtered.length === 0 && (
+              <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: 'var(--ds-text-soft)' }}>
+                Ningún proyecto coincide con "{search}"
+              </td></tr>
+            )}
+            {filtered.map(p => {
               const kpis = p.kpis || {};
               return (
                 <tr key={p.contract_id}

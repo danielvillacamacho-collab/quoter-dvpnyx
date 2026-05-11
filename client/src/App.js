@@ -65,6 +65,7 @@ import Deviations from './modules/Deviations';
 // SPEC-PRJ-HEALTH-01 — Project Health (EVM/PMI)
 import ProjectHealth from './modules/ProjectHealth';
 import ProjectHealthDetail from './modules/ProjectHealthDetail';
+import AwsSettings from './modules/AwsSettings';
 import './theme.css';
 import './App.css';
 
@@ -115,6 +116,7 @@ function Layout() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [unread, setUnread] = useState(0);
+  const [pendingHoursCount, setPendingHoursCount] = useState(0);
 
   // Poll unread notifications every 60s so the bell badge stays fresh
   // without a heavy websocket. First fetch fires immediately on login.
@@ -145,6 +147,29 @@ function Layout() {
       document.removeEventListener('visibilitychange', onVis);
     };
   }, [user]);
+
+  // Poll pending-hours count for admins and leads so the bell badge
+  // also reflects employees with missing hours for last week.
+  useEffect(() => {
+    if (!user || !isLeadOrAdmin) return undefined;
+    let live = true;
+    const fetchPending = async () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      try {
+        const d = await apiGet('/api/time-entries/pending-hours');
+        if (live && d && Array.isArray(d.data)) setPendingHoursCount(d.data.length);
+      } catch (_e) { /* fail-soft */ }
+    };
+    fetchPending();
+    const t = setInterval(fetchPending, 60000);
+    const onVis = () => { if (document.visibilityState === 'visible') fetchPending(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      live = false;
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+  }, [user, isLeadOrAdmin]);
 
   // Global ⌘K / Ctrl+K opens the Command Palette. Registered once per
   // Layout mount so no child has to care. We also close on route change
@@ -185,12 +210,15 @@ function Layout() {
         <Topbar
           onOpenSearch={() => setPaletteOpen(true)}
           onOpenNotifications={() => setNotifOpen(true)}
-          unreadCount={unread}
+          unreadCount={unread + pendingHoursCount}
         />
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         <NotificationsDrawer
           open={notifOpen}
           onClose={() => setNotifOpen(false)}
+          isLeadOrAdmin={isLeadOrAdmin}
+          isAdmin={isAdmin}
+          onPendingHoursChange={setPendingHoursCount}
           onUpdateUnread={setUnread}
         />
         <ErrorBoundary>
@@ -250,6 +278,7 @@ function Layout() {
           <Route path="/deviations"                  element={<Deviations />} />
           <Route path="/project-health"              element={<ProjectHealth />} />
           <Route path="/project-health/:contract_id" element={<ProjectHealthDetail />} />
+          {user?.role === 'superadmin' && <Route path="/admin/aws-settings" element={<AwsSettings />} />}
           </>}
         </Routes>
         </ErrorBoundary>

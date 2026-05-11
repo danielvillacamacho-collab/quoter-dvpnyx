@@ -9,7 +9,7 @@ import {
   Contact, MessageSquare, Target, ChevronRight,
   Kanban, PieChart, LineChart, Wallet, FolderKanban, Sparkles,
   GanttChart, Timer, Coffee, LayoutDashboard, Landmark, Wrench,
-  UserCircle, ClipboardCheck, Zap, HeartPulse,
+  UserCircle, ClipboardCheck, Zap, HeartPulse, Radio,
 } from 'lucide-react';
 import cx from './Sidebar.module.css';
 
@@ -56,10 +56,11 @@ const ICONS = {
   '/time/admin':                ClipboardCheck,
   '/deviations':                Activity,
   '/project-health':            HeartPulse,
+  '/admin/aws-settings':        Radio,
 };
 
 /** Build the grouped nav model. */
-export function buildGroups(isAdmin, hasEmployee = false, isStaff = false, isLeadOrAdmin = false) {
+export function buildGroups(isAdmin, hasEmployee = false, isStaff = false, isLeadOrAdmin = false, isSuperAdmin = false) {
   if (isStaff) {
     return [
       {
@@ -163,6 +164,7 @@ export function buildGroups(isAdmin, hasEmployee = false, isStaff = false, isLea
         { path: '/admin/holidays',        label: 'Festivos'        },
         { path: '/admin/users',           label: 'Usuarios'        },
         { path: '/admin/bulk-import',     label: 'Carga masiva'    },
+        ...(isSuperAdmin ? [{ path: '/admin/aws-settings', label: 'Integración SNS' }] : []),
       ],
     });
   }
@@ -252,7 +254,8 @@ export default function Sidebar({
   onNavigate,
   onLogout,
 }) {
-  const groups = buildGroups(isAdmin, hasEmployee, isStaff, isLeadOrAdmin);
+  const isSuperAdmin = user?.role === 'superadmin';
+  const groups = buildGroups(isAdmin, hasEmployee, isStaff, isLeadOrAdmin, isSuperAdmin);
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(loadCollapsed);
 

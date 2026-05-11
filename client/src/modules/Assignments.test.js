@@ -40,12 +40,18 @@ const sampleEmployees = [
   { id: 'e9', first_name: 'Terminated', last_name: 'Person', level: 'L2', weekly_capacity_hours: 40, status: 'terminated' },
 ];
 
+const sampleContracts = [
+  { id: 'ct1', name: 'Acme MSA 2026',  type: 'capacity', status: 'active',    client_name: 'Acme Corp' },
+  { id: 'ct2', name: 'Beta Proyecto',  type: 'project',  status: 'completed', client_name: 'Beta SA' },
+];
+
 beforeEach(() => {
   jest.resetAllMocks();
   apiV2.apiGet.mockImplementation((url) => {
     if (url.startsWith('/api/resource-requests')) return Promise.resolve({ data: sampleRequests });
     if (url.startsWith('/api/employees'))         return Promise.resolve({ data: sampleEmployees });
     if (url.startsWith('/api/assignments'))       return Promise.resolve({ data: sampleAssignments, pagination: { page: 1, limit: 25, total: 1, pages: 1 } });
+    if (url.startsWith('/api/contracts'))         return Promise.resolve({ data: sampleContracts });
     return Promise.resolve({});
   });
 });
@@ -445,5 +451,182 @@ describe('Assignments module', () => {
     expect(url).toContain('employee_ids=e1');
     expect(url).toContain('date_from=2026-05-01');
     expect(url).toContain('date_to=2026-08-31');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPEC-008 — ContractMultiSelect filtro por contrato
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('SPEC-008: filtro por contrato — ContractMultiSelect', () => {
+  it('renders the contract filter input', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    expect(screen.getByLabelText('Filtro por contrato')).toBeInTheDocument();
+  });
+
+  it('opens dropdown on focus and shows contracts from lookup', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    expect(within(listbox).getByText(/Acme MSA 2026/)).toBeInTheDocument();
+    expect(within(listbox).getByText(/Beta Proyecto/)).toBeInTheDocument();
+  });
+
+  it('shows contract type as hint in the dropdown', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    expect(within(listbox).getByText('(capacidad)')).toBeInTheDocument();
+    expect(within(listbox).getByText('(proyecto)')).toBeInTheDocument();
+  });
+
+  it('shows terminal status hint for completed contracts', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    const betaItem = within(listbox).getByText(/Beta Proyecto/).closest('li');
+    expect(betaItem).toHaveTextContent('completado');
+  });
+
+  it('selects a contract and shows it as a chip', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    fireEvent.mouseDown(within(listbox).getByText(/Acme MSA 2026/));
+
+    expect(screen.getByLabelText('Quitar Acme MSA 2026')).toBeInTheDocument();
+  });
+
+  it('removes a selected contract when clicking its chip × button', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    fireEvent.mouseDown(within(listbox).getByText(/Acme MSA 2026/));
+
+    const chip = screen.getByLabelText('Quitar Acme MSA 2026');
+    expect(chip).toBeInTheDocument();
+
+    fireEvent.click(chip);
+    expect(screen.queryByLabelText('Quitar Acme MSA 2026')).not.toBeInTheDocument();
+  });
+
+  it('filters dropdown options by typed query', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    const input = screen.getByLabelText('Filtro por contrato');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'Beta' } });
+
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    expect(within(listbox).getByText(/Beta Proyecto/)).toBeInTheDocument();
+    expect(within(listbox).queryByText(/Acme MSA 2026/)).not.toBeInTheDocument();
+  });
+
+  it('shows "Sin coincidencias" when the query matches nothing', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    const input = screen.getByLabelText('Filtro por contrato');
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'xyznonexistent' } });
+
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    expect(within(listbox).getByText('Sin coincidencias')).toBeInTheDocument();
+  });
+
+  it('closes dropdown on Escape key', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    await screen.findByRole('listbox', { name: 'Contratos' });
+
+    fireEvent.keyDown(screen.getByLabelText('Filtro por contrato'), { key: 'Escape' });
+    expect(screen.queryByRole('listbox', { name: 'Contratos' })).not.toBeInTheDocument();
+  });
+
+  it('passes contract_ids to the API when a contract is selected', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    apiV2.apiGet.mockClear();
+
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    fireEvent.mouseDown(within(listbox).getByText(/Acme MSA 2026/));
+
+    await waitFor(() => {
+      const assignmentCalls = apiV2.apiGet.mock.calls
+        .map((c) => c[0])
+        .filter((u) => u.startsWith('/api/assignments'));
+      expect(assignmentCalls.some((u) => u.includes('contract_ids=ct1'))).toBe(true);
+    });
+  });
+
+  it('"Limpiar filtros" resets the contract filter', async () => {
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    fireEvent.mouseDown(within(listbox).getByText(/Acme MSA 2026/));
+
+    expect(screen.getByLabelText('Quitar Acme MSA 2026')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText('Limpiar filtros'));
+    expect(screen.queryByLabelText('Quitar Acme MSA 2026')).not.toBeInTheDocument();
+  });
+
+  it('SPEC-008: CSV export includes contract_ids param', async () => {
+    apiV2.apiDownload.mockResolvedValue();
+    mount();
+    await screen.findByText('Ana García');
+    await waitFor(() =>
+      expect(apiV2.apiGet.mock.calls.some((c) => c[0].startsWith('/api/contracts'))).toBe(true),
+    );
+
+    fireEvent.focus(screen.getByLabelText('Filtro por contrato'));
+    const listbox = await screen.findByRole('listbox', { name: 'Contratos' });
+    fireEvent.mouseDown(within(listbox).getByText(/Acme MSA 2026/));
+
+    fireEvent.click(screen.getByTestId('assignments-export-csv'));
+
+    await waitFor(() => expect(apiV2.apiDownload).toHaveBeenCalledTimes(1));
+    const [url] = apiV2.apiDownload.mock.calls[0];
+    expect(url).toContain('contract_ids=ct1');
   });
 });
