@@ -28,11 +28,44 @@ export default function CreateClientOppModal({ mode, clientId, clientName, onCre
   const [oppName, setOppName] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // When the backend returns 409, we store the existing client so the user
+  // can opt to use it instead of being left stuck with just an error message.
+  const [existingClient, setExistingClient] = useState(null); // { id, name }
 
   const isClientMode = mode === 'client';
 
+  const useExistingClient = async () => {
+    if (!existingClient) return;
+    setBusy(true);
+    setErr('');
+    try {
+      if (oppName.trim()) {
+        const opp = await apiPost('/api/opportunities', {
+          client_id: existingClient.id,
+          name: oppName.trim(),
+        });
+        onCreated({
+          client_id: existingClient.id,
+          client_name: existingClient.name,
+          opportunity_id: opp.id,
+          opportunity_name: opp.name,
+        });
+      } else {
+        onCreated({
+          client_id: existingClient.id,
+          client_name: existingClient.name,
+        });
+      }
+    } catch (ex) {
+      setErr(ex.message || 'Error al crear la oportunidad');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleCreate = async () => {
     setErr('');
+    setExistingClient(null);
     if (isClientMode) {
       if (!name.trim()) return setErr('El nombre del cliente es requerido');
     } else {
@@ -74,7 +107,14 @@ export default function CreateClientOppModal({ mode, clientId, clientName, onCre
         });
       }
     } catch (ex) {
-      setErr(ex.message || 'Error al crear');
+      // 409 means the client already exists — the backend returns existing_id + hint
+      // so the user can opt to use the existing client instead of being stuck.
+      if (ex.status === 409 && ex.body?.existing_id) {
+        setExistingClient({ id: ex.body.existing_id, name: ex.body.hint || name.trim() });
+        setErr(`Ya existe un cliente con ese nombre: "${ex.body.hint || name.trim()}"`);
+      } else {
+        setErr(ex.message || 'Error al crear');
+      }
     } finally {
       setBusy(false);
     }
@@ -116,7 +156,21 @@ export default function CreateClientOppModal({ mode, clientId, clientName, onCre
           />
         </div>
 
-        {err && <div style={{ color: 'var(--danger)', fontSize: 13, marginBottom: 12 }}>{err}</div>}
+        {err && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ color: 'var(--danger)', fontSize: 13 }}>{err}</div>
+            {existingClient && (
+              <button
+                type="button"
+                style={{ ...s.btn('var(--teal-mid)'), marginTop: 8, width: '100%' }}
+                onClick={useExistingClient}
+                disabled={busy}
+              >
+                {busy ? 'Vinculando…' : `Usar "${existingClient.name}" (cliente existente)`}
+              </button>
+            )}
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
           <button type="button" style={s.btnOutline} onClick={onCancel} disabled={busy}>Cancelar</button>

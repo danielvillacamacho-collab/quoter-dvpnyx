@@ -24,20 +24,39 @@ export default function useQuotationLookups(clientId) {
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
-  // Load clients + commercials on mount
+  // Load clients + commercials on mount.
+  // clientId is captured once at mount time — it is the ID of the client
+  // already linked to the quotation being edited (if any). We need it here
+  // so that if that client is inactive it still appears in the dropdown.
+  const mountClientIdRef = useRef(clientId);
   useEffect(() => {
     let cancelled = false;
+    const mountedClientId = mountClientIdRef.current;
     Promise.all([
       apiGet('/api/clients?limit=500&active=true').catch(() => ({ data: [] })),
       apiGet('/api/users/lookup?function=comercial').catch(() => []),
-    ]).then(([clientsRes, commercialsRes]) => {
+    ]).then(async ([clientsRes, commercialsRes]) => {
       if (cancelled) return;
-      setClients(clientsRes?.data || []);
+      let loadedClients = clientsRes?.data || [];
+      // If the quotation already references a client that isn't in the active
+      // list (e.g. it was deactivated after the quotation was created), fetch
+      // it individually so it still appears as a selectable option.
+      if (
+        mountedClientId &&
+        !loadedClients.some((c) => String(c.id) === String(mountedClientId))
+      ) {
+        try {
+          const existing = await apiGet(`/api/clients/${mountedClientId}`);
+          if (existing && existing.id) loadedClients = [existing, ...loadedClients];
+        } catch (_) { /* best-effort: skip if fetch fails */ }
+      }
+      setClients(loadedClients);
       setCommercials(Array.isArray(commercialsRes) ? commercialsRes : []);
       setLoading(false);
     });
     return () => { cancelled = true; };
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally runs once on mount
 
   // Load opportunities when client changes
   useEffect(() => {
