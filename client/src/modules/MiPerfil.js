@@ -60,7 +60,7 @@ export default function MiPerfil() {
 /* ── Completeness ─────────────────────────────────────────────────── */
 
 function CompletenessBar({ pct, checks }) {
-  const missing = checks.filter((c) => !c.done).map((c) => c.key);
+  const missing = (checks || []).filter((c) => !c.done).map((c) => c.key);
   const LABELS = { bio: 'Bio', city: 'Ciudad', linkedin: 'LinkedIn', skills: '3+ skills', education: 'Educación', languages: 'Idiomas' };
   return (
     <div className={cx.completenessWrap}>

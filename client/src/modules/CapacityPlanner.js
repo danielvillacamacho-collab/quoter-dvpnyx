@@ -1560,7 +1560,7 @@ export default function CapacityPlanner() {
                   )}
 
                   {/* Unassigned requests — solo las que aún tienen slots por llenar */}
-                  {data.open_requests.filter((r) => r.missing > 0).map((r) => (
+                  {(data.open_requests || []).filter((r) => r.missing > 0).map((r) => (
                     <UnassignedRow
                       key={r.id}
                       request={r}
