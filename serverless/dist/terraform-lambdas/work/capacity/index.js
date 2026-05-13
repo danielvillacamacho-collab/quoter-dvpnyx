@@ -38465,6 +38465,77 @@ function createCapacityService(repo2) {
 }
 
 // packages/capacity/handler.ts
+var CONTRACT_COLORS = [
+  "#7c3aed",
+  "#0ea5e9",
+  "#10b981",
+  "#f59e0b",
+  "#ef4444",
+  "#8b5cf6",
+  "#06b6d4",
+  "#84cc16",
+  "#f97316",
+  "#ec4899",
+  "#64748b",
+  "#a855f7"
+];
+function colorFor(contractId) {
+  if (!contractId) return CONTRACT_COLORS[0];
+  let h5 = 0;
+  for (let i5 = 0; i5 < contractId.length; i5++) h5 = (h5 << 5) - h5 + contractId.charCodeAt(i5) | 0;
+  return CONTRACT_COLORS[Math.abs(h5) % CONTRACT_COLORS.length];
+}
+function isoWeekNumber(dateStr) {
+  const d5 = /* @__PURE__ */ new Date(dateStr + "T00:00:00Z");
+  const dow = d5.getUTCDay() || 7;
+  d5.setUTCDate(d5.getUTCDate() + 4 - dow);
+  const yearStart = new Date(Date.UTC(d5.getUTCFullYear(), 0, 1));
+  return Math.ceil(((d5.getTime() - yearStart.getTime()) / 864e5 + 1) / 7);
+}
+function transformPlannerResult(result) {
+  const weekObjs = result.weeks.map((start, index) => {
+    const w = isoWeekNumber(start);
+    return { index, start_date: start, iso_week: w, label: `S${w}` };
+  });
+  const employees = result.employees.map((emp) => {
+    const assignmentMap = /* @__PURE__ */ new Map();
+    emp.weeks.forEach((weekData, wi) => {
+      for (const asg of weekData.assignments) {
+        const id = asg.assignment_id;
+        if (!assignmentMap.has(id)) {
+          assignmentMap.set(id, {
+            id,
+            contract_id: asg.contract_id,
+            contract_name: asg.contract_name,
+            client_name: asg.client_name,
+            role_title: asg.role_title,
+            weekly_hours: asg.weekly_hours,
+            status: asg.status,
+            color: colorFor(asg.contract_id),
+            week_range: [wi, wi]
+          });
+        } else {
+          const e5 = assignmentMap.get(id);
+          e5.week_range = [Math.min(e5.week_range[0], wi), Math.max(e5.week_range[1], wi)];
+        }
+      }
+    });
+    return {
+      ...emp,
+      id: emp.employee_id,
+      full_name: `${emp.first_name || ""} ${emp.last_name || ""}`.trim(),
+      weekly: emp.weeks.map((w) => ({
+        hours: w.total_hours,
+        utilization_pct: w.utilization_pct,
+        bucket: w.bucket,
+        actual_hours: 0
+      })),
+      assignments: Array.from(assignmentMap.values()),
+      inactive: emp.status !== "active"
+    };
+  });
+  return { ...result, weeks: weekObjs, employees };
+}
 var db = getPool();
 var repo = createCapacityRepository(db);
 var service = createCapacityService(repo);
@@ -38510,7 +38581,7 @@ router.get("/api/capacity/planner", async (event, user) => {
     filled_count: Number(rr.filled_count) || 0,
     missing: Math.max(0, (Number(rr.quantity) || 1) - (Number(rr.filled_count) || 0))
   }));
-  return ok({ ...plannerResult, open_requests });
+  return ok({ ...transformPlannerResult(plannerResult), open_requests });
 });
 var handler = async (event) => {
   return withAuth(event, (e5, user) => router.resolve(e5, user));

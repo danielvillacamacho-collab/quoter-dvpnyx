@@ -242,7 +242,6 @@ function SkillsCard({ skills, catalog, onRefresh }) {
               <FilterableSelect
                 value={form.skill_id}
                 onChange={(e) => setForm({ ...form, skill_id: e.target.value })}
-                inputStyle={cx.input}
                 placeholder="Seleccionar..."
                 options={Object.keys(grouped).sort().flatMap((cat) =>
                   grouped[cat].map((s) => ({ id: String(s.id), label: `${cat} — ${s.name}` }))
@@ -254,7 +253,6 @@ function SkillsCard({ skills, catalog, onRefresh }) {
               <FilterableSelect
                 value={form.proficiency}
                 onChange={(e) => setForm({ ...form, proficiency: e.target.value })}
-                inputStyle={cx.input}
                 placeholder="— Selecciona nivel —"
                 options={Object.entries(PROF_LABELS).map(([k, v]) => ({ id: k, label: v }))}
               />
