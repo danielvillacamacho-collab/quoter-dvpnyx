@@ -30,7 +30,7 @@ function canMutate(user: AuthUser): boolean {
 export function createNoveltiesRepository(db: Pool): NoveltiesRepository {
   return {
     async findAll({ page, limit, offset, filters, user }) {
-      const wheres: string[] = ['n.deleted_at IS NULL'];
+      const wheres: string[] = ["n.status = 'approved'"];
       const params: unknown[] = [];
       const add = (v: unknown) => { params.push(v); return `$${params.length}`; };
 
@@ -90,7 +90,7 @@ export function createNoveltiesRepository(db: Pool): NoveltiesRepository {
            FROM employee_novelties n
            LEFT JOIN employees e ON e.id = n.employee_id
            LEFT JOIN novelty_types nt ON nt.id = n.novelty_type_id
-          WHERE n.id = $1 AND n.deleted_at IS NULL`,
+          WHERE n.id = $1 AND n.status = 'approved'`,
         [id],
       );
       return rows[0] ?? null;
@@ -105,11 +105,11 @@ export function createNoveltiesRepository(db: Pool): NoveltiesRepository {
       try {
         const { rows } = await db.query(
           `INSERT INTO employee_novelties
-             (employee_id, novelty_type_id, start_date, end_date, status, notes, created_by)
-           VALUES ($1, $2, $3, $4, 'approved', $5, $6)
+             (employee_id, novelty_type_id, start_date, end_date, status, reason, created_by, approved_by)
+           VALUES ($1, $2, $3, $4, 'approved', $5, $6, $6)
            RETURNING *`,
           [data.employee_id, data.novelty_type_id || null, data.start_date, data.end_date,
-           data.notes || null, actor.id],
+           data.reason || null, actor.id],
         );
         return rows[0];
       } catch (err: unknown) {
@@ -125,7 +125,7 @@ export function createNoveltiesRepository(db: Pool): NoveltiesRepository {
       if (!canMutate(actor)) throw new Forbidden('Sin permisos para editar novedades');
 
       const { rows: existing } = await db.query(
-        `SELECT * FROM employee_novelties WHERE id = $1 AND deleted_at IS NULL`,
+        `SELECT * FROM employee_novelties WHERE id = $1 AND status = 'approved'`,
         [id],
       );
       if (!existing.length) throw new NotFound('Novedad', id);
@@ -137,7 +137,7 @@ export function createNoveltiesRepository(db: Pool): NoveltiesRepository {
       if (data.start_date !== undefined) sets.push(`start_date = ${add(data.start_date)}`);
       if (data.end_date !== undefined) sets.push(`end_date = ${add(data.end_date)}`);
       if (data.novelty_type_id !== undefined) sets.push(`novelty_type_id = ${add(data.novelty_type_id)}`);
-      if (data.notes !== undefined) sets.push(`notes = ${add(data.notes)}`);
+      if (data.reason !== undefined) sets.push(`reason = ${add(data.reason)}`);
 
       if (sets.length === 0) throw new BadRequest('Sin campos para actualizar');
       sets.push(`updated_at = NOW()`);
@@ -145,7 +145,7 @@ export function createNoveltiesRepository(db: Pool): NoveltiesRepository {
       params.push(id);
       try {
         const { rows } = await db.query(
-          `UPDATE employee_novelties SET ${sets.join(', ')} WHERE id = $${params.length} AND deleted_at IS NULL RETURNING *`,
+          `UPDATE employee_novelties SET ${sets.join(', ')} WHERE id = $${params.length} AND status = 'approved' RETURNING *`,
           params,
         );
         if (!rows.length) throw new NotFound('Novedad', id);
@@ -163,8 +163,11 @@ export function createNoveltiesRepository(db: Pool): NoveltiesRepository {
       if (!canMutate(actor)) throw new Forbidden('Sin permisos para eliminar novedades');
 
       const { rows } = await db.query(
-        `UPDATE employee_novelties SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
-        [id],
+        `UPDATE employee_novelties
+            SET status = 'cancelled', cancelled_at = NOW(), cancelled_by = $2
+          WHERE id = $1 AND status = 'approved'
+          RETURNING id`,
+        [id, actor.id],
       );
       if (!rows.length) throw new NotFound('Novedad', id);
     },

@@ -6,6 +6,51 @@ import type { InitiativeStatus } from './types';
 import { NotFound, BadRequest, Forbidden, Conflict } from '@shared/errors';
 import type { AuthUser } from '@shared/types';
 
+/* ----------- initiative_code generation (ported from server/utils/initiative_code.js) ----------- */
+
+const AREA_CODE: Record<string, string> = {
+  product:    'PROD',
+  operations: 'OPER',
+  hr:         'HR',
+  finance:    'FIN',
+  commercial: 'COMM',
+  technology: 'TECH',
+};
+
+function areaCode(businessAreaId: string): string {
+  return AREA_CODE[String(businessAreaId)] || 'XXXX';
+}
+
+function buildInitiativeCode(businessAreaId: string, year: number, seq: number): string {
+  return `II-${areaCode(businessAreaId)}-${year}-${String(seq).padStart(5, '0')}`;
+}
+
+async function nextSequence(conn: PoolClient, businessAreaId: string, year: number): Promise<number> {
+  const code = areaCode(businessAreaId);
+  const prefix = `II-${code}-${year}-`;
+  const { rows } = await conn.query(
+    `SELECT initiative_code FROM internal_initiatives
+      WHERE initiative_code LIKE $1
+      ORDER BY initiative_code DESC LIMIT 1`,
+    [`${prefix}%`],
+  );
+  if (rows.length === 0) return 1;
+  const m = (rows[0].initiative_code as string).match(/-(\d{5})$/);
+  if (!m) return 1;
+  const parsed = parseInt(m[1], 10);
+  return Number.isFinite(parsed) ? parsed + 1 : 1;
+}
+
+async function acquireSequenceLock(conn: PoolClient, businessAreaId: string, year: number): Promise<void> {
+  const key = `II-${areaCode(businessAreaId)}-${year}`;
+  let h = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  await conn.query('SELECT pg_advisory_xact_lock($1::int)', [h | 0]);
+}
+
 export interface InitiativesRepository {
   findAll(params: {
     page: number; limit: number; offset: number;
@@ -49,7 +94,23 @@ export function createInitiativesRepository(db: Pool): InitiativesRepository {
                      WHERE internal_initiative_id = ii.id
                        AND deleted_at IS NULL
                        AND status IN ('planned','active')
-                  ), 0) AS assignments_count
+                  ), 0) AS assignments_count,
+                  COALESCE((
+                    SELECT SUM(iia.weekly_hours * COALESCE(iia.hourly_rate_usd, 0) *
+                      GREATEST(0, (LEAST(CURRENT_DATE, COALESCE(iia.end_date, CURRENT_DATE)) - iia.start_date)::numeric / 7))
+                    FROM internal_initiative_assignments iia
+                    WHERE iia.internal_initiative_id = ii.id
+                      AND iia.deleted_at IS NULL
+                      AND iia.status IN ('active','ended')
+                  ), 0)::numeric(18,2) AS consumed_usd,
+                  COALESCE((
+                    SELECT SUM(iia.weekly_hours *
+                      GREATEST(0, (LEAST(CURRENT_DATE, COALESCE(iia.end_date, CURRENT_DATE)) - iia.start_date)::numeric / 7))
+                    FROM internal_initiative_assignments iia
+                    WHERE iia.internal_initiative_id = ii.id
+                      AND iia.deleted_at IS NULL
+                      AND iia.status IN ('active','ended')
+                  ), 0)::numeric(18,2) AS hours_consumed
              FROM internal_initiatives ii
              LEFT JOIN business_areas ba ON ba.id = ii.business_area_id
              LEFT JOIN users u           ON u.id  = ii.operations_owner_id
@@ -91,16 +152,22 @@ export function createInitiativesRepository(db: Pool): InitiativesRepository {
       }
       if (!data.operations_owner_id) throw new BadRequest('operations_owner_id requerido');
 
+      const year = new Date().getFullYear();
+      await acquireSequenceLock(conn, data.business_area_id, year);
+      const seq = await nextSequence(conn, data.business_area_id, year);
+      const initiative_code = buildInitiativeCode(data.business_area_id, year, seq);
+
       const { rows } = await conn.query(
         `INSERT INTO internal_initiatives
-           (name, description, business_area_id, status,
+           (initiative_code, name, description, business_area_id, status,
             budget_usd, hours_estimated, start_date, target_end_date,
             operations_owner_id, source_system, created_by, updated_by)
-         VALUES ($1, $2, $3, 'active',
-                 $4, $5, $6, $7,
-                 $8, 'ui', $9, $9)
+         VALUES ($1, $2, $3, $4, 'active',
+                 $5, $6, $7, $8,
+                 $9, 'ui', $10, $10)
          RETURNING *`,
         [
+          initiative_code,
           String(data.name).trim(), data.description || null, data.business_area_id,
           data.budget_usd, data.hours_estimated || 0, data.start_date, data.target_end_date || null,
           data.operations_owner_id, actor.id,

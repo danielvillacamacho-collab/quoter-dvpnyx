@@ -191,18 +191,48 @@ router.put('/api/parameters/:id', async (event, user) => {
  * ================================================================== */
 
 router.get('/api/me/profile', async (_event, user) => {
-  return ok(await authService.getMe(user.id));
+  const { rows: empRows } = await db.query(
+    `SELECT e.id, e.first_name, e.last_name, e.personal_email, e.corporate_email,
+            e.country, e.city, e.level, e.seniority_label, e.employment_type,
+            e.weekly_capacity_hours, e.languages, e.start_date, e.status,
+            e.bio, e.linkedin_url, e.github_url, e.portfolio_url,
+            a.name AS area_name
+       FROM employees e
+       LEFT JOIN areas a ON a.id = e.area_id
+      WHERE e.user_id = $1 AND e.deleted_at IS NULL`,
+    [user.id],
+  );
+  if (!empRows.length) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+  return ok(empRows[0]);
 });
 
 router.put('/api/me/profile', async (event, user) => {
   const body = JSON.parse(event.body || '{}');
-  // Self-service: only allow name update (not role/function)
+  const { bio, linkedin_url, github_url, portfolio_url, languages, city } = body;
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
   const { rows } = await db.query(
-    `UPDATE users SET name = COALESCE($1, name), updated_at = NOW()
-     WHERE id = $2 RETURNING id, email, name, role, function`,
-    [body.name ?? null, user.id],
+    `UPDATE employees SET
+        bio           = COALESCE($1, bio),
+        linkedin_url  = COALESCE($2, linkedin_url),
+        github_url    = COALESCE($3, github_url),
+        portfolio_url = COALESCE($4, portfolio_url),
+        languages     = COALESCE($5, languages),
+        city          = COALESCE($6, city),
+        updated_at    = NOW()
+      WHERE id = $7
+      RETURNING id, bio, linkedin_url, github_url, portfolio_url, languages, city`,
+    [
+      bio ?? null,
+      linkedin_url ?? null,
+      github_url ?? null,
+      portfolio_url ?? null,
+      languages ? JSON.stringify(languages) : null,
+      city ?? null,
+      empId,
+    ],
   );
-  if (!rows.length) return error(404, { error: 'Usuario no encontrado' });
+  if (!rows.length) return error(404, { error: 'Empleado no encontrado' });
   return ok(rows[0]);
 });
 
@@ -237,8 +267,16 @@ router.get('/api/me/skills', async (_event, user) => {
   const empId = await getEmployeeId(user.id);
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
 
-  const skills = await empService.getSkills(empId);
-  return ok({ data: skills });
+  const { rows } = await db.query(
+    `SELECT es.id, es.skill_id, es.proficiency, es.years_experience, es.notes, es.created_at,
+            s.name AS skill_name, s.category AS skill_category
+       FROM employee_skills es
+       JOIN skills s ON s.id = es.skill_id
+      WHERE es.employee_id = $1
+      ORDER BY s.category NULLS LAST, s.name`,
+    [empId],
+  );
+  return ok({ data: rows });
 });
 
 router.post('/api/me/skills', async (event, user) => {
@@ -246,12 +284,43 @@ router.post('/api/me/skills', async (event, user) => {
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
 
   const body = JSON.parse(event.body || '{}');
-  const { skill_ids } = body;
+  const { skill_id, proficiency, years_experience, notes } = body as Record<string, unknown>;
+  if (!skill_id) return error(400, { error: 'skill_id es requerido' });
 
-  if (!Array.isArray(skill_ids)) return error(400, { error: 'skill_ids debe ser un array' });
+  const VALID_PROFICIENCY = ['beginner', 'intermediate', 'advanced', 'expert'];
+  if (proficiency && !VALID_PROFICIENCY.includes(proficiency as string)) {
+    return error(400, { error: 'proficiency inválido' });
+  }
 
-  const skills = await empService.setSkills(empId, skill_ids, user);
-  return ok({ data: skills });
+  const { rows: sRows } = await db.query('SELECT id, active FROM skills WHERE id=$1', [skill_id]);
+  if (!sRows.length) return error(400, { error: 'Skill no existe' });
+  if (!sRows[0].active) return error(400, { error: 'El skill está inactivo' });
+
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO employee_skills (employee_id, skill_id, proficiency, years_experience, notes)
+        VALUES ($1, $2, COALESCE($3,'intermediate'), $4, $5) RETURNING *`,
+      [empId, skill_id, proficiency || null,
+       years_experience != null ? Number(years_experience) : null,
+       notes || null],
+    );
+    return created(rows[0]);
+  } catch (e: unknown) {
+    if ((e as { code?: string }).code === '23505') return error(409, { error: 'Ya tienes ese skill asignado' });
+    throw e;
+  }
+});
+
+router.delete('/api/me/skills/:skillId', async (event, user) => {
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  const { rows } = await db.query(
+    'DELETE FROM employee_skills WHERE employee_id=$1 AND skill_id=$2 RETURNING *',
+    [empId, event.pathParameters!.skillId!],
+  );
+  if (!rows.length) return error(404, { error: 'Skill no encontrado en tu perfil' });
+  return ok({ message: 'Skill removido' });
 });
 
 router.get('/api/me/education', async (_event, user) => {
@@ -259,7 +328,7 @@ router.get('/api/me/education', async (_event, user) => {
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
 
   const { rows } = await db.query(
-    'SELECT * FROM employee_education WHERE employee_id=$1 ORDER BY start_date DESC',
+    'SELECT * FROM employee_education WHERE employee_id=$1 ORDER BY start_year DESC NULLS LAST',
     [empId],
   );
   return ok({ data: rows });
@@ -270,14 +339,14 @@ router.post('/api/me/education', async (event, user) => {
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
 
   const body = JSON.parse(event.body || '{}');
-  const { institution, degree, field_of_study, start_date, end_date, gpa, description } = body;
+  const { institution, degree, field_of_study, start_year, end_year, description } = body;
 
   const { rows } = await db.query(
     `INSERT INTO employee_education
-     (employee_id, institution, degree, field_of_study, start_date, end_date, gpa, description, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+     (employee_id, institution, degree, field_of_study, start_year, end_year, description, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
      RETURNING *`,
-    [empId, institution, degree, field_of_study, start_date, end_date, gpa, description],
+    [empId, institution, degree, field_of_study, start_year ?? null, end_year ?? null, description ?? null],
   );
 
   await events.emit(db, {
@@ -296,21 +365,20 @@ router.put('/api/me/education/:id', async (event, user) => {
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
 
   const body = JSON.parse(event.body || '{}');
-  const { institution, degree, field_of_study, start_date, end_date, gpa, description } = body;
+  const { institution, degree, field_of_study, start_year, end_year, description } = body;
 
   const { rows } = await db.query(
     `UPDATE employee_education SET
-     institution = COALESCE($1, institution),
-     degree = COALESCE($2, degree),
+     institution  = COALESCE($1, institution),
+     degree       = COALESCE($2, degree),
      field_of_study = COALESCE($3, field_of_study),
-     start_date = COALESCE($4, start_date),
-     end_date = COALESCE($5, end_date),
-     gpa = COALESCE($6, gpa),
-     description = COALESCE($7, description),
-     updated_at = NOW()
-     WHERE id = $8 AND employee_id = $9
+     start_year   = COALESCE($4, start_year),
+     end_year     = COALESCE($5, end_year),
+     description  = COALESCE($6, description),
+     updated_at   = NOW()
+     WHERE id = $7 AND employee_id = $8
      RETURNING *`,
-    [institution, degree, field_of_study, start_date, end_date, gpa, description, event.pathParameters!.id!, empId],
+    [institution ?? null, degree ?? null, field_of_study ?? null, start_year ?? null, end_year ?? null, description ?? null, event.pathParameters!.id!, empId],
   );
 
   if (!rows.length) return error(404, { error: 'Educación no encontrada' });
@@ -453,9 +521,9 @@ router.get('/api/search', async (event, _user) => {
       [like, limit],
     ),
     db.query(
-      `SELECT id, name, status FROM quotations
-       WHERE name ILIKE $1
-       ORDER BY name LIMIT $2`,
+      `SELECT id, project_name, status FROM quotations
+       WHERE project_name ILIKE $1 AND deleted_at IS NULL
+       ORDER BY project_name LIMIT $2`,
       [like, limit],
     ),
   ]);
@@ -474,7 +542,7 @@ router.get('/api/search', async (event, _user) => {
       type: 'employee', id: r.id, title: `${r.first_name} ${r.last_name}`, subtitle: r.level, url: `/employees/${r.id}`,
     })),
     ...quotations.rows.map((r: Record<string, unknown>) => ({
-      type: 'quotation', id: r.id, title: r.name, subtitle: r.status, url: `/quotations/${r.id}`,
+      type: 'quotation', id: r.id, title: r.project_name, subtitle: r.status, url: `/quotations/${r.id}`,
     })),
   ];
 

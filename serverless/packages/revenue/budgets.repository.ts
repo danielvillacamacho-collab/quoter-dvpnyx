@@ -153,13 +153,13 @@ export function createBudgetRepository(db: Pool): BudgetRepository {
             END AS pct
          FROM budgets b
          LEFT JOIN LATERAL (
-           SELECT SUM(o.amount_usd)::numeric(18,2) AS won_usd
+           SELECT SUM(o.booking_amount_usd)::numeric(18,2) AS won_usd
            FROM opportunities o
            WHERE o.deleted_at IS NULL
-             AND o.stage = 'closed_won'
-             AND EXTRACT(YEAR FROM o.close_date)::int = b.period_year
-             AND (b.period_quarter IS NULL OR CEIL(EXTRACT(MONTH FROM o.close_date) / 3.0)::int = b.period_quarter)
-             AND (b.period_month IS NULL OR EXTRACT(MONTH FROM o.close_date)::int = b.period_month)
+             AND o.status = 'closed_won'
+             AND EXTRACT(YEAR FROM o.closed_at)::int = b.period_year
+             AND (b.period_quarter IS NULL OR CEIL(EXTRACT(MONTH FROM o.closed_at) / 3.0)::int = b.period_quarter)
+             AND (b.period_month IS NULL OR EXTRACT(MONTH FROM o.closed_at)::int = b.period_month)
              AND (b.country IS NULL OR o.country = b.country)
          ) actual ON TRUE
          ${where}

@@ -6,7 +6,6 @@ import {
   HttpMethod,
   DomainName,
 } from 'aws-cdk-lib/aws-apigatewayv2';
-import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import type { LayerVersion } from 'aws-cdk-lib/aws-lambda';
 import type { IVpc, ISecurityGroup } from 'aws-cdk-lib/aws-ec2';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
@@ -288,21 +287,39 @@ export class ApiStack extends Stack {
     const platform = new ModuleLambda(this, 'Platform', {
       ...common, moduleName: 'platform', entry: pkg('platform'),
       routes: [
-        { path: '/api/auth/login',           methods: [HttpMethod.POST] },
-        { path: '/api/auth/me',              methods: [HttpMethod.GET] },
-        { path: '/api/auth/change-password', methods: [HttpMethod.POST] },
-        { path: '/api/auth/me/preferences',  methods: [HttpMethod.PUT] },
-        { path: '/api/users',                methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/users/{id}',           methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/notifications',        methods: [HttpMethod.GET] },
-        { path: '/api/notifications/{id}/read', methods: [HttpMethod.PUT] },
-        { path: '/api/parameters',           methods: [HttpMethod.GET, HttpMethod.PUT] },
-        { path: '/api/me/profile',           methods: [HttpMethod.GET, HttpMethod.PUT] },
-        { path: '/api/me/assignments',       methods: [HttpMethod.GET] },
-        { path: '/api/bulk-import/{entity}', methods: [HttpMethod.POST] },
+        // Auth — login & Google OAuth (no-auth routes, bypass JWT check)
+        { path: '/api/auth/login',               methods: [HttpMethod.POST] },
+        { path: '/api/auth/google',              methods: [HttpMethod.POST] },
+        { path: '/api/auth/google-callback',     methods: [HttpMethod.POST] },
+        { path: '/api/auth/me',                  methods: [HttpMethod.GET] },
+        { path: '/api/auth/change-password',     methods: [HttpMethod.POST] },
+        { path: '/api/auth/me/preferences',      methods: [HttpMethod.PUT] },
+        // Users
+        { path: '/api/users',                    methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/users/{id}',               methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/users/lookup',             methods: [HttpMethod.GET] },
+        // Notifications
+        { path: '/api/notifications',            methods: [HttpMethod.GET] },
+        { path: '/api/notifications/unread-count', methods: [HttpMethod.GET] },
+        { path: '/api/notifications/{id}/read',  methods: [HttpMethod.PUT] },
+        { path: '/api/notifications/read-all',   methods: [HttpMethod.POST] },
+        // Parameters
+        { path: '/api/parameters',               methods: [HttpMethod.GET] },
+        { path: '/api/parameters/{id}',          methods: [HttpMethod.PUT] },
+        // Self-service profile (/api/me/*)
+        { path: '/api/me/profile',               methods: [HttpMethod.GET, HttpMethod.PUT] },
+        { path: '/api/me/assignments',           methods: [HttpMethod.GET] },
+        { path: '/api/me/skills',                methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/me/skills/{skillId}',      methods: [HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/me/education',             methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/me/education/{id}',        methods: [HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/me/completeness',          methods: [HttpMethod.GET] },
+        // Bulk import & search
+        { path: '/api/bulk-import/{entity}',     methods: [HttpMethod.POST] },
         { path: '/api/bulk-import/templates/{entity}', methods: [HttpMethod.GET] },
-        { path: '/api/health',               methods: [HttpMethod.GET] },
-        { path: '/api/search',               methods: [HttpMethod.GET] },
+        { path: '/api/search',                   methods: [HttpMethod.GET] },
+        // Health (no-auth)
+        { path: '/api/health',                   methods: [HttpMethod.GET] },
       ],
     });
     grantSecrets(platform);

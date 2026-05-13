@@ -6,7 +6,7 @@ export interface EmployeeRepository {
   findAll(params: { page: number; limit: number; offset: number; filters: Record<string, string | undefined>; sort: SortParams }): Promise<PaginatedResult<Employee>>;
   findById(id: string): Promise<Employee | null>;
   lookup(): Promise<Pick<Employee, 'id' | 'first_name' | 'last_name' | 'area_id' | 'level' | 'status' | 'weekly_capacity_hours'>[]>;
-  create(data: Record<string, unknown>): Promise<Employee>;
+  create(data: Record<string, unknown>, createdBy: string): Promise<Employee>;
   update(id: string, data: Record<string, unknown>): Promise<Employee | null>;
   softDelete(id: string): Promise<Employee | null>;
   hasActiveAssignments(id: string): Promise<boolean>;
@@ -59,11 +59,11 @@ export function createEmployeeRepository(db: Pool): EmployeeRepository {
       return rows;
     },
 
-    async create(data) {
+    async create(data, createdBy) {
       const { rows } = await db.query(
-        `INSERT INTO employees (first_name, last_name, personal_email, corporate_email, country, city, area_id, level, seniority_label, employment_type, weekly_capacity_hours, languages, start_date, end_date, status, squad_id, manager_user_id, notes, tags, user_id, bio, linkedin_url, github_url, portfolio_url)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *`,
-        [data.first_name, data.last_name, data.personal_email || null, data.corporate_email || null, data.country || null, data.city || null, data.area_id || null, data.level || null, data.seniority_label || null, data.employment_type || 'fulltime', data.weekly_capacity_hours ?? 40, data.languages || null, data.start_date || null, data.end_date || null, data.status || 'active', data.squad_id || null, data.manager_user_id || null, data.notes || null, data.tags || null, data.user_id || null, data.bio || null, data.linkedin_url || null, data.github_url || null, data.portfolio_url || null],
+        `INSERT INTO employees (first_name, last_name, personal_email, corporate_email, country, city, area_id, level, seniority_label, employment_type, weekly_capacity_hours, languages, start_date, end_date, status, squad_id, manager_user_id, notes, tags, user_id, bio, linkedin_url, github_url, portfolio_url, created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
+        [data.first_name, data.last_name, data.personal_email || null, data.corporate_email || null, data.country || null, data.city || null, data.area_id || null, data.level || null, data.seniority_label || null, data.employment_type || 'fulltime', data.weekly_capacity_hours ?? 40, data.languages || null, data.start_date || null, data.end_date || null, data.status || 'active', data.squad_id || null, data.manager_user_id || null, data.notes || null, data.tags || null, data.user_id || null, data.bio || null, data.linkedin_url || null, data.github_url || null, data.portfolio_url || null, createdBy],
       );
       return rows[0];
     },

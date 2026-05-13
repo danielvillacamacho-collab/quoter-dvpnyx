@@ -37,7 +37,7 @@ export function createEmployeeService(repo: EmployeeRepository, events: EventEmi
       if (data.status && !(VALID_STATUSES as readonly string[]).includes(String(data.status))) throw new BadRequest('Status inválido');
       if (data.employment_type && !(VALID_EMPLOYMENT_TYPES as readonly string[]).includes(String(data.employment_type))) throw new BadRequest('Tipo de empleo inválido');
 
-      const emp = await repo.create(data);
+      const emp = await repo.create(data, user.id);
       await events.emit(db, {
         event_type: 'employee.created', entity_type: 'employee', entity_id: emp.id,
         actor_user_id: user.id, payload: { first_name: emp.first_name, last_name: emp.last_name },

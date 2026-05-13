@@ -18,7 +18,33 @@ const service = createResourceRequestService(repo, events, db);
 
 const router = createRouter();
 
-router.get('/api/resource-requests', async (event, user) => {
+router.get('/api/resource-requests/lookup', async (event) => {
+  const qs = event.queryStringParameters || {};
+  const includeAll = String(qs.include_all || '').toLowerCase() === 'true';
+  const wheres = ['rr.deleted_at IS NULL'];
+  const params: unknown[] = [];
+  const add = (v: unknown) => { params.push(v); return `$${params.length}`; };
+  if (!includeAll) wheres.push(`rr.status NOT IN ('filled','cancelled')`);
+  if (qs.contract_id) wheres.push(`rr.contract_id = ${add(qs.contract_id)}`);
+  const { rows } = await db.query(
+    `SELECT rr.id, rr.role_title, rr.level, rr.weekly_hours,
+            rr.start_date, rr.end_date, rr.status, rr.priority,
+            rr.contract_id, c.name AS contract_name, c.type AS contract_type,
+            c.original_currency AS contract_currency,
+            rr.area_id, a.name AS area_name
+       FROM resource_requests rr
+       LEFT JOIN contracts c ON c.id = rr.contract_id
+       LEFT JOIN areas a ON a.id = rr.area_id
+      WHERE ${wheres.join(' AND ')}
+      ORDER BY
+        CASE rr.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+        rr.created_at DESC`,
+    params,
+  );
+  return ok({ data: rows });
+});
+
+router.get('/api/resource-requests', async (event, _user) => {
   const qs = event.queryStringParameters || {};
   const { page, limit, offset } = parsePagination(qs);
   const sort = parseSort(qs, SORTABLE, { defaultField: 'created_at', defaultDir: 'desc', tieBreaker: 'rr.id ASC' });

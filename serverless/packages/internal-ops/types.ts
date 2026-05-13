@@ -89,7 +89,7 @@ export interface Novelty {
   start_date: string;
   end_date: string;
   status: 'pending' | 'approved' | 'rejected';
-  notes: string | null;
+  reason: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -104,7 +104,7 @@ export interface CreateNoveltyDTO {
   novelty_type_id?: string;
   start_date: string;
   end_date: string;
-  notes?: string;
+  reason?: string;
 }
 
 export interface NoveltyFilters {
