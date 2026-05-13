@@ -33,7 +33,7 @@ export default function useQuotationLookups(clientId) {
     let cancelled = false;
     const mountedClientId = mountClientIdRef.current;
     Promise.all([
-      apiGet('/api/clients?limit=500&active=true').catch(() => ({ data: [] })),
+      apiGet('/api/clients?limit=500').catch(() => ({ data: [] })),
       apiGet('/api/users/lookup?function=comercial').catch(() => []),
     ]).then(async ([clientsRes, commercialsRes]) => {
       if (cancelled) return;

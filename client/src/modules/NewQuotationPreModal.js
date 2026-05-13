@@ -40,7 +40,7 @@ export default function NewQuotationPreModal({ type, onContext, onCancel }) {
 
   // Load active clients on mount
   useEffect(() => {
-    apiGet('/api/clients?limit=100&active=true')
+    apiGet('/api/clients?limit=500')
       .then((r) => setClients(r?.data || []))
       .catch(() => setClients([]));
   }, []);

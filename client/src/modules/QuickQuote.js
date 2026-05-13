@@ -109,7 +109,7 @@ export default function QuickQuote() {
 
   useEffect(() => {
     let cancelled = false;
-    apiGet('/api/clients?limit=200&active=true')
+    apiGet('/api/clients?limit=500')
       .then((r) => { if (!cancelled) { setClients(r?.data || []); setClientsError(false); } })
       .catch(() => { if (!cancelled) { setClients([]); setClientsError(true); } });
     return () => { cancelled = true; };

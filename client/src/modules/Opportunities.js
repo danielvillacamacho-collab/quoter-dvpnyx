@@ -562,7 +562,7 @@ export default function Opportunities() {
 
   const loadClients = useCallback(async () => {
     try {
-      const r = await apiGet('/api/clients?limit=100&active=true');
+      const r = await apiGet('/api/clients?limit=500');
       setClients(r.data || []);
     } catch {
       setClients([]);
