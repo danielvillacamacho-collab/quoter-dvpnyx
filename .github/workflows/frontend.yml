@@ -1,0 +1,51 @@
+name: Deploy Frontend to S3
+
+on:
+  push:
+    branches:
+      - claude/nostalgic-goodall-53be46
+    paths:
+      - 'client/**' 
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18' 
+          cache: 'npm'
+          cache-dependency-path: './client/package-lock.json'
+
+      - name: Install Dependencies
+        run: |
+          cd client
+          npm install
+
+      - name: Build React App
+        env:
+          REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+        run: |
+          cd client
+          npm run build
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: mx-central-1
+
+      - name: Deploy to S3
+        run: |
+          aws s3 sync client/build/ s3://forge-frontend-bucket-dev --delete
+
+      - name: Invalidate CloudFront Cache
+        run: |
+          # Esto es vital para que los cambios se vean de inmediato
+          aws cloudfront create-invalidation --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID_DEV }} --paths "/*"
