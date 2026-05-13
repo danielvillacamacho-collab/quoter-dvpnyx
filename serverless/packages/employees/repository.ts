@@ -61,9 +61,9 @@ export function createEmployeeRepository(db: Pool): EmployeeRepository {
 
     async create(data) {
       const { rows } = await db.query(
-        `INSERT INTO employees (first_name, last_name, personal_email, corporate_email, country, city, area_id, level, seniority_label, employment_type, weekly_capacity_hours, languages, start_date, end_date, status, squad_id, manager_user_id, notes, tags, user_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
-        [data.first_name, data.last_name, data.personal_email || null, data.corporate_email || null, data.country || null, data.city || null, data.area_id || null, data.level || null, data.seniority_label || null, data.employment_type || 'fulltime', data.weekly_capacity_hours ?? 40, data.languages || null, data.start_date || null, data.end_date || null, data.status || 'active', data.squad_id || null, data.manager_user_id || null, data.notes || null, data.tags || null, data.user_id || null],
+        `INSERT INTO employees (first_name, last_name, personal_email, corporate_email, country, city, area_id, level, seniority_label, employment_type, weekly_capacity_hours, languages, start_date, end_date, status, squad_id, manager_user_id, notes, tags, user_id, bio, linkedin_url, github_url, portfolio_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING *`,
+        [data.first_name, data.last_name, data.personal_email || null, data.corporate_email || null, data.country || null, data.city || null, data.area_id || null, data.level || null, data.seniority_label || null, data.employment_type || 'fulltime', data.weekly_capacity_hours ?? 40, data.languages || null, data.start_date || null, data.end_date || null, data.status || 'active', data.squad_id || null, data.manager_user_id || null, data.notes || null, data.tags || null, data.user_id || null, data.bio || null, data.linkedin_url || null, data.github_url || null, data.portfolio_url || null],
       );
       return rows[0];
     },
@@ -79,9 +79,12 @@ export function createEmployeeRepository(db: Pool): EmployeeRepository {
             languages=COALESCE($12,languages), start_date=COALESCE($13,start_date),
             end_date=COALESCE($14,end_date), status=COALESCE($15,status), squad_id=COALESCE($16,squad_id),
             manager_user_id=COALESCE($17,manager_user_id), notes=COALESCE($18,notes),
-            tags=COALESCE($19,tags), user_id=COALESCE($20,user_id), updated_at=NOW()
-          WHERE id=$21 AND deleted_at IS NULL RETURNING *`,
-        [data.first_name||null,data.last_name||null,data.personal_email??null,data.corporate_email??null,data.country??null,data.city??null,data.area_id??null,data.level??null,data.seniority_label??null,data.employment_type??null,data.weekly_capacity_hours??null,data.languages??null,data.start_date??null,data.end_date??null,data.status??null,data.squad_id??null,data.manager_user_id??null,data.notes??null,data.tags??null,data.user_id??null,id],
+            tags=COALESCE($19,tags), user_id=COALESCE($20,user_id),
+            bio=COALESCE($21,bio), linkedin_url=COALESCE($22,linkedin_url),
+            github_url=COALESCE($23,github_url), portfolio_url=COALESCE($24,portfolio_url),
+            updated_at=NOW()
+          WHERE id=$25 AND deleted_at IS NULL RETURNING *`,
+        [data.first_name||null,data.last_name||null,data.personal_email??null,data.corporate_email??null,data.country??null,data.city??null,data.area_id??null,data.level??null,data.seniority_label??null,data.employment_type??null,data.weekly_capacity_hours??null,data.languages??null,data.start_date??null,data.end_date??null,data.status??null,data.squad_id??null,data.manager_user_id??null,data.notes??null,data.tags??null,data.user_id??null,data.bio??null,data.linkedin_url??null,data.github_url??null,data.portfolio_url??null,id],
       );
       return rows[0] ?? null;
     },

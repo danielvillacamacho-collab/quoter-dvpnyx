@@ -2,15 +2,19 @@
   "name": "quoter-serverless",
   "version": "1.0.0",
   "private": true,
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "invoke": "tsx scripts/invoke-local.ts",
+    "package:lambdas": "powershell -ExecutionPolicy Bypass -File scripts/package-lambdas.ps1",
     "db:up": "docker compose -f docker-compose.test.yml up -d",
     "db:down": "docker compose -f docker-compose.test.yml down",
     "db:migrate": "node ../server/database/migrate.js",
+    "db:migrate:aws": "tsx scripts/run-db-migration.ts",
     "cdk": "cdk",
     "synth": "cdk synth",
     "deploy": "cdk deploy --all",
@@ -18,19 +22,23 @@
   },
   "devDependencies": {
     "@types/aws-lambda": "^8.10.145",
+    "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/pg": "^8.11.10",
     "aws-cdk": "^2.170.0",
     "aws-cdk-lib": "^2.170.0",
     "constructs": "^10.4.2",
     "dotenv": "^16.4.0",
-    "esbuild": "^0.24.0",
-    "tsx": "^4.19.0",
+    "esbuild": "^0.24.2",
     "eslint": "^9.15.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^2.1.0"
   },
   "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.758.0",
+    "bcryptjs": "^2.4.3",
+    "google-auth-library": "^10.6.2",
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.0"
   }

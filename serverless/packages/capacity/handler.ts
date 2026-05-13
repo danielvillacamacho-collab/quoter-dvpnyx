@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import type { APIGatewayProxyEvent } from 'aws-lambda';
 import { createRouter } from '@shared/http/router';
 import { ok } from '@shared/http/response';
 import { withAuth } from '@shared/auth/middleware';
@@ -27,6 +27,6 @@ router.get('/api/capacity/planner', async (event, user) => {
   return ok(await service.getPlanner(filters));
 });
 
-export const handler = async (event: APIGatewayProxyEventV2) => {
+export const handler = async (event: APIGatewayProxyEvent) => {
   return withAuth(event, (e, user) => router.resolve(e, user));
 };

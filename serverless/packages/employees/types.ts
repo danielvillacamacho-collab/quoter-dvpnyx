@@ -15,7 +15,7 @@ export const EMPLOYEE_EDITABLE_FIELDS = [
   'country', 'city', 'area_id', 'level', 'seniority_label',
   'employment_type', 'weekly_capacity_hours', 'languages',
   'start_date', 'end_date', 'status', 'squad_id', 'manager_user_id',
-  'notes', 'tags', 'user_id',
+  'notes', 'tags', 'user_id', 'bio', 'linkedin_url', 'github_url', 'portfolio_url',
 ] as const;
 
 export interface Employee {
@@ -28,6 +28,7 @@ export interface Employee {
   city: string | null;
   area_id: string | null;
   level: string | null;
+  seniority_label: string | null;
   status: string;
   employment_type: string;
   weekly_capacity_hours: number;
@@ -35,6 +36,11 @@ export interface Employee {
   end_date: string | null;
   user_id: string | null;
   manager_user_id: string | null;
+  bio: string | null;
+  linkedin_url: string | null;
+  github_url: string | null;
+  portfolio_url: string | null;
+  languages: unknown | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;

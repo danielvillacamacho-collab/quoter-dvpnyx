@@ -56,7 +56,7 @@ export function createEmployeeService(repo: EmployeeRepository, events: EventEmi
 
       await events.emit(db, {
         event_type: 'employee.updated', entity_type: 'employee', entity_id: after.id,
-        actor_user_id: user.id, payload: buildUpdatePayload(before, after, [...EMPLOYEE_EDITABLE_FIELDS]),
+        actor_user_id: user.id, payload: buildUpdatePayload(before as Record<string, unknown>, after as Record<string, unknown>, [...EMPLOYEE_EDITABLE_FIELDS]),
       });
       return after;
     },

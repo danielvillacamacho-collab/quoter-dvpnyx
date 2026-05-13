@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import type { APIGatewayProxyEvent } from 'aws-lambda';
 import { createRouter } from '@shared/http/router';
 import { ok, created, message, paginated } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
@@ -88,6 +88,6 @@ router.delete('/api/activities/:id', async (event, user) => {
   return message('Actividad eliminada');
 });
 
-export const handler = async (event: APIGatewayProxyEventV2) => {
+export const handler = async (event: APIGatewayProxyEvent) => {
   return withAuth(event, (e, user) => router.resolve(e, user));
 };

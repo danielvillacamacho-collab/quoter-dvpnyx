@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import type { APIGatewayProxyEvent } from 'aws-lambda';
 import { createRouter } from '@shared/http/router';
 import { ok, created } from '@shared/http/response';
 import { withAuth } from '@shared/auth/middleware';
@@ -95,6 +95,6 @@ router.post('/api/projects/:contract_id/closeout', async (event, user) => {
 
 /* ── Lambda entry point ── */
 
-export const handler = async (event: APIGatewayProxyEventV2) => {
+export const handler = async (event: APIGatewayProxyEvent) => {
   return withAuth(event, (e, user) => router.resolve(e, user));
 };

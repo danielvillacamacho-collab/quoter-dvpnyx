@@ -1,5 +1,5 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { AppError } from '@shared/errors';
+import { createRouter, getEventMethod, getEventPath, type RouterEvent } from '@shared/http/router';
 import { ok, created, message, error } from '@shared/http/response';
 import { withAuth } from '@shared/auth/middleware';
 import { requireAdmin, requireSuperadmin } from '@shared/auth/rbac';
@@ -8,12 +8,16 @@ import { createEventEmitter } from '@shared/events/emitter';
 import { createAuthService } from './auth.service';
 import { createUsersRepository } from './users.repository';
 import { createNotificationsRepository } from './notifications.repository';
+import { createEmployeeRepository } from '../employees/repository';
+import { createEmployeeService } from '../employees/service';
 
 const db = getPool();
 const events = createEventEmitter();
 const authService = createAuthService(db);
 const usersRepo = createUsersRepository(db);
 const notifRepo = createNotificationsRepository(db);
+const empRepo = createEmployeeRepository(db);
+const empService = createEmployeeService(empRepo, events, db);
 
 const router = createRouter();
 
@@ -24,6 +28,21 @@ const router = createRouter();
 router.post('/api/auth/login', async (event, _user) => {
   const body = JSON.parse(event.body || '{}');
   return ok(await authService.login(body.email, body.password));
+});
+
+router.post('/api/auth/google', async (event, _user) => {
+  const body = parseJsonBody(event);
+  return ok(await authService.googleLogin(body.credential as string | undefined, getSourceIp(event)));
+});
+
+router.post('/api/auth/google-callback', async (event, _user) => {
+  const credential = parseFormBody(event).get('credential') || undefined;
+  try {
+    const result = await authService.googleLogin(credential, getSourceIp(event));
+    return redirect(`/login?google_token=${encodeURIComponent(result.token)}`);
+  } catch (err) {
+    return redirect(`/login?error=${encodeURIComponent(toGoogleCallbackError(err))}`);
+  }
 });
 
 router.get('/api/auth/me', async (_event, user) => {
@@ -206,6 +225,157 @@ router.get('/api/me/assignments', async (_event, user) => {
   return ok({ data: rows });
 });
 
+async function getEmployeeId(userId: string): Promise<string | null> {
+  const { rows } = await db.query(
+    'SELECT id FROM employees WHERE user_id=$1 AND deleted_at IS NULL',
+    [userId],
+  );
+  return rows.length ? rows[0].id : null;
+}
+
+router.get('/api/me/skills', async (_event, user) => {
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  const skills = await empService.getSkills(empId);
+  return ok({ data: skills });
+});
+
+router.post('/api/me/skills', async (event, user) => {
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  const body = JSON.parse(event.body || '{}');
+  const { skill_ids } = body;
+
+  if (!Array.isArray(skill_ids)) return error(400, { error: 'skill_ids debe ser un array' });
+
+  const skills = await empService.setSkills(empId, skill_ids, user);
+  return ok({ data: skills });
+});
+
+router.get('/api/me/education', async (_event, user) => {
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  const { rows } = await db.query(
+    'SELECT * FROM employee_education WHERE employee_id=$1 ORDER BY start_date DESC',
+    [empId],
+  );
+  return ok({ data: rows });
+});
+
+router.post('/api/me/education', async (event, user) => {
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  const body = JSON.parse(event.body || '{}');
+  const { institution, degree, field_of_study, start_date, end_date, gpa, description } = body;
+
+  const { rows } = await db.query(
+    `INSERT INTO employee_education
+     (employee_id, institution, degree, field_of_study, start_date, end_date, gpa, description, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+     RETURNING *`,
+    [empId, institution, degree, field_of_study, start_date, end_date, gpa, description],
+  );
+
+  await events.emit(db, {
+    event_type: 'employee.education_created',
+    entity_type: 'employee_education',
+    entity_id: rows[0].id,
+    actor_user_id: user.id,
+    payload: { institution, degree },
+  });
+
+  return created(rows[0]);
+});
+
+router.put('/api/me/education/:id', async (event, user) => {
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  const body = JSON.parse(event.body || '{}');
+  const { institution, degree, field_of_study, start_date, end_date, gpa, description } = body;
+
+  const { rows } = await db.query(
+    `UPDATE employee_education SET
+     institution = COALESCE($1, institution),
+     degree = COALESCE($2, degree),
+     field_of_study = COALESCE($3, field_of_study),
+     start_date = COALESCE($4, start_date),
+     end_date = COALESCE($5, end_date),
+     gpa = COALESCE($6, gpa),
+     description = COALESCE($7, description),
+     updated_at = NOW()
+     WHERE id = $8 AND employee_id = $9
+     RETURNING *`,
+    [institution, degree, field_of_study, start_date, end_date, gpa, description, event.pathParameters!.id!, empId],
+  );
+
+  if (!rows.length) return error(404, { error: 'Educación no encontrada' });
+
+  await events.emit(db, {
+    event_type: 'employee.education_updated',
+    entity_type: 'employee_education',
+    entity_id: rows[0].id,
+    actor_user_id: user.id,
+    payload: { institution, degree },
+  });
+
+  return ok(rows[0]);
+});
+
+router.delete('/api/me/education/:id', async (event, user) => {
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  const { rows } = await db.query(
+    'DELETE FROM employee_education WHERE id=$1 AND employee_id=$2 RETURNING *',
+    [event.pathParameters!.id!, empId],
+  );
+
+  if (!rows.length) return error(404, { error: 'Educación no encontrada' });
+
+  await events.emit(db, {
+    event_type: 'employee.education_deleted',
+    entity_type: 'employee_education',
+    entity_id: rows[0].id,
+    actor_user_id: user.id,
+    payload: { institution: rows[0].institution, degree: rows[0].degree },
+  });
+
+  return message('Educación eliminada');
+});
+
+router.get('/api/me/completeness', async (_event, user) => {
+  const empId = await getEmployeeId(user.id);
+  if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  const emp = await empService.getById(empId);
+
+  // Count skills and education
+  const { rows: skills } = await db.query(
+    'SELECT COUNT(*)::int AS cnt FROM employee_skills WHERE employee_id=$1',
+    [empId],
+  );
+  const { rows: edu } = await db.query(
+    'SELECT COUNT(*)::int AS cnt FROM employee_education WHERE employee_id=$1',
+    [empId],
+  );
+
+  const checks = [
+    { key: 'bio', done: !!emp.bio },
+    { key: 'city', done: !!emp.city },
+    { key: 'linkedin', done: !!emp.linkedin_url },
+    { key: 'skills', done: skills[0].cnt >= 3 },
+    { key: 'education', done: edu[0].cnt >= 1 },
+    { key: 'languages', done: Array.isArray(emp.languages) && emp.languages.length > 0 },
+  ];
+  const done = checks.filter((c) => c.done).length;
+  return ok({ pct: Math.round((done / checks.length) * 100), checks });
+});
+
 /* ==================================================================
  * BULK IMPORT — /api/bulk-import/*
  * ================================================================== */
@@ -318,12 +488,14 @@ router.get('/api/search', async (event, _user) => {
 /** Routes that bypass authentication. */
 const NO_AUTH_ROUTES: { method: string; path: string }[] = [
   { method: 'POST', path: '/api/auth/login' },
+  { method: 'POST', path: '/api/auth/google' },
+  { method: 'POST', path: '/api/auth/google-callback' },
   { method: 'GET', path: '/api/health' },
 ];
 
-function isNoAuthRoute(event: APIGatewayProxyEventV2): boolean {
-  const method = event.requestContext.http.method.toUpperCase();
-  const path = event.rawPath;
+function isNoAuthRoute(event: RouterEvent): boolean {
+  const method = getEventMethod(event);
+  const path = getEventPath(event);
   return NO_AUTH_ROUTES.some((r) => r.method === method && r.path === path);
 }
 
@@ -335,7 +507,52 @@ const ANON_USER = {
   role: 'viewer' as const,
 };
 
-export const handler = async (event: APIGatewayProxyEventV2) => {
+function getRawBody(event: RouterEvent): string {
+  const body = event.body || '';
+  if ('isBase64Encoded' in event && event.isBase64Encoded) {
+    return Buffer.from(body, 'base64').toString('utf8');
+  }
+  return body;
+}
+
+function parseJsonBody(event: RouterEvent): Record<string, unknown> {
+  const raw = getRawBody(event);
+  return raw ? JSON.parse(raw) : {};
+}
+
+function parseFormBody(event: RouterEvent): URLSearchParams {
+  return new URLSearchParams(getRawBody(event));
+}
+
+function getSourceIp(event: RouterEvent): string | null {
+  const context = event.requestContext as {
+    identity?: { sourceIp?: string };
+    http?: { sourceIp?: string };
+  };
+  return context.identity?.sourceIp || context.http?.sourceIp || null;
+}
+
+function redirect(location: string) {
+  return {
+    statusCode: 302,
+    headers: {
+      Location: location,
+      'Access-Control-Allow-Origin': '*',
+    },
+    body: '',
+  };
+}
+
+function toGoogleCallbackError(err: unknown): string {
+  if (err instanceof AppError) {
+    if (err.code === 'google_not_configured') return 'google_not_configured';
+    if (err.statusCode === 403) return 'domain_not_allowed';
+    if (err.statusCode === 400) return 'missing_credential';
+  }
+  return 'google_auth_failed';
+}
+
+export const handler = async (event: RouterEvent) => {
   if (isNoAuthRoute(event)) {
     return router.resolve(event, ANON_USER);
   }

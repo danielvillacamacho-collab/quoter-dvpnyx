@@ -1,10 +1,12 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import type { APIGatewayProxyEvent, APIGatewayProxyEventV2 } from 'aws-lambda';
 import type { ApiResponse, AuthUser } from '../types';
 import { toErrorResponse } from '../errors';
 import { error } from './response';
 
+export type RouterEvent = APIGatewayProxyEvent | APIGatewayProxyEventV2;
+
 type RouteHandler = (
-  event: APIGatewayProxyEventV2,
+  event: RouterEvent,
   user: AuthUser,
 ) => Promise<ApiResponse>;
 
@@ -24,6 +26,19 @@ function pathToRegex(path: string): { pattern: RegExp; paramNames: string[] } {
   return { pattern: new RegExp(`^${regexStr}$`), paramNames };
 }
 
+export function getEventMethod(event: RouterEvent): string {
+  const e = event as RouterEvent & {
+    httpMethod?: string;
+    requestContext: { http?: { method?: string } };
+  };
+  return (e.requestContext.http?.method || e.httpMethod || '').toUpperCase();
+}
+
+export function getEventPath(event: RouterEvent): string {
+  const e = event as RouterEvent & { rawPath?: string; path?: string };
+  return e.rawPath || e.path || '/';
+}
+
 export function createRouter() {
   const routes: Route[] = [];
 
@@ -32,9 +47,9 @@ export function createRouter() {
     routes.push({ method: method.toUpperCase(), pattern, paramNames, handler });
   }
 
-  function resolve(event: APIGatewayProxyEventV2, user: AuthUser): Promise<ApiResponse> {
-    const method = event.requestContext.http.method.toUpperCase();
-    const path = event.rawPath;
+  function resolve(event: RouterEvent, user: AuthUser): Promise<ApiResponse> {
+    const method = getEventMethod(event);
+    const path = getEventPath(event);
 
     for (const route of routes) {
       if (route.method !== method) continue;

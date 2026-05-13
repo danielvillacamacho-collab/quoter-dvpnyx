@@ -1,15 +1,16 @@
 import jwt from 'jsonwebtoken';
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 import type { ApiResponse, AuthUser } from '../types';
+import { ensureRuntimeConfig } from '../config/secrets';
+import type { RouterEvent } from '../http/router';
 import { error } from '../http/response';
 
 type AuthenticatedHandler = (
-  event: APIGatewayProxyEventV2,
+  event: RouterEvent,
   user: AuthUser,
 ) => Promise<ApiResponse>;
 
 export function withAuth(
-  event: APIGatewayProxyEventV2,
+  event: RouterEvent,
   handler: AuthenticatedHandler,
 ): Promise<ApiResponse> {
   const authHeader = event.headers?.authorization || event.headers?.Authorization || '';
@@ -19,16 +20,22 @@ export function withAuth(
     return Promise.resolve(error(401, { error: 'Token requerido' }));
   }
 
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as AuthUser & { role: string; function?: string };
+  return ensureRuntimeConfig().then(() => {
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET!) as AuthUser & { role: string; function?: string };
+      const legacyRole = decoded.role as string;
 
-    if (decoded.role === 'preventa' && !decoded.function) {
-      decoded.function = 'preventa';
-      decoded.role = 'member';
+      if (legacyRole === 'preventa' && !decoded.function) {
+        decoded.function = 'preventa';
+        decoded.role = 'member';
+      }
+
+      return handler(event, decoded as AuthUser);
+    } catch {
+      return error(401, { error: 'Token invalido o expirado' });
     }
-
-    return handler(event, decoded as AuthUser);
-  } catch {
-    return Promise.resolve(error(401, { error: 'Token inválido o expirado' }));
-  }
+  }).catch((err) => {
+    console.error('[auth] runtime config failed:', err.message);
+    return error(500, { error: 'Runtime configuration unavailable' });
+  });
 }

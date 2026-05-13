@@ -1,4 +1,4 @@
-import type { APIGatewayProxyEventV2 } from 'aws-lambda';
+import type { APIGatewayProxyEvent } from 'aws-lambda';
 import { createRouter } from '@shared/http/router';
 import { ok, created, message, paginated } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
@@ -108,6 +108,6 @@ router.post('/api/opportunities/:id/check-margin', async (event, user) => {
 });
 
 /* ---- Lambda handler ---- */
-export const handler = async (event: APIGatewayProxyEventV2) => {
+export const handler = async (event: APIGatewayProxyEvent) => {
   return withAuth(event, (e, user) => router.resolve(e, user));
 };

@@ -1,8 +1,11 @@
 import { Pool } from 'pg';
+import { ensureRuntimeConfig } from '../config/secrets';
 
 let pool: Pool | null = null;
 
-export function getPool(): Pool {
+async function getRealPool(): Promise<Pool> {
+  await ensureRuntimeConfig();
+
   if (!pool) {
     pool = new Pool({
       host: process.env.DB_HOST,
@@ -22,6 +25,27 @@ export function getPool(): Pool {
     });
   }
   return pool;
+}
+
+export function getPool(): Pool {
+  return {
+    query: async (...args: Parameters<Pool['query']>) => {
+      const realPool = await getRealPool();
+      return realPool.query(...args);
+    },
+    connect: async (...args: Parameters<Pool['connect']>) => {
+      const realPool = await getRealPool();
+      return realPool.connect(...args);
+    },
+    end: async (...args: Parameters<Pool['end']>) => {
+      const realPool = await getRealPool();
+      return realPool.end(...args);
+    },
+    on: (...args: Parameters<Pool['on']>) => {
+      if (pool) pool.on(...args);
+      return pool as Pool;
+    },
+  } as unknown as Pool;
 }
 
 export function resetPool(): void {
