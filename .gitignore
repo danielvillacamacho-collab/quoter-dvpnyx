@@ -23,3 +23,9 @@ UI de claude design/
 # Los .docx son outputs/inputs efímeros del PO/UX, no source code.
 docs/*.docx
 *.docx
+
+
+serverless/dist/
+serverless/packages/infra/src/*.js
+serverless/packages/infra/src/*.js.map
+serverless/packages/infra/src/*.zip
