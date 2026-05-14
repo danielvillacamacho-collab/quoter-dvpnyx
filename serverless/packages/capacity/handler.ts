@@ -60,7 +60,9 @@ function parseDateRange(qs: Record<string, string | undefined>): { date_from: st
 function transformPlannerResult(result: { employees: any[]; weeks: string[]; summary: any }) {
   const weekObjs = result.weeks.map((start: string, index: number) => {
     const w = isoWeekNumber(start);
-    return { index, start_date: start, iso_week: w, label: `S${w}` };
+    const d = new Date(start + 'T00:00:00');
+    const short_label = `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    return { index, start_date: start, iso_week: w, label: `S${w}`, short_label };
   });
 
   const employees = result.employees.map((emp: any) => {
