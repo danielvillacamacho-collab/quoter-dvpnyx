@@ -25,7 +25,7 @@ router.get('/api/assignments', async (event, user) => {
   const filters: AssignmentFilters = {
     search: qs.search, contract_id: qs.contract_id,
     employee_id: qs.employee_id, resource_request_id: qs.resource_request_id,
-    status: qs.status,
+    status: qs.status, date_from: qs.date_from, date_to: qs.date_to,
   };
   return paginated(await service.list({ page, limit, offset, filters, sort }));
 });
@@ -35,7 +35,7 @@ router.get('/api/assignments/export.csv', async (event, user) => {
   const filters: AssignmentFilters = {
     search: qs.search, contract_id: qs.contract_id,
     employee_id: qs.employee_id, resource_request_id: qs.resource_request_id,
-    status: qs.status,
+    status: qs.status, date_from: qs.date_from, date_to: qs.date_to,
   };
   const csv = await service.exportCsv(filters);
   return {

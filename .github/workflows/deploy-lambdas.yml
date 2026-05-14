@@ -1,0 +1,196 @@
+name: Deploy Lambda Functions
+
+# Dispara cuando cambia código de lambdas en main.
+# También se puede correr manualmente para forzar el deploy de módulos específicos.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'serverless/packages/**'
+      - '.github/workflows/deploy-lambdas.yml'
+  workflow_dispatch:
+    inputs:
+      modules:
+        description: 'Módulos a desplegar separados por coma (vacío = todos los que cambiaron)'
+        required: false
+        default: ''
+      deploy_all:
+        description: 'Desplegar TODOS los módulos sin importar cambios'
+        type: boolean
+        default: false
+
+concurrency:
+  group: lambda-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: mx-central-1
+  NODE_VERSION: '20'
+  # ── Ajusta estos dos valores a los de tu Terraform ─────────────────
+  PROJECT_NAME: forge              # var.project_name en Terraform
+  TF_ENVIRONMENT: dev              # var.environment  en Terraform
+  S3_BUCKET: dvpnyx-quoter-terraform-state
+  S3_PREFIX: lambdas               # carpeta dentro del bucket
+  # ──────────────────────────────────────────────────────────────────
+
+jobs:
+  # ── 1. Detecta qué módulos cambiaron ──────────────────────────────
+  detect:
+    name: Detectar cambios
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      has_changes: ${{ steps.build-matrix.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # necesita el commit anterior para el diff
+
+      - name: Construir matriz de módulos
+        id: build-matrix
+        run: |
+          ALL="assignments capacity clients contracts crm employees internal-ops opportunities platform project-health quotations reports resource-requests revenue time-tracking"
+
+          if [ "${{ github.event.inputs.deploy_all }}" = "true" ]; then
+            MODULES="$ALL"
+
+          elif [ -n "${{ github.event.inputs.modules }}" ]; then
+            # Limpiar separadores: comas y espacios → lista separada por espacio
+            MODULES=$(echo "${{ github.event.inputs.modules }}" | tr ',' ' ' | xargs)
+
+          else
+            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
+
+            # Si cambió shared, rebuildeamos todo (afecta a todos los módulos)
+            if echo "$CHANGED" | grep -q "serverless/packages/shared/"; then
+              echo "📦 Paquete shared modificado — reconstruyendo todos los módulos"
+              MODULES="$ALL"
+            else
+              MODULES=""
+              for mod in $ALL; do
+                if echo "$CHANGED" | grep -q "serverless/packages/$mod/"; then
+                  MODULES="$MODULES $mod"
+                fi
+              done
+              MODULES=$(echo $MODULES | xargs)
+            fi
+          fi
+
+          if [ -z "$MODULES" ]; then
+            echo "ℹ️ Sin cambios en lambdas"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo 'matrix={"module":[]}' >> $GITHUB_OUTPUT
+          else
+            echo "🔨 Módulos a desplegar: $MODULES"
+            JSON=$(echo "$MODULES" | tr ' ' '\n' | jq -R . | jq -sc '{"module":.}')
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "matrix=$JSON" >> $GITHUB_OUTPUT
+          fi
+
+  # ── 2. Compila y despliega cada módulo en paralelo ─────────────────
+  build-and-deploy:
+    name: "${{ matrix.module }}"
+    needs: detect
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+      fail-fast: false   # si un módulo falla, los demás siguen
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: serverless/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: serverless
+        run: npm ci
+
+      - name: Compilar ${{ matrix.module }}
+        working-directory: serverless
+        run: |
+          MOD="${{ matrix.module }}"
+          WORK="dist/lambda-build/$MOD"
+          OUT="packages/infra/src/$MOD.zip"
+
+          mkdir -p "$WORK"
+          mkdir -p packages/infra/src
+
+          npx esbuild "packages/$MOD/handler.ts" \
+            --bundle \
+            --platform=node \
+            --target=node20 \
+            --format=cjs \
+            --sourcemap \
+            --tsconfig=tsconfig.json \
+            --outfile="$WORK/index.js"
+
+          # ZIP desde dentro del directorio para que index.js quede en la raíz
+          (cd "$WORK" && zip -qr "../../infra/src/$MOD.zip" .)
+
+          echo "✅ $MOD.zip — $(du -sh $OUT | cut -f1)"
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_LAMBDA_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_LAMBDA_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Subir ZIP a S3
+        working-directory: serverless
+        run: |
+          MOD="${{ matrix.module }}"
+          SHA="${{ github.sha }}"
+          ZIP="packages/infra/src/$MOD.zip"
+          S3_KEY="${{ env.S3_PREFIX }}/${{ env.TF_ENVIRONMENT }}/${MOD}/${SHA}.zip"
+
+          echo "📤 Subiendo a s3://${{ env.S3_BUCKET }}/$S3_KEY..."
+          aws s3 cp "$ZIP" "s3://${{ env.S3_BUCKET }}/$S3_KEY" \
+            --metadata "commit=${SHA},module=${MOD},env=${{ env.TF_ENVIRONMENT }}"
+
+          # Guardar la key para el siguiente paso
+          echo "S3_KEY=$S3_KEY" >> $GITHUB_ENV
+
+      - name: Desplegar a Lambda
+        working-directory: serverless
+        run: |
+          MOD="${{ matrix.module }}"
+          FUNCTION="${{ env.PROJECT_NAME }}-${MOD}-${{ env.TF_ENVIRONMENT }}"
+
+          echo "🚀 Actualizando $FUNCTION desde S3..."
+          aws lambda update-function-code \
+            --function-name "$FUNCTION" \
+            --s3-bucket "${{ env.S3_BUCKET }}" \
+            --s3-key "${{ env.S3_KEY }}" \
+            --publish \
+            --output json | jq '{FunctionName, CodeSize, LastModified}'
+
+          echo "⏳ Esperando que la actualización complete..."
+          aws lambda wait function-updated --function-name "$FUNCTION"
+          echo "✅ $FUNCTION actualizado — artifact: s3://${{ env.S3_BUCKET }}/${{ env.S3_KEY }}"
+
+  # ── 3. Resumen final ───────────────────────────────────────────────
+  summary:
+    name: Resumen
+    needs: [detect, build-and-deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Estado del deploy
+        run: |
+          if [ "${{ needs.detect.outputs.has_changes }}" = "false" ]; then
+            echo "ℹ️ No hubo cambios en lambdas — nada que desplegar."
+          elif [ "${{ needs.build-and-deploy.result }}" = "success" ]; then
+            echo "✅ Todos los módulos desplegados correctamente."
+          elif [ "${{ needs.build-and-deploy.result }}" = "failure" ]; then
+            echo "❌ Uno o más módulos fallaron. Revisar los logs arriba."
+            exit 1
+          fi

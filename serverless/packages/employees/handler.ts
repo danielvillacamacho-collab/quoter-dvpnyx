@@ -40,7 +40,7 @@ router.get('/api/employees/lookup', async (event) => {
 
 router.get('/api/employees', async (event) => {
   const qs = event.queryStringParameters || {};
-  const { page, limit, offset } = parsePagination(qs);
+  const { page, limit, offset } = parsePagination(qs, { maxLimit: 1000 });
   const sort = parseSort(qs, EMPLOYEE_SORTABLE, { defaultField: 'last_name', defaultDir: 'asc', tieBreaker: 'e.id ASC' });
   return paginated(await empSvc.list({ page, limit, offset, filters: qs, sort }));
 });

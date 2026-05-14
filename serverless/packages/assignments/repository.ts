@@ -50,7 +50,17 @@ export function createAssignmentRepository(db: Pool): AssignmentRepository {
     if (filters.contract_id) wheres.push(`asg.contract_id = ${add(filters.contract_id)}`);
     if (filters.employee_id) wheres.push(`asg.employee_id = ${add(filters.employee_id)}`);
     if (filters.resource_request_id) wheres.push(`asg.resource_request_id = ${add(filters.resource_request_id)}`);
-    if (filters.status) wheres.push(`asg.status = ${add(filters.status)}`);
+    if (filters.status) {
+      const VALID = ['planned', 'active', 'ended', 'cancelled'];
+      const statuses = String(filters.status).split(',').map((v) => v.trim()).filter((v) => VALID.includes(v));
+      if (statuses.length === 1) {
+        wheres.push(`asg.status = ${add(statuses[0])}`);
+      } else if (statuses.length > 1) {
+        wheres.push(`asg.status IN (${statuses.map((v) => add(v)).join(', ')})`);
+      }
+    }
+    if (filters.date_from) wheres.push(`(asg.end_date IS NULL OR asg.end_date >= ${add(filters.date_from)}::date)`);
+    if (filters.date_to)   wheres.push(`asg.start_date <= ${add(filters.date_to)}::date`);
 
     return { where: 'WHERE ' + wheres.join(' AND '), params };
   }

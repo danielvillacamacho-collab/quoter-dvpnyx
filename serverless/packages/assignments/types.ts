@@ -58,6 +58,8 @@ export interface AssignmentFilters {
   employee_id?: string;
   resource_request_id?: string;
   status?: string;
+  date_from?: string;
+  date_to?: string;
 }
 
 export interface ValidationCheck {
