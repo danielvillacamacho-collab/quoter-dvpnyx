@@ -1,10 +1,10 @@
 name: Deploy Lambda Functions
 
-# Dispara cuando cambia código de lambdas en main.
+# Dispara cuando cambia código de lambdas.
 # También se puede correr manualmente para forzar el deploy de módulos específicos.
 on:
   push:
-    branches:
+    branches: 
       - claude/nostalgic-goodall-53be46
     paths:
       - 'serverless/packages/**'
@@ -118,11 +118,10 @@ jobs:
         working-directory: serverless
         run: |
           MOD="${{ matrix.module }}"
-          WORK="dist/lambda-build/$MOD"
-          OUT="packages/infra/src/$MOD.zip"
+          WORK="$(pwd)/dist/lambda-build/$MOD"
+          ZIP="$(pwd)/dist/lambda-build/$MOD.zip"
 
           mkdir -p "$WORK"
-          mkdir -p packages/infra/src
 
           npx esbuild "packages/$MOD/handler.ts" \
             --bundle \
@@ -133,10 +132,11 @@ jobs:
             --tsconfig=tsconfig.json \
             --outfile="$WORK/index.js"
 
-          # ZIP desde dentro del directorio para que index.js quede en la raíz
-          (cd "$WORK" && zip -qr "../../infra/src/$MOD.zip" .)
+          # ZIP con ruta absoluta para evitar confusión de paths relativos
+          (cd "$WORK" && zip -qr "$ZIP" .)
 
-          echo "✅ $MOD.zip — $(du -sh $OUT | cut -f1)"
+          echo "ZIP_PATH=$ZIP" >> $GITHUB_ENV
+          echo "✅ $MOD.zip — $(du -sh "$ZIP" | cut -f1)"
 
       - name: Configurar credenciales AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -146,22 +146,18 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Subir ZIP a S3
-        working-directory: serverless
         run: |
           MOD="${{ matrix.module }}"
           SHA="${{ github.sha }}"
-          ZIP="packages/infra/src/$MOD.zip"
           S3_KEY="${{ env.S3_PREFIX }}/${{ env.TF_ENVIRONMENT }}/${MOD}/${SHA}.zip"
 
           echo "📤 Subiendo a s3://${{ env.S3_BUCKET }}/$S3_KEY..."
-          aws s3 cp "$ZIP" "s3://${{ env.S3_BUCKET }}/$S3_KEY" \
+          aws s3 cp "${{ env.ZIP_PATH }}" "s3://${{ env.S3_BUCKET }}/$S3_KEY" \
             --metadata "commit=${SHA},module=${MOD},env=${{ env.TF_ENVIRONMENT }}"
 
-          # Guardar la key para el siguiente paso
           echo "S3_KEY=$S3_KEY" >> $GITHUB_ENV
 
       - name: Desplegar a Lambda
-        working-directory: serverless
         run: |
           MOD="${{ matrix.module }}"
           FUNCTION="${{ env.PROJECT_NAME }}-${MOD}-${{ env.TF_ENVIRONMENT }}"
