@@ -1,3 +1,4 @@
+import bcrypt from 'bcryptjs';
 import { AppError } from '@shared/errors';
 import { createRouter, getEventMethod, getEventPath, type RouterEvent } from '@shared/http/router';
 import { ok, created, message, error } from '@shared/http/response';
@@ -126,6 +127,16 @@ router.delete('/api/users/:id', async (event, user) => {
   });
 
   return message('Usuario eliminado');
+});
+
+router.post('/api/users/:id/reset-password', async (event, user) => {
+  requireAdmin(user);
+  const hash = await bcrypt.hash('000000', 12);
+  await db.query(
+    'UPDATE users SET password_hash=$1, must_change_password=true WHERE id=$2',
+    [hash, event.pathParameters!.id!],
+  );
+  return message('Contraseña reseteada a 000000');
 });
 
 /* ==================================================================
@@ -448,17 +459,229 @@ router.get('/api/me/completeness', async (_event, user) => {
  * BULK IMPORT — /api/bulk-import/*
  * ================================================================== */
 
-router.post('/api/bulk-import/:entity', async (event, user) => {
+const BULK_ENTITIES = ['areas', 'skills', 'clients', 'employees', 'employee-skills'];
+
+const BULK_TEMPLATES: Record<string, { headers: string[]; examples: string[][] }> = {
+  areas: {
+    headers: ['key', 'name', 'description', 'sort_order', 'active'],
+    examples: [
+      ['devops_sre', 'DevOps / SRE', 'Especialidad combinada de plataforma y confiabilidad', '9', 'true'],
+      ['data_engineering', 'Data Engineering', 'Diseño y mantenimiento de pipelines de datos', '10', 'true'],
+    ],
+  },
+  skills: {
+    headers: ['name', 'category', 'description', 'active'],
+    examples: [
+      ['React', 'framework', 'Frontend UI library', 'true'],
+      ['dbt', 'data', 'SQL transformations', 'true'],
+    ],
+  },
+  clients: {
+    headers: ['name', 'legal_name', 'country', 'industry', 'tier', 'preferred_currency', 'notes', 'active'],
+    examples: [
+      ['Acme Corp', 'Acme S.A.', 'Colombia', 'Retail', 'mid_market', 'USD', 'Cliente referencia', 'true'],
+    ],
+  },
+  employees: {
+    headers: [
+      'first_name', 'last_name', 'corporate_email', 'personal_email',
+      'country', 'city', 'area_key', 'level', 'seniority_label',
+      'employment_type', 'weekly_capacity_hours',
+      'start_date', 'end_date', 'status', 'squad_name', 'notes',
+    ],
+    examples: [
+      ['Ana', 'Lopez', 'ana.lopez@dvpnyx.com', '', 'Colombia', 'Bogotá',
+        'development', 'L5', 'Semi Senior', 'fulltime', '40',
+        '2026-01-15', '', 'active', 'DVPNYX Global', ''],
+    ],
+  },
+  'employee-skills': {
+    headers: ['corporate_email', 'skill_name', 'proficiency', 'years_experience', 'notes'],
+    examples: [
+      ['ana.lopez@dvpnyx.com', 'React', 'advanced', '4', ''],
+      ['ana.lopez@dvpnyx.com', 'TypeScript', 'intermediate', '2', ''],
+    ],
+  },
+};
+
+function csvEscape(s: unknown): string {
+  const v = String(s ?? '');
+  if (v.includes(',') || v.includes('"') || v.includes('\n')) {
+    return '"' + v.replace(/"/g, '""') + '"';
+  }
+  return v;
+}
+
+router.get('/api/bulk-import/entities', async (_event, user) => {
   requireAdmin(user);
-  const entity = event.pathParameters!.entity!;
-  // Placeholder: actual bulk import logic would go here
-  return ok({ message: `Bulk import for ${entity} — not yet implemented in serverless` });
+  return ok({ entities: BULK_ENTITIES, templates: Object.keys(BULK_TEMPLATES) });
 });
 
 router.get('/api/bulk-import/templates/:entity', async (event, user) => {
   requireAdmin(user);
   const entity = event.pathParameters!.entity!;
-  return ok({ message: `Template for ${entity} — not yet implemented in serverless` });
+  if (!BULK_ENTITIES.includes(entity)) return error(404, { error: 'Plantilla no encontrada' });
+  const t = BULK_TEMPLATES[entity];
+  if (!t) return error(404, { error: 'Plantilla no encontrada' });
+  const lines = [t.headers.join(',')];
+  for (const row of t.examples) lines.push(row.map(csvEscape).join(','));
+  const csv = lines.join('\n') + '\n';
+  return {
+    statusCode: 200,
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="template_${entity}.csv"`,
+      'Access-Control-Allow-Origin': '*',
+    },
+    body: csv,
+  };
+});
+
+router.post('/api/bulk-import/:entity/preview', async (event, user) => {
+  requireAdmin(user);
+  const entity = event.pathParameters!.entity!;
+  if (!BULK_ENTITIES.includes(entity)) return error(400, { error: `Entidad no soportada: "${entity}"` });
+  return ok({ message: `Bulk import preview for ${entity} — not yet implemented in serverless` });
+});
+
+router.post('/api/bulk-import/:entity/commit', async (event, user) => {
+  requireAdmin(user);
+  const entity = event.pathParameters!.entity!;
+  if (!BULK_ENTITIES.includes(entity)) return error(400, { error: `Entidad no soportada: "${entity}"` });
+  return ok({ message: `Bulk import commit for ${entity} — not yet implemented in serverless` });
+});
+
+/* ==================================================================
+ * AI INTERACTIONS — /api/ai-interactions/*
+ * ================================================================== */
+
+const AI_SORTABLE: Record<string, string> = {
+  agent_name:      'agent_name',
+  prompt_template: 'prompt_template',
+  human_decision:  'human_decision',
+  confidence:      'confidence',
+  cost_usd:        'cost_usd',
+  latency_ms:      'latency_ms',
+  created_at:      'created_at',
+  decided_at:      'decided_at',
+};
+const AI_VALID_DECISIONS = ['accepted', 'rejected', 'modified', 'ignored'];
+
+function isValidUUID(s: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+}
+
+router.get('/api/ai-interactions', async (event, user) => {
+  requireAdmin(user);
+  const qs = event.queryStringParameters || {};
+  const page = Math.max(1, Number(qs.page) || 1);
+  const limit = Math.min(Math.max(Number(qs.limit) || 50, 1), 200);
+  const offset = (page - 1) * limit;
+
+  const wheres: string[] = [];
+  const params: unknown[] = [];
+  const add = (v: unknown) => { params.push(v); return `$${params.length}`; };
+
+  if (qs.agent_name)      wheres.push(`agent_name = ${add(qs.agent_name)}`);
+  if (qs.prompt_template) wheres.push(`prompt_template = ${add(qs.prompt_template)}`);
+  if (qs.user_id) {
+    if (!isValidUUID(qs.user_id)) return error(400, { error: 'user_id no es un UUID válido' });
+    wheres.push(`user_id = ${add(qs.user_id)}`);
+  }
+  if (qs.entity_type) wheres.push(`entity_type = ${add(qs.entity_type)}`);
+  if (qs.entity_id) {
+    if (!isValidUUID(qs.entity_id)) return error(400, { error: 'entity_id no es un UUID válido' });
+    wheres.push(`entity_id = ${add(qs.entity_id)}`);
+  }
+  if (qs.human_decision === 'pending') {
+    wheres.push(`human_decision IS NULL`);
+  } else if (qs.human_decision) {
+    wheres.push(`human_decision = ${add(qs.human_decision)}`);
+  }
+  if (qs.from) wheres.push(`created_at >= ${add(qs.from)}::timestamptz`);
+  if (qs.to)   wheres.push(`created_at <= ${add(qs.to)}::timestamptz`);
+
+  const where = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+  const sortField = AI_SORTABLE[qs.sort as string] || 'created_at';
+  const sortDir = (qs.dir || 'desc').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+  const orderBy = `${sortField} ${sortDir}, id ASC`;
+
+  const limitIdx = params.length + 1;
+  const offsetIdx = params.length + 2;
+
+  const [countRes, rowsRes] = await Promise.all([
+    db.query(`SELECT COUNT(*)::int AS total FROM ai_interactions ${where}`, params),
+    db.query(
+      `SELECT id, agent_name, agent_version, prompt_template, prompt_template_version,
+              user_id, entity_type, entity_id, confidence, human_decision,
+              cost_usd, input_tokens, output_tokens, latency_ms, error,
+              created_at, decided_at
+         FROM ai_interactions
+         ${where}
+         ORDER BY ${orderBy}
+         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      [...params, limit, offset],
+    ),
+  ]);
+
+  return ok({
+    data: rowsRes.rows,
+    pagination: {
+      page, limit,
+      total: (countRes.rows[0] as { total: number }).total,
+      pages: Math.ceil((countRes.rows[0] as { total: number }).total / limit) || 1,
+    },
+  });
+});
+
+router.get('/api/ai-interactions/:id', async (event, user) => {
+  requireAdmin(user);
+  const id = event.pathParameters!.id!;
+  if (!isValidUUID(id)) return error(400, { error: 'id no es un UUID válido' });
+  const { rows } = await db.query('SELECT * FROM ai_interactions WHERE id=$1', [id]);
+  if (!rows.length) return error(404, { error: 'Interacción no encontrada' });
+  return ok(rows[0]);
+});
+
+router.post('/api/ai-interactions/:id/decision', async (event, user) => {
+  const id = event.pathParameters!.id!;
+  if (!isValidUUID(id)) return error(400, { error: 'id no es un UUID válido' });
+
+  const body = JSON.parse(event.body || '{}') as Record<string, unknown>;
+  const decision = String(body.decision || '').trim();
+  const feedback = (body.feedback as string | undefined) || null;
+
+  if (!AI_VALID_DECISIONS.includes(decision)) {
+    return error(400, { error: `decision inválida (${AI_VALID_DECISIONS.join('|')})` });
+  }
+
+  const { rows } = await db.query(
+    'SELECT user_id, human_decision FROM ai_interactions WHERE id=$1',
+    [id],
+  );
+  if (!rows.length) return error(404, { error: 'Interacción no encontrada' });
+
+  const isAdmin = user.role === 'admin' || user.role === 'superadmin';
+  if (!isAdmin && (rows[0] as { user_id: string }).user_id !== user.id) {
+    return error(403, { error: 'No puedes modificar la decisión de otra interacción' });
+  }
+  if ((rows[0] as { human_decision: string | null }).human_decision) {
+    return error(409, {
+      error: `Esta interacción ya tiene decisión registrada (${(rows[0] as { human_decision: string }).human_decision}).`,
+      code: 'already_decided',
+    });
+  }
+
+  const { rows: updated } = await db.query(
+    `UPDATE ai_interactions
+        SET human_decision = $2,
+            human_feedback = $3,
+            decided_at     = NOW()
+      WHERE id = $1
+      RETURNING id, human_decision`,
+    [id, decision, feedback],
+  );
+  return ok(updated[0]);
 });
 
 /* ==================================================================

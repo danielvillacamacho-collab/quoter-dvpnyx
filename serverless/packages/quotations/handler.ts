@@ -71,8 +71,13 @@ router.delete('/api/quotations/:id', async (event, user) => {
 });
 
 /* ------------------------------------------------------------------ */
-/*  CLONE                                                              */
+/*  DUPLICATE                                                          */
 /* ------------------------------------------------------------------ */
+router.post('/api/quotations/:id/duplicate', async (event, user) => {
+  return created(await service.clone(event.pathParameters!.id!, user));
+});
+
+/* keep /clone as alias for backwards compat */
 router.post('/api/quotations/:id/clone', async (event, user) => {
   return created(await service.clone(event.pathParameters!.id!, user));
 });
@@ -80,7 +85,7 @@ router.post('/api/quotations/:id/clone', async (event, user) => {
 /* ------------------------------------------------------------------ */
 /*  EXPORT (placeholder)                                               */
 /* ------------------------------------------------------------------ */
-router.get('/api/quotations/:id/export', async (event) => {
+router.post('/api/quotations/:id/export', async (event) => {
   const qs = event.queryStringParameters || {};
   const format = (qs.format || 'xlsx').toLowerCase();
 

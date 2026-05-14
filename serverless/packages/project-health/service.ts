@@ -28,6 +28,7 @@ export interface ProjectHealthService {
   backfillRevenue(contractId: string, user: AuthUser): Promise<{ synced_count: number; details: unknown[] }>;
   backfillBacCost(contractId: string, user: AuthUser): Promise<Record<string, unknown>>;
   closeout(contractId: string, narrative: string | null, user: AuthUser): Promise<{ status: string; contract_id: string }>;
+  getBaselinePreview(contractId: string): Promise<Record<string, unknown>>;
 }
 
 /* ── helpers ── */
@@ -643,6 +644,28 @@ export function createProjectHealthService(
           wbs_updated: wbs.length,
         };
       });
+    },
+
+    /* ──────── getBaselinePreview ──────── */
+    async getBaselinePreview(contractId) {
+      const contract = await repo.loadContract(contractId);
+      if (!contract) throw new NotFound('Contrato', contractId);
+      const bacRevenue = Number(contract.total_value_usd || 0);
+      let bacCostAuto = 0;
+      let costProtected = 0;
+      if (contract.winning_quotation_id) {
+        const quotCost = await computeQuotationCost(repo, contract.winning_quotation_id as string);
+        bacCostAuto = quotCost.costProtected;
+        costProtected = quotCost.costProtected;
+      }
+      return {
+        bac_revenue: bacRevenue,
+        bac_cost_auto: bacCostAuto,
+        cost_protected: costProtected,
+        original_currency: contract.original_currency || 'USD',
+        has_winning_quotation: !!contract.winning_quotation_id,
+        needs_manual_cost: bacCostAuto <= 0,
+      };
     },
 
     /* ──────── closeout ──────── */

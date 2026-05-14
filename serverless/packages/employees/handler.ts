@@ -65,6 +65,68 @@ router.delete('/api/employees/:id', async (event, user) => {
 
 router.get('/api/employees/:id/skills', async (event) => ok({ data: await empSvc.getSkills(event.pathParameters!.id!) }));
 
+/* Individual skill assignment (matches monolith POST /:id/skills) */
+router.post('/api/employees/:id/skills', async (event, user) => {
+  requireAdmin(user);
+  const body = JSON.parse(event.body || '{}');
+  const { skill_id, proficiency, years_experience, notes } = body;
+  if (!skill_id) return error(400, { error: 'skill_id es requerido' });
+
+  const VALID_PROFICIENCY = ['beginner', 'intermediate', 'advanced', 'expert'];
+  if (proficiency && !VALID_PROFICIENCY.includes(proficiency)) return error(400, { error: 'proficiency inválido' });
+
+  const { rows: sRows } = await db.query(`SELECT id, name, active FROM skills WHERE id=$1`, [skill_id]);
+  if (!sRows.length) return error(400, { error: 'skill no existe' });
+  if (!sRows[0].active) return error(400, { error: 'El skill está inactivo y no puede asignarse' });
+
+  const { rows: eRows } = await db.query(`SELECT id FROM employees WHERE id=$1 AND deleted_at IS NULL`, [event.pathParameters!.id!]);
+  if (!eRows.length) return error(404, { error: 'Empleado no encontrado' });
+
+  try {
+    const { rows } = await db.query(
+      `INSERT INTO employee_skills (employee_id, skill_id, proficiency, years_experience, notes)
+       VALUES ($1,$2,COALESCE($3,'intermediate'),$4,$5) RETURNING *`,
+      [event.pathParameters!.id!, skill_id, proficiency || null, years_experience != null ? Number(years_experience) : null, notes || null],
+    );
+    return created(rows[0]);
+  } catch (err: any) {
+    if (err?.code === '23505') return error(409, { error: 'Este empleado ya tiene ese skill asignado' });
+    throw err;
+  }
+});
+
+/* Individual skill update (matches monolith PUT /:id/skills/:skillId) */
+router.put('/api/employees/:id/skills/:skillId', async (event, user) => {
+  requireAdmin(user);
+  const body = JSON.parse(event.body || '{}');
+  const VALID_PROFICIENCY = ['beginner', 'intermediate', 'advanced', 'expert'];
+  if (body.proficiency && !VALID_PROFICIENCY.includes(body.proficiency)) return error(400, { error: 'proficiency inválido' });
+
+  const { rows } = await db.query(
+    `UPDATE employee_skills SET
+        proficiency      = COALESCE($1, proficiency),
+        years_experience = COALESCE($2, years_experience),
+        notes            = COALESCE($3, notes)
+      WHERE employee_id=$4 AND skill_id=$5
+      RETURNING *`,
+    [body.proficiency ?? null, body.years_experience != null ? Number(body.years_experience) : null, body.notes ?? null, event.pathParameters!.id!, event.pathParameters!.skillId!],
+  );
+  if (!rows.length) return error(404, { error: 'Asignación no encontrada' });
+  return ok(rows[0]);
+});
+
+/* Individual skill removal (matches monolith DELETE /:id/skills/:skillId) */
+router.delete('/api/employees/:id/skills/:skillId', async (event, user) => {
+  requireAdmin(user);
+  const { rows } = await db.query(
+    `DELETE FROM employee_skills WHERE employee_id=$1 AND skill_id=$2 RETURNING *`,
+    [event.pathParameters!.id!, event.pathParameters!.skillId!],
+  );
+  if (!rows.length) return error(404, { error: 'Asignación no encontrada' });
+  return message('Skill removido');
+});
+
+/* Bulk skill set (lambda-only helper, keep for any internal use) */
 router.put('/api/employees/:id/skills', async (event, user) => {
   requireAdmin(user);
   const { skill_ids } = JSON.parse(event.body || '{}');
@@ -104,6 +166,22 @@ router.delete('/api/areas/:id', async (event, user) => {
   return ok(area);
 });
 
+router.post('/api/areas/:id/deactivate', async (event, user) => {
+  requireAdmin(user);
+  const hasEmps = await areaRepo.hasActiveEmployees(event.pathParameters!.id!);
+  if (hasEmps) throw new Conflict('No se puede desactivar: tiene empleados activos');
+  const area = await areaRepo.deactivate(event.pathParameters!.id!);
+  if (!area) return error(404, { error: 'Área no encontrada o ya inactiva' });
+  return ok(area);
+});
+
+router.post('/api/areas/:id/activate', async (event, user) => {
+  requireAdmin(user);
+  const area = await areaRepo.activate(event.pathParameters!.id!);
+  if (!area) return error(404, { error: 'Área no encontrada o ya activa' });
+  return ok(area);
+});
+
 // ── Skills ──────────────────────────────────────────────────────────
 router.get('/api/skills', async (event) => {
   const qs = event.queryStringParameters || {};
@@ -134,6 +212,22 @@ router.delete('/api/skills/:id', async (event, user) => {
   if (hasEmps) throw new Conflict('No se puede desactivar: tiene empleados asociados');
   const skill = await skillRepo.deactivate(event.pathParameters!.id!);
   if (!skill) throw new NotFound('Skill', event.pathParameters!.id!);
+  return ok(skill);
+});
+
+router.post('/api/skills/:id/deactivate', async (event, user) => {
+  requireAdmin(user);
+  const hasEmps = await skillRepo.hasEmployees(event.pathParameters!.id!);
+  if (hasEmps) throw new Conflict('No se puede desactivar: tiene empleados asociados');
+  const skill = await skillRepo.deactivate(event.pathParameters!.id!);
+  if (!skill) return error(404, { error: 'Skill no encontrado o ya inactivo' });
+  return ok(skill);
+});
+
+router.post('/api/skills/:id/activate', async (event, user) => {
+  requireAdmin(user);
+  const skill = await skillRepo.activate(event.pathParameters!.id!);
+  if (!skill) return error(404, { error: 'Skill no encontrado o ya activo' });
   return ok(skill);
 });
 
@@ -386,6 +480,188 @@ router.post('/api/employee-costs/recalculate-usd/:period', async (event, user) =
     updated++;
   }
   return ok({ period, updated, unchanged });
+});
+
+// ── Employee Costs: Project to Future ───────────────────────────────
+
+function addMonths(yyyymm: string, n: number): string | null {
+  if (!/^[0-9]{6}$/.test(yyyymm)) return null;
+  let year = parseInt(yyyymm.slice(0, 4), 10);
+  let month = parseInt(yyyymm.slice(4, 6), 10) + n;
+  while (month <= 0) { month += 12; year -= 1; }
+  while (month > 12) { month -= 12; year += 1; }
+  return `${year}${String(month).padStart(2, '0')}`;
+}
+
+function periodsForward(start: string, count: number): string[] {
+  if (!/^[0-9]{6}$/.test(start) || !Number.isInteger(count) || count < 1) return [];
+  const out: string[] = [];
+  let cur = start;
+  for (let i = 0; i < count; i++) {
+    out.push(cur);
+    cur = addMonths(cur, 1)!;
+  }
+  return out;
+}
+
+function monthOfDate(d: string | Date | null): string | null {
+  if (!d) return null;
+  const dt = d instanceof Date ? d : new Date(d as string);
+  if (isNaN(dt.getTime())) return null;
+  return `${dt.getUTCFullYear()}${String(dt.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function employeeActiveInPeriod(emp: Record<string, unknown>, targetPeriod: string): boolean {
+  const startMonth = monthOfDate(emp.start_date as string | null);
+  const endMonth = monthOfDate(emp.end_date as string | null);
+  if (startMonth && targetPeriod < startMonth) return false;
+  if (endMonth && targetPeriod > endMonth) return false;
+  return true;
+}
+
+router.post('/api/employee-costs/project-to-future', async (event, user) => {
+  requireAdmin(user);
+  const body = JSON.parse(event.body || '{}');
+  const dryRun = body.dry_run === true;
+
+  const monthsAhead = Number(body.months_ahead);
+  if (!Number.isInteger(monthsAhead) || monthsAhead < 1 || monthsAhead > 12) {
+    return error(400, { error: 'months_ahead debe ser entero entre 1 y 12' });
+  }
+  const growthPct = body.growth_pct != null ? Number(body.growth_pct) : 0;
+  if (!Number.isFinite(growthPct) || growthPct < -50 || growthPct > 200) {
+    return error(400, { error: 'growth_pct debe ser número entre -50 y 200' });
+  }
+
+  let basePeriod: string;
+  if (body.base_period) {
+    const bp = String(body.base_period).trim();
+    if (!PERIOD_RE.test(bp)) return error(400, { error: 'base_period inválido (formato YYYYMM)' });
+    basePeriod = bp;
+  } else {
+    const { rows } = await db.query(`SELECT period FROM employee_costs ORDER BY period DESC LIMIT 1`);
+    if (!rows.length) {
+      return error(400, { error: 'No hay ningún costo registrado para usar como base. Carga al menos un mes antes de proyectar.', code: 'no_base_period' });
+    }
+    basePeriod = rows[0].period as string;
+  }
+
+  const firstTarget = addMonths(basePeriod, 1);
+  if (!firstTarget) return error(400, { error: 'base_period inválido' });
+  const targetPeriods = periodsForward(firstTarget, monthsAhead);
+
+  const { rows: baseCosts } = await db.query(
+    `SELECT * FROM employee_costs WHERE period = $1`, [basePeriod],
+  );
+  if (!baseCosts.length) {
+    return error(400, { error: `El período base ${basePeriod} no tiene costos registrados.`, code: 'base_period_empty' });
+  }
+
+  const empIds = (baseCosts as Record<string, unknown>[]).map(c => c.employee_id as string);
+  const [{ rows: emps }, { rows: existingFuture }] = await Promise.all([
+    db.query(
+      `SELECT id, start_date, end_date, status FROM employees WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
+      [empIds],
+    ),
+    db.query(
+      `SELECT employee_id, period, locked, source FROM employee_costs
+        WHERE employee_id = ANY($1::uuid[]) AND period = ANY($2::varchar[])`,
+      [empIds, targetPeriods],
+    ),
+  ]);
+
+  const empById = new Map((emps as Record<string, unknown>[]).map(e => [e.id as string, e]));
+  const existingByKey = new Map(
+    (existingFuture as Record<string, unknown>[]).map(c => [`${c.employee_id}|${c.period}`, c]),
+  );
+
+  const currencies = [...new Set((baseCosts as Record<string, unknown>[]).map(c => c.currency as string).filter(c => c !== 'USD'))];
+  const fxByCcy = await resolveRatesBulk(db, currencies, targetPeriods[targetPeriods.length - 1]);
+
+  const monthlyGrowth = growthPct === 0 ? 1 : Math.pow(1 + growthPct / 100, 1 / 12);
+
+  const warnings: unknown[] = [];
+  const details: unknown[] = [];
+  let created = 0, updated = 0, skippedExisting = 0, skippedLocked = 0, skippedInactive = 0;
+
+  const conn = await db.connect();
+  try {
+    if (!dryRun) await conn.query('BEGIN');
+
+    for (let mi = 0; mi < targetPeriods.length; mi++) {
+      const targetPeriod = targetPeriods[mi];
+      const factor = Math.pow(monthlyGrowth, mi + 1);
+
+      for (const baseRow of baseCosts as Record<string, unknown>[]) {
+        const emp = empById.get(baseRow.employee_id as string);
+        if (!emp) continue;
+        if (!employeeActiveInPeriod(emp, targetPeriod)) { skippedInactive++; continue; }
+
+        const key = `${baseRow.employee_id}|${targetPeriod}`;
+        const existing = existingByKey.get(key) as Record<string, unknown> | undefined;
+        if (existing?.locked) { skippedLocked++; continue; }
+        if (existing && existing.source !== 'projected') { skippedExisting++; continue; }
+
+        const projectedGross = Math.round(Number(baseRow.gross_cost) * factor * 100) / 100;
+        const fx = pickRate(fxByCcy, baseRow.currency as string, targetPeriod);
+        const conv = convertToUsd(projectedGross, baseRow.currency as string, fx.rate);
+
+        if (baseRow.currency !== 'USD' && fx.fallback_period) {
+          warnings.push({ employee_id: baseRow.employee_id, target_period: targetPeriod, code: 'fx_fallback_used', fallback_period: fx.fallback_period });
+        }
+        if (baseRow.currency !== 'USD' && fx.rate == null) {
+          warnings.push({ employee_id: baseRow.employee_id, target_period: targetPeriod, code: 'fx_missing' });
+        }
+
+        details.push({
+          employee_id: baseRow.employee_id, period: targetPeriod,
+          currency: baseRow.currency, gross_cost: projectedGross,
+          cost_usd: conv.cost_usd, action: existing ? 'would_update' : 'would_create',
+        });
+
+        if (!dryRun) {
+          if (existing) {
+            await conn.query(
+              `UPDATE employee_costs SET currency=$1,gross_cost=$2,cost_usd=$3,exchange_rate_used=$4,source='projected',updated_by=$5,updated_at=NOW() WHERE employee_id=$6 AND period=$7`,
+              [baseRow.currency, projectedGross, conv.cost_usd, conv.exchange_rate_used, user.id, baseRow.employee_id, targetPeriod],
+            );
+            updated++;
+          } else {
+            const notes = growthPct === 0
+              ? `Proyectado desde ${basePeriod}`
+              : `Proyectado desde ${basePeriod} con +${growthPct}%/año`;
+            await conn.query(
+              `INSERT INTO employee_costs (employee_id,period,currency,gross_cost,cost_usd,exchange_rate_used,notes,source,created_by,updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7,'projected',$8,$8)`,
+              [baseRow.employee_id, targetPeriod, baseRow.currency, projectedGross, conv.cost_usd, conv.exchange_rate_used, notes, user.id],
+            );
+            created++;
+          }
+        }
+      }
+    }
+
+    if (!dryRun) await conn.query('COMMIT');
+
+    return ok({
+      base_period: basePeriod,
+      target_periods: targetPeriods,
+      months_ahead: monthsAhead,
+      growth_pct: growthPct,
+      dry_run: dryRun,
+      created: dryRun ? 0 : created,
+      updated: dryRun ? 0 : updated,
+      would_create: dryRun ? (details as any[]).filter(d => d.action === 'would_create').length : 0,
+      would_update: dryRun ? (details as any[]).filter(d => d.action === 'would_update').length : 0,
+      skipped_existing: skippedExisting,
+      skipped_locked: skippedLocked,
+      skipped_inactive: skippedInactive,
+      warnings,
+      details: dryRun ? details : undefined,
+    });
+  } catch (err) {
+    try { await conn.query('ROLLBACK'); } catch { /* ignore */ }
+    throw err;
+  } finally { conn.release(); }
 });
 
 export const handler = async (event: APIGatewayProxyEvent) => {

@@ -3,69 +3,75 @@ import type {
   EmployeePlannerRow, PlannerResult, RawAssignmentRow, RawEmployeeRow,
 } from './types';
 
-/**
- * Determines the utilization bucket for a given utilization percentage.
- * - idle:       0%
- * - light:      1% - 59%
- * - healthy:    60% - 100%
- * - overbooked: > 100%
- */
-export function toBucket(utilizationPct: number): UtilizationBucket {
-  if (utilizationPct <= 0) return 'idle';
-  if (utilizationPct < 60) return 'light';
-  if (utilizationPct <= 100) return 'healthy';
+export function toBucket(pct: number): UtilizationBucket {
+  if (!isFinite(pct) || pct <= 0) return 'idle';
+  if (pct <= 75) return 'light';
+  if (pct <= 100) return 'healthy';
   return 'overbooked';
 }
 
-/**
- * Generates an array of Monday dates (ISO strings) for the given date range.
- */
 export function generateWeeks(dateFrom: string, dateTo: string): string[] {
   const weeks: string[] = [];
-  const start = new Date(dateFrom);
-  const end = new Date(dateTo);
+  const start = new Date(dateFrom + 'T00:00:00Z');
+  const end = new Date(dateTo + 'T00:00:00Z');
 
-  // Align to Monday
-  const day = start.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  start.setDate(start.getDate() + diff);
+  const dow = start.getUTCDay();
+  const diff = dow === 0 ? -6 : 1 - dow;
+  start.setUTCDate(start.getUTCDate() + diff);
 
   const current = new Date(start);
   while (current <= end) {
     weeks.push(current.toISOString().slice(0, 10));
-    current.setDate(current.getDate() + 7);
+    current.setUTCDate(current.getUTCDate() + 7);
   }
 
   return weeks;
 }
 
-/**
- * Checks if an assignment overlaps with a given week.
- * A week spans from weekStart (Monday) to weekStart + 6 days (Sunday).
- */
-function assignmentOverlapsWeek(
-  asg: RawAssignmentRow,
-  weekStart: string,
-): boolean {
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 6);
-  const weekEndStr = weekEnd.toISOString().slice(0, 10);
-
-  if (asg.start_date > weekEndStr) return false;
-  if (asg.end_date && asg.end_date < weekStart) return false;
-  return true;
+function parseDateUTC(s: string | null | undefined): Date | null {
+  if (s == null) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(s).trim());
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return isFinite(d.getTime()) ? d : null;
 }
 
 /**
- * Builds the full planner grid: employees x weeks with utilization data.
- * Pure function - no DB access.
+ * Count business days (Mon–Fri) where the assignment [aStart, aEnd]
+ * overlaps the week window [wStart, wEnd]. Returns 0–5.
  */
+function businessDaysInOverlap(
+  aStart: string,
+  aEnd: string | null,
+  wStart: string,
+  wEnd: string,
+): number {
+  const as = parseDateUTC(aStart);
+  const ws = parseDateUTC(wStart);
+  if (!as || !ws) return 0;
+  const ae = aEnd ? parseDateUTC(aEnd) : null;
+  const we = parseDateUTC(wEnd);
+  if (!we) return 0;
+
+  const overlapStart = as > ws ? as : ws;
+  const overlapEnd = ae ? (ae < we ? ae : we) : we;
+  if (overlapEnd < overlapStart) return 0;
+
+  let count = 0;
+  const cur = new Date(overlapStart.getTime());
+  while (cur <= overlapEnd) {
+    const dow = cur.getUTCDay();
+    if (dow >= 1 && dow <= 5) count++;
+    cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+  return count;
+}
+
 export function buildPlannerGrid(
   employees: RawEmployeeRow[],
   assignments: RawAssignmentRow[],
   weeks: string[],
 ): PlannerResult {
-  // Index assignments by employee
   const assignmentsByEmployee = new Map<string, RawAssignmentRow[]>();
   for (const asg of assignments) {
     const list = assignmentsByEmployee.get(asg.employee_id) || [];
@@ -73,45 +79,65 @@ export function buildPlannerGrid(
     assignmentsByEmployee.set(asg.employee_id, list);
   }
 
+  const BDAYS = 5;
   const employeeRows: EmployeePlannerRow[] = [];
 
   for (const emp of employees) {
     const empAssignments = assignmentsByEmployee.get(emp.employee_id) || [];
     const capacity = Number(emp.weekly_capacity_hours) || 40;
-    const weekData: EmployeeWeek[] = [];
 
-    for (const weekStart of weeks) {
+    // Pre-compute week end dates
+    const weekWindows = weeks.map((ws, index) => {
+      const we = new Date(ws + 'T00:00:00Z');
+      we.setUTCDate(we.getUTCDate() + 6);
+      return { index, start: ws, end: we.toISOString().slice(0, 10) };
+    });
+
+    const weekData: EmployeeWeek[] = weekWindows.map(({ index, start, end }) => {
       const weekAssignments: WeekAssignment[] = [];
+      let totalHours = 0;
 
       for (const asg of empAssignments) {
-        if (assignmentOverlapsWeek(asg, weekStart)) {
+        if (asg.status === 'cancelled') continue;
+        const hrs = Number(asg.weekly_hours) || 0;
+        if (hrs <= 0) continue;
+
+        const activeDays = businessDaysInOverlap(asg.start_date, asg.end_date, start, end);
+        if (activeDays > 0) {
+          const prorated = Math.round((hrs * activeDays / BDAYS) * 10) / 10;
+          totalHours += prorated;
           weekAssignments.push({
             assignment_id: asg.assignment_id,
             contract_id: asg.contract_id,
             contract_name: asg.contract_name,
             client_name: asg.client_name,
             role_title: asg.role_title,
-            weekly_hours: Number(asg.weekly_hours),
+            weekly_hours: asg.weekly_hours,
             status: asg.status,
+            resource_request_id: asg.resource_request_id ?? null,
           });
         }
       }
 
-      const totalHours = weekAssignments.reduce((s, a) => s + a.weekly_hours, 0);
-      const utilizationPct = capacity > 0 ? Math.round((totalHours / capacity) * 100) : 0;
+      totalHours = Math.round(totalHours * 10) / 10;
+      const pct = capacity > 0 ? (totalHours / capacity) * 100 : 0;
+      const utilizationPct = Math.round(pct * 10) / 10;
 
-      weekData.push({
-        week_start: weekStart,
+      return {
+        week_index: index,
+        week_start: start,
         assignments: weekAssignments,
         total_hours: totalHours,
         capacity_hours: capacity,
         utilization_pct: utilizationPct,
-        bucket: toBucket(utilizationPct),
-      });
-    }
+        bucket: toBucket(pct),
+      };
+    });
 
-    const avgUtil = weekData.length > 0
-      ? Math.round(weekData.reduce((s, w) => s + w.utilization_pct, 0) / weekData.length)
+    const hasOverbookedWeek = weekData.some(w => w.utilization_pct > 100);
+    const weeksWithLoad = weekData.filter(w => w.utilization_pct > 0);
+    const avgUtil = weeksWithLoad.length > 0
+      ? Math.round(weeksWithLoad.reduce((s, w) => s + w.utilization_pct, 0) / weeksWithLoad.length * 10) / 10
       : 0;
 
     employeeRows.push({
@@ -127,10 +153,10 @@ export function buildPlannerGrid(
       weeks: weekData,
       avg_utilization_pct: avgUtil,
       avg_bucket: toBucket(avgUtil),
+      has_overbooked_week: hasOverbookedWeek,
     });
   }
 
-  // Summary
   let idleCount = 0, lightCount = 0, healthyCount = 0, overbookedCount = 0;
   for (const row of employeeRows) {
     switch (row.avg_bucket) {
@@ -141,9 +167,17 @@ export function buildPlannerGrid(
     }
   }
 
-  const avgUtilization = employeeRows.length > 0
-    ? Math.round(employeeRows.reduce((s, r) => s + r.avg_utilization_pct, 0) / employeeRows.length)
-    : 0;
+  // Global avg: flat average of utilization_pct across all (employee, week) pairs with hours > 0
+  let utilSum = 0, utilCount = 0;
+  for (const row of employeeRows) {
+    for (const w of row.weeks) {
+      if (w.total_hours > 0) {
+        utilSum += w.utilization_pct;
+        utilCount++;
+      }
+    }
+  }
+  const avgUtilization = utilCount > 0 ? Math.round((utilSum / utilCount) * 10) / 10 : 0;
 
   return {
     employees: employeeRows,

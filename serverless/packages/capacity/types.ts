@@ -8,9 +8,11 @@ export interface WeekAssignment {
   role_title: string | null;
   weekly_hours: number;
   status: string;
+  resource_request_id: string | null;
 }
 
 export interface EmployeeWeek {
+  week_index: number;
   week_start: string;  // ISO date (Monday)
   assignments: WeekAssignment[];
   total_hours: number;
@@ -32,11 +34,12 @@ export interface EmployeePlannerRow {
   weeks: EmployeeWeek[];
   avg_utilization_pct: number;
   avg_bucket: UtilizationBucket;
+  has_overbooked_week: boolean;
 }
 
 export interface PlannerResult {
   employees: EmployeePlannerRow[];
-  weeks: string[];  // ordered list of week-start dates
+  weeks: string[];
   summary: {
     total_employees: number;
     idle_count: number;
@@ -50,11 +53,15 @@ export interface PlannerResult {
 export interface PlannerFilters {
   date_from?: string;
   date_to?: string;
+  contract_id?: string;
   area_id?: string;
   level?: string;
+  level_min?: string;
+  level_max?: string;
   status?: string;
   employee_id?: string;
   country?: string;
+  search?: string;
 }
 
 export interface RawAssignmentRow {
@@ -68,6 +75,7 @@ export interface RawAssignmentRow {
   start_date: string;
   end_date: string | null;
   status: string;
+  resource_request_id: string | null;
 }
 
 export interface RawEmployeeRow {

@@ -64,6 +64,18 @@ router.get('/api/contracts', async (event, _user) => {
   return paginated(await service.list({ page, limit, offset, filters, sort }));
 });
 
+/* -------- LOOKUP (lightweight for dropdowns) -------- */
+router.get('/api/contracts/lookup', async (_event, _user) => {
+  const { rows } = await db.query(
+    `SELECT c.id, c.name, c.type, c.status, cl.name AS client_name
+       FROM contracts c
+       LEFT JOIN clients cl ON cl.id = c.client_id
+      WHERE c.deleted_at IS NULL
+      ORDER BY c.name`,
+  );
+  return ok({ data: rows });
+});
+
 /* -------- EXPORT CSV -------- */
 router.get('/api/contracts/export.csv', async (event, _user) => {
   const qs = event.queryStringParameters || {};

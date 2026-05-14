@@ -21,6 +21,25 @@ router.get('/api/projects/portfolio-health', async (_event, _user) => {
   return ok(await service.portfolioHealth());
 });
 
+/* ── Baseline Preview ── */
+
+router.get('/api/projects/:contract_id/baseline-preview', async (event, user) => {
+  requireRole('superadmin', 'admin', 'lead')(user);
+  return ok(await service.getBaselinePreview(event.pathParameters!.contract_id!));
+});
+
+/* ── WBS ── */
+
+router.get('/api/projects/:contract_id/wbs', async (event, _user) => {
+  const { rows: [baseline] } = await db.query(
+    'SELECT id FROM project_baselines WHERE contract_id=$1 AND is_active=true',
+    [event.pathParameters!.contract_id!],
+  );
+  if (!baseline) return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'No hay baseline activo' }) };
+  const { rows } = await db.query('SELECT * FROM wbs_packages WHERE baseline_id=$1 ORDER BY sort_order', [baseline.id]);
+  return ok(rows);
+});
+
 /* ── Baseline ── */
 
 router.get('/api/projects/:contract_id/baseline', async (event, _user) => {

@@ -10,7 +10,6 @@ export interface CapacityService {
 export function createCapacityService(repo: CapacityRepository): CapacityService {
   return {
     async getPlanner(filters) {
-      // Default date range: current week to +12 weeks
       const now = new Date();
       const day = now.getDay();
       const mondayDiff = day === 0 ? -6 : 1 - day;
@@ -27,7 +26,6 @@ export function createCapacityService(repo: CapacityRepository): CapacityService
         throw new BadRequest('date_from no puede ser posterior a date_to');
       }
 
-      // Cap at 52 weeks to prevent excessive payloads
       const diffMs = new Date(dateTo).getTime() - new Date(dateFrom).getTime();
       const diffWeeks = diffMs / (7 * 86400000);
       if (diffWeeks > 52) {
@@ -35,7 +33,8 @@ export function createCapacityService(repo: CapacityRepository): CapacityService
       }
 
       const weeks = generateWeeks(dateFrom, dateTo);
-      const employees = await repo.findEmployees(filters);
+      // Pass resolved dates so the repository can use them for the contract_id subquery.
+      const employees = await repo.findEmployees({ ...filters, date_from: dateFrom, date_to: dateTo });
 
       if (employees.length === 0) {
         return {

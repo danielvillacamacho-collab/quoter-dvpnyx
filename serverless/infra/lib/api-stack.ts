@@ -125,17 +125,26 @@ export class ApiStack extends Stack {
     });
     grantSecrets(crm);
 
-    // ── Module 3: Employees + Areas + Skills ───────────────────────
+    // ── Module 3: Employees + Areas + Skills + Employee Costs ─────
     const employees = new ModuleLambda(this, 'Employees', {
       ...common, moduleName: 'employees', entry: pkg('employees'),
       routes: [
-        { path: '/api/employees',              methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/employees/{id}',         methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/employees/{id}/skills',  methods: [HttpMethod.GET, HttpMethod.PUT] },
-        { path: '/api/areas',                  methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/areas/{id}',             methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/skills',                 methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/skills/{id}',            methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/employees',                              methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/employees/lookup',                       methods: [HttpMethod.GET] },
+        { path: '/api/employees/{id}',                         methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/employees/{id}/skills',                  methods: [HttpMethod.GET, HttpMethod.PUT] },
+        { path: '/api/areas',                                  methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/areas/{id}',                             methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/skills',                                 methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/skills/{id}',                            methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        // Employee Costs (admin/superadmin only — salary PII)
+        { path: '/api/employee-costs',                         methods: [HttpMethod.GET] },
+        { path: '/api/employee-costs/bulk/commit',             methods: [HttpMethod.POST] },
+        { path: '/api/employee-costs/copy-from-previous',      methods: [HttpMethod.POST] },
+        { path: '/api/employee-costs/project-to-future',       methods: [HttpMethod.POST] },
+        { path: '/api/employee-costs/lock/{period}',           methods: [HttpMethod.POST] },
+        { path: '/api/employee-costs/unlock/{period}',         methods: [HttpMethod.POST] },
+        { path: '/api/employee-costs/recalculate-usd/{period}', methods: [HttpMethod.POST] },
       ],
     });
     grantSecrets(employees);
@@ -188,9 +197,20 @@ export class ApiStack extends Stack {
     const resourceRequests = new ModuleLambda(this, 'ResourceRequests', {
       ...common, moduleName: 'resource-requests', entry: pkg('resource-requests'),
       routes: [
-        { path: '/api/resource-requests',                methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/resource-requests/{id}',           methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/resource-requests/{id}/candidates', methods: [HttpMethod.GET] },
+        { path: '/api/resource-requests',                  methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/resource-requests/{id}',             methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/resource-requests/{id}/candidates',  methods: [HttpMethod.GET] },
+        { path: '/api/resource-requests/{id}/cancel',      methods: [HttpMethod.POST] },
+        // RM routes
+        { path: '/api/rm/assignments',                     methods: [HttpMethod.GET] },
+        { path: '/api/rm/assignments/bulk-assign',         methods: [HttpMethod.POST] },
+        { path: '/api/rm/assignments/bulk-extend',         methods: [HttpMethod.POST] },
+        { path: '/api/rm/assignments/bulk-end',            methods: [HttpMethod.POST] },
+        { path: '/api/rm/assignments/{id}/lock',           methods: [HttpMethod.POST] },
+        { path: '/api/rm/assignments/{id}/unlock',         methods: [HttpMethod.POST] },
+        { path: '/api/rm/weekly-capacity',                 methods: [HttpMethod.GET] },
+        { path: '/api/rm/actual-hours/export',             methods: [HttpMethod.GET] },
+        { path: '/api/rm/dashboard',                       methods: [HttpMethod.GET] },
       ],
     });
     grantSecrets(resourceRequests);
@@ -199,10 +219,12 @@ export class ApiStack extends Stack {
     const assignments = new ModuleLambda(this, 'Assignments', {
       ...common, moduleName: 'assignments', entry: pkg('assignments'),
       routes: [
-        { path: '/api/assignments',              methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/assignments/{id}',         methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/assignments/validate',     methods: [HttpMethod.POST] },
-        { path: '/api/assignments/export.csv',   methods: [HttpMethod.GET] },
+        { path: '/api/assignments',                            methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/assignments/validate',                   methods: [HttpMethod.POST] },
+        { path: '/api/assignments/export.csv',                 methods: [HttpMethod.GET] },
+        { path: '/api/assignments/{id}',                       methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/assignments/{id}/rate-history',          methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/assignments/{id}/rate-history/{rateId}', methods: [HttpMethod.DELETE] },
       ],
     });
     grantSecrets(assignments);
@@ -234,13 +256,18 @@ export class ApiStack extends Stack {
     const revenue = new ModuleLambda(this, 'Revenue', {
       ...common, moduleName: 'revenue', entry: pkg('revenue'),
       routes: [
-        { path: '/api/revenue',                      methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/revenue/plan/{contract_id}',   methods: [HttpMethod.GET, HttpMethod.PUT] },
-        { path: '/api/admin/exchange-rates',         methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/admin/exchange-rates/{id}',    methods: [HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/budgets',                      methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/budgets/{id}',                 methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/budgets/summary',              methods: [HttpMethod.GET] },
+        { path: '/api/revenue',                            methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/revenue/plan/{contract_id}',         methods: [HttpMethod.GET, HttpMethod.PUT] },
+        { path: '/api/revenue/capacity-projection',        methods: [HttpMethod.GET] },
+        { path: '/api/revenue/{contract_id}/{yyyymm}',     methods: [HttpMethod.PUT] },
+        { path: '/api/revenue/{contract_id}/{yyyymm}/close', methods: [HttpMethod.POST] },
+        { path: '/api/admin/exchange-rates',               methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/admin/exchange-rates/{id}',          methods: [HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/admin/settings',                     methods: [HttpMethod.GET, HttpMethod.PUT] },
+        { path: '/api/admin/settings/{key}',               methods: [HttpMethod.GET, HttpMethod.PUT] },
+        { path: '/api/budgets',                            methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/budgets/{id}',                       methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/budgets/summary',                    methods: [HttpMethod.GET] },
       ],
     });
     grantSecrets(revenue);
@@ -250,6 +277,8 @@ export class ApiStack extends Stack {
       ...common, moduleName: 'project-health', entry: pkg('project-health'),
       memorySize: 512,
       routes: [
+        { path: '/api/projects/{contract_id}/baseline-preview',  methods: [HttpMethod.GET] },
+        { path: '/api/projects/{contract_id}/wbs',               methods: [HttpMethod.GET] },
         { path: '/api/projects/{contract_id}/baseline',          methods: [HttpMethod.GET, HttpMethod.POST] },
         { path: '/api/projects/{contract_id}/baseline/rebase',   methods: [HttpMethod.POST] },
         { path: '/api/projects/{contract_id}/status-reports',    methods: [HttpMethod.GET, HttpMethod.POST] },
@@ -314,12 +343,21 @@ export class ApiStack extends Stack {
         { path: '/api/me/education',             methods: [HttpMethod.GET, HttpMethod.POST] },
         { path: '/api/me/education/{id}',        methods: [HttpMethod.PUT, HttpMethod.DELETE] },
         { path: '/api/me/completeness',          methods: [HttpMethod.GET] },
-        // Bulk import & search
-        { path: '/api/bulk-import/{entity}',     methods: [HttpMethod.POST] },
-        { path: '/api/bulk-import/templates/{entity}', methods: [HttpMethod.GET] },
-        { path: '/api/search',                   methods: [HttpMethod.GET] },
+        // Users — reset password
+        { path: '/api/users/{id}/reset-password', methods: [HttpMethod.POST] },
+        // Bulk import
+        { path: '/api/bulk-import/entities',              methods: [HttpMethod.GET] },
+        { path: '/api/bulk-import/templates/{entity}',    methods: [HttpMethod.GET] },
+        { path: '/api/bulk-import/{entity}/preview',      methods: [HttpMethod.POST] },
+        { path: '/api/bulk-import/{entity}/commit',       methods: [HttpMethod.POST] },
+        // AI interactions
+        { path: '/api/ai-interactions',                   methods: [HttpMethod.GET] },
+        { path: '/api/ai-interactions/{id}',              methods: [HttpMethod.GET] },
+        { path: '/api/ai-interactions/{id}/decision',     methods: [HttpMethod.POST] },
+        // Search & health
+        { path: '/api/search',                            methods: [HttpMethod.GET] },
         // Health (no-auth)
-        { path: '/api/health',                   methods: [HttpMethod.GET] },
+        { path: '/api/health',                            methods: [HttpMethod.GET] },
       ],
     });
     grantSecrets(platform);
@@ -329,13 +367,19 @@ export class ApiStack extends Stack {
     const internalOps = new ModuleLambda(this, 'InternalOps', {
       ...common, moduleName: 'internal-ops', entry: pkg('internal-ops'),
       routes: [
-        { path: '/api/internal-initiatives',       methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/internal-initiatives/{id}',  methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/novelties',                  methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/novelties/{id}',             methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
-        { path: '/api/idle-time',                  methods: [HttpMethod.GET] },
-        { path: '/api/holidays',                   methods: [HttpMethod.GET, HttpMethod.POST] },
-        { path: '/api/holidays/{id}',              methods: [HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/internal-initiatives',                          methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/internal-initiatives/{id}',                     methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/novelties',                                     methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/novelties/_meta/types',                         methods: [HttpMethod.GET] },
+        { path: '/api/novelties/{id}',                                methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+        { path: '/api/novelties/{id}/cancel',                         methods: [HttpMethod.POST] },
+        { path: '/api/novelties/calendar/{employee_id}',              methods: [HttpMethod.GET] },
+        { path: '/api/idle-time',                                     methods: [HttpMethod.GET] },
+        { path: '/api/idle-time/users/{employee_id}/periods/{yyyymm}', methods: [HttpMethod.GET] },
+        { path: '/api/idle-time/recalculate',                         methods: [HttpMethod.POST] },
+        { path: '/api/idle-time/initiative-cost-summary',             methods: [HttpMethod.GET] },
+        { path: '/api/holidays',                                      methods: [HttpMethod.GET, HttpMethod.POST] },
+        { path: '/api/holidays/{id}',                                 methods: [HttpMethod.PUT, HttpMethod.DELETE] },
       ],
     });
     grantSecrets(internalOps);

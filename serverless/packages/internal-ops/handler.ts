@@ -223,6 +223,68 @@ router.delete('/api/novelties/:id', async (event, user) => {
   return message('Novedad eliminada');
 });
 
+router.post('/api/novelties/:id/cancel', async (event, user) => {
+  const reason = (JSON.parse(event.body || '{}') as Record<string, unknown>).cancellation_reason as string | null;
+  if (!reason || String(reason).trim().length < 5) {
+    return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'cancellation_reason requerido (≥5 chars)' }) };
+  }
+
+  const conn = await db.connect();
+  try {
+    await conn.query('BEGIN');
+    const { rows } = await conn.query(
+      `SELECT n.*, e.user_id AS employee_user_id FROM employee_novelties n LEFT JOIN employees e ON e.id=n.employee_id WHERE n.id=$1`,
+      [event.pathParameters!.id!],
+    );
+    if (!rows.length) { await conn.query('ROLLBACK'); return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Novedad no encontrada' }) }; }
+    const n = rows[0];
+    if (n.status === 'cancelled') { await conn.query('ROLLBACK'); return { statusCode: 409, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Ya está cancelada' }) }; }
+    const isAdmin = ['admin', 'superadmin', 'director'].includes(user.role);
+    if (!isAdmin && n.employee_user_id !== user.id && n.created_by !== user.id) {
+      await conn.query('ROLLBACK');
+      return { statusCode: 403, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Sin permisos para cancelar esta novedad' }) };
+    }
+    const { rows: updated } = await conn.query(
+      `UPDATE employee_novelties SET status='cancelled', cancelled_at=NOW(), cancelled_by=$1, cancellation_reason=$2, updated_by=$1, updated_at=NOW() WHERE id=$3 RETURNING *`,
+      [user.id, reason, event.pathParameters!.id!],
+    );
+    await events.emit(conn, { event_type: 'novelty.cancelled', entity_type: 'novelty', entity_id: event.pathParameters!.id!, actor_user_id: user.id, payload: { cancellation_reason: reason } });
+    await conn.query('COMMIT');
+    return ok(updated[0]);
+  } catch (err) {
+    try { await conn.query('ROLLBACK'); } catch { /* ignore */ }
+    throw err;
+  } finally { conn.release(); }
+});
+
+router.get('/api/novelties/calendar/:employee_id', async (event, _user) => {
+  const { employee_id } = event.pathParameters!;
+  const qs = event.queryStringParameters || {};
+  const { from, to } = qs;
+  if (!from || !to) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'from y to (YYYY-MM-DD) son requeridos' }) };
+  if (to < from) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'to debe ser ≥ from' }) };
+
+  const { rows: empRows } = await db.query(`SELECT id, country_id, first_name, last_name FROM employees WHERE id=$1 AND deleted_at IS NULL`, [employee_id]);
+  if (!empRows.length) return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Empleado no encontrado' }) };
+  const emp = empRows[0];
+
+  const [holidays, novelties, contractAssignments, internalAssignments] = await Promise.all([
+    emp.country_id
+      ? db.query(`SELECT holiday_date, label, holiday_type FROM country_holidays WHERE country_id=$1 AND holiday_date BETWEEN $2 AND $3 ORDER BY holiday_date`, [emp.country_id, from, to]).then(r => r.rows)
+      : Promise.resolve([]),
+    db.query(`SELECT n.*, nt.label_es AS novelty_type_label, nt.counts_in_capacity FROM employee_novelties n LEFT JOIN novelty_types nt ON nt.id=n.novelty_type_id WHERE n.employee_id=$1 AND n.status='approved' AND n.end_date>=$2 AND n.start_date<=$3 ORDER BY n.start_date`, [employee_id, from, to]).then(r => r.rows),
+    db.query(`SELECT a.id, a.start_date, a.end_date, a.weekly_hours, a.status, a.role_title, c.name AS contract_name FROM assignments a LEFT JOIN contracts c ON c.id=a.contract_id WHERE a.employee_id=$1 AND a.deleted_at IS NULL AND a.status IN ('planned','active') AND COALESCE(a.end_date,'9999-12-31'::date)>=$2 AND a.start_date<=$3 ORDER BY a.start_date`, [employee_id, from, to]).then(r => r.rows),
+    db.query(`SELECT iia.id, iia.start_date, iia.end_date, iia.weekly_hours, iia.status, iia.role_description, ii.name AS initiative_name FROM internal_initiative_assignments iia LEFT JOIN internal_initiatives ii ON ii.id=iia.internal_initiative_id WHERE iia.employee_id=$1 AND iia.deleted_at IS NULL AND iia.status IN ('planned','active') AND COALESCE(iia.end_date,'9999-12-31'::date)>=$2 AND iia.start_date<=$3 ORDER BY iia.start_date`, [employee_id, from, to]).then(r => r.rows),
+  ]);
+
+  return ok({ employee: { id: emp.id, country_id: emp.country_id, first_name: emp.first_name, last_name: emp.last_name }, from, to, holidays, novelties, contract_assignments: contractAssignments, internal_assignments: internalAssignments });
+});
+
+router.get('/api/novelties/_meta/types', async (_event, _user) => {
+  const { rows } = await db.query(`SELECT id, label_es, label_en, is_paid_time, requires_attachment_recommended, counts_in_capacity, sort_order FROM novelty_types WHERE is_active=true ORDER BY sort_order`);
+  return ok({ data: rows });
+});
+
 /* ==================================================================
  * IDLE TIME — /api/idle-time
  * ================================================================== */
@@ -512,6 +574,37 @@ router.post('/api/idle-time/calculate', async (event, user) => {
   return ok({ period_yyyymm, employees_count: employeeIds.length, ...results });
 });
 
+router.get('/api/idle-time/users/:employee_id/periods/:yyyymm', async (event, user) => {
+  const { employee_id, yyyymm } = event.pathParameters!;
+  const period_yyyymm = normalizePeriod(yyyymm);
+  if (!parseIdlePeriod(period_yyyymm)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'period inválido (YYYY-MM)' }) };
+
+  const isAdmin = ['admin', 'superadmin', 'director'].includes(user.role);
+  if (!isAdmin) {
+    const { rows } = await db.query(`SELECT id, user_id FROM employees WHERE id=$1`, [employee_id]);
+    if (!rows.length) return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Empleado no encontrado' }) };
+    if (rows[0].user_id !== user.id) return { statusCode: 403, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Sin permisos' }) };
+  }
+
+  const { rows: snap } = await db.query(`SELECT * FROM idle_time_calculations WHERE employee_id=$1 AND period_yyyymm=$2`, [employee_id, period_yyyymm]);
+  if (snap.length > 0) return ok({ ...snap[0], persisted: true });
+
+  const data = await loadDataForIdlePeriod(db, employee_id!, period_yyyymm!);
+  if (!data) return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Empleado no encontrado' }) };
+
+  const result = calculateIdleTime({
+    period_yyyymm,
+    employee: data.employee,
+    country: data.country,
+    holidays: data.holidays,
+    novelties: data.novelties,
+    contractAssignments: data.contractAssignments,
+    internalAssignments: data.internalAssignments,
+    hourly_rate_usd: data.hourly_rate_usd,
+  });
+  return ok({ ...result, calculation_status: 'preliminary', persisted: false });
+});
+
 router.post('/api/idle-time/finalize', async (event, user) => {
   requireAdmin(user);
   const body = JSON.parse(event.body || '{}');
@@ -525,6 +618,50 @@ router.post('/api/idle-time/finalize', async (event, user) => {
     [period_yyyymm],
   );
   return ok({ period_yyyymm, finalized_count: rowCount });
+});
+
+router.post('/api/idle-time/recalculate', async (event, user) => {
+  requireAdmin(user);
+  const body = JSON.parse(event.body || '{}');
+  const period_yyyymm = normalizePeriod(body.period_yyyymm);
+  if (!parseIdlePeriod(period_yyyymm)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'period_yyyymm inválido' }) };
+  if (!body.reason || String(body.reason).trim().length < 10) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'reason requerido (≥10 chars)' }) };
+
+  const conn = await db.connect();
+  try {
+    await conn.query('BEGIN');
+    await conn.query(`DELETE FROM idle_time_calculations WHERE period_yyyymm=$1`, [period_yyyymm]);
+    await events.emit(conn, { event_type: 'idle_time.recalculated', entity_type: 'idle_time_period', entity_id: '00000000-0000-0000-0000-000000000000', actor_user_id: user.id, payload: { period_yyyymm, reason: body.reason } });
+    await conn.query('COMMIT');
+    return ok({ ok: true, period_yyyymm, message: 'Snapshots eliminados. Vuelve a correr POST /calculate para recalcular.' });
+  } catch (err) {
+    try { await conn.query('ROLLBACK'); } catch { /* ignore */ }
+    throw err;
+  } finally { conn.release(); }
+});
+
+router.get('/api/idle-time/initiative-cost-summary', async (event, user) => {
+  const isAdmin = ['admin', 'superadmin', 'director'].includes(user.role);
+  if (!isAdmin) return { statusCode: 403, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Sin permisos' }) };
+  const qs = event.queryStringParameters || {};
+  const period_yyyymm = normalizePeriod(qs.period);
+  if (!parseIdlePeriod(period_yyyymm)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'period requerido' }) };
+
+  const start = idlePeriodStart(period_yyyymm);
+  const end = idlePeriodEnd(period_yyyymm);
+  const params = [start, end];
+
+  const [totalsRes, byAreaRes] = await Promise.all([
+    db.query(
+      `SELECT (SELECT COUNT(*)::int FROM internal_initiatives WHERE deleted_at IS NULL AND status='active') AS active_initiatives, (SELECT COALESCE(SUM(budget_usd),0)::numeric FROM internal_initiatives WHERE deleted_at IS NULL AND status='active') AS total_budget_usd, COALESCE(SUM(weekly_hours*COALESCE(hourly_rate_usd,0)*GREATEST(0,(LEAST($2::date,COALESCE(end_date,$2::date))-GREATEST(start_date,$1::date))::numeric/7)),0)::numeric AS total_consumed_usd_period, COALESCE(SUM(weekly_hours*GREATEST(0,(LEAST($2::date,COALESCE(end_date,$2::date))-GREATEST(start_date,$1::date))::numeric/7)),0)::numeric AS total_hours_period FROM internal_initiative_assignments WHERE deleted_at IS NULL AND status IN ('planned','active','ended') AND COALESCE(end_date,'9999-12-31'::date)>=$1 AND start_date<=$2`,
+      params,
+    ),
+    db.query(
+      `SELECT ii.business_area_id AS area, COALESCE(SUM(iia.weekly_hours*COALESCE(iia.hourly_rate_usd,0)*GREATEST(0,(LEAST($2::date,COALESCE(iia.end_date,$2::date))-GREATEST(iia.start_date,$1::date))::numeric/7)),0)::numeric AS consumed_usd, COALESCE(SUM(iia.weekly_hours*GREATEST(0,(LEAST($2::date,COALESCE(iia.end_date,$2::date))-GREATEST(iia.start_date,$1::date))::numeric/7)),0)::numeric AS hours FROM internal_initiative_assignments iia INNER JOIN internal_initiatives ii ON ii.id=iia.internal_initiative_id WHERE iia.deleted_at IS NULL AND iia.status IN ('planned','active','ended') AND COALESCE(iia.end_date,'9999-12-31'::date)>=$1 AND iia.start_date<=$2 GROUP BY ii.business_area_id ORDER BY consumed_usd DESC`,
+      params,
+    ),
+  ]);
+  return ok({ period_yyyymm, totals: totalsRes.rows[0], by_business_area: byAreaRes.rows });
 });
 
 /* ==================================================================

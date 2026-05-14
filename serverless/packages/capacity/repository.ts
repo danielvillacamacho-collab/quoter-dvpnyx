@@ -4,6 +4,7 @@ import type { PlannerFilters, RawAssignmentRow, RawEmployeeRow } from './types';
 export interface CapacityRepository {
   findEmployees(filters: PlannerFilters): Promise<RawEmployeeRow[]>;
   findAssignments(employeeIds: string[], dateFrom: string, dateTo: string): Promise<RawAssignmentRow[]>;
+  countAllActive(): Promise<number>;
 }
 
 export function createCapacityRepository(db: Pool): CapacityRepository {
@@ -14,14 +15,62 @@ export function createCapacityRepository(db: Pool): CapacityRepository {
       const add = (v: unknown) => { params.push(v); return `$${params.length}`; };
 
       if (filters.area_id) wheres.push(`e.area_id = ${add(Number(filters.area_id))}`);
-      if (filters.level) wheres.push(`e.level = ${add(filters.level)}`);
+
+      if (filters.level) {
+        wheres.push(`e.level = ${add(filters.level)}`);
+      } else {
+        if (filters.level_min) {
+          const numMin = Number(String(filters.level_min).replace(/[^0-9]/g, ''));
+          if (!isNaN(numMin) && numMin > 0) {
+            wheres.push(`NULLIF(regexp_replace(e.level, '[^0-9]', '', 'g'), '')::integer >= ${add(numMin)}`);
+          }
+        }
+        if (filters.level_max) {
+          const numMax = Number(String(filters.level_max).replace(/[^0-9]/g, ''));
+          if (!isNaN(numMax) && numMax > 0) {
+            wheres.push(`NULLIF(regexp_replace(e.level, '[^0-9]', '', 'g'), '')::integer <= ${add(numMax)}`);
+          }
+        }
+      }
+
       if (filters.status) {
         wheres.push(`e.status = ${add(filters.status)}`);
       } else {
         wheres.push(`e.status IN ('active','on_leave','bench')`);
       }
+
       if (filters.employee_id) wheres.push(`e.id = ${add(filters.employee_id)}`);
       if (filters.country) wheres.push(`e.country = ${add(filters.country)}`);
+
+      if (filters.search) {
+        const term = filters.search.replace(/%/g, '\\%').replace(/_/g, '\\_');
+        wheres.push(`(e.first_name || ' ' || e.last_name) ILIKE ${add('%' + term + '%')}`);
+      }
+
+      if (filters.contract_id) {
+        const contractParam = add(filters.contract_id);
+        if (filters.date_from && filters.date_to) {
+          const dateToParam = add(filters.date_to);
+          const dateFromParam = add(filters.date_from);
+          wheres.push(`EXISTS (
+            SELECT 1 FROM assignments asg
+            WHERE asg.employee_id = e.id
+              AND asg.contract_id = ${contractParam}
+              AND asg.deleted_at IS NULL
+              AND asg.status IN ('planned','active')
+              AND asg.start_date <= ${dateToParam}
+              AND (asg.end_date IS NULL OR asg.end_date >= ${dateFromParam})
+          )`);
+        } else {
+          wheres.push(`EXISTS (
+            SELECT 1 FROM assignments asg
+            WHERE asg.employee_id = e.id
+              AND asg.contract_id = ${contractParam}
+              AND asg.deleted_at IS NULL
+              AND asg.status IN ('planned','active')
+          )`);
+        }
+      }
 
       const where = 'WHERE ' + wheres.join(' AND ');
 
@@ -39,7 +88,7 @@ export function createCapacityRepository(db: Pool): CapacityRepository {
          FROM employees e
          LEFT JOIN areas a ON a.id = e.area_id
          ${where}
-         ORDER BY a.name, e.level, e.first_name, e.last_name`,
+         ORDER BY e.first_name, e.last_name`,
         params,
       );
       return rows;
@@ -59,7 +108,8 @@ export function createCapacityRepository(db: Pool): CapacityRepository {
            asg.weekly_hours,
            asg.start_date::text,
            asg.end_date::text,
-           asg.status
+           asg.status,
+           asg.resource_request_id
          FROM assignments asg
          LEFT JOIN contracts c ON c.id = asg.contract_id
          LEFT JOIN clients cl ON cl.id = c.client_id
@@ -72,6 +122,15 @@ export function createCapacityRepository(db: Pool): CapacityRepository {
         [employeeIds, dateTo, dateFrom],
       );
       return rows;
+    },
+
+    async countAllActive() {
+      const { rows } = await db.query(
+        `SELECT COUNT(*)::int AS cnt
+         FROM employees
+         WHERE deleted_at IS NULL AND status IN ('active','on_leave','bench')`,
+      );
+      return Number(rows[0]?.cnt) || 0;
     },
   };
 }

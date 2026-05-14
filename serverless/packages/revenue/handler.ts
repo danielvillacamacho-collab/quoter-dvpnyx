@@ -7,6 +7,7 @@ import { requireAdmin } from '@shared/auth/rbac';
 import { getPool } from '@shared/db/connection';
 import { createEventEmitter } from '@shared/events/emitter';
 import { convert, buildRatesMap } from '@shared/fx/convert';
+import { requireSuperadmin } from '@shared/auth/rbac';
 import { createRevenueRepository } from './repository';
 import { createRevenueService } from './service';
 import { createExchangeRateRepository } from './exchange-rates.repository';
@@ -482,6 +483,254 @@ router.delete('/api/budgets/:id', async (event, user) => {
   requireAdmin(user);
   await budgetSvc.remove(event.pathParameters!.id!, user);
   return message('Presupuesto eliminado');
+});
+
+/* ──────────── Revenue Period Update ──────────── */
+
+router.put('/api/revenue/:contract_id/:yyyymm', async (event, user) => {
+  requireAdmin(user);
+  const { contract_id, yyyymm } = event.pathParameters!;
+  if (!YYYYMM_RE.test(yyyymm!)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'yyyymm inválido' }) };
+  const body = JSON.parse(event.body || '{}');
+
+  const conn = await db.connect();
+  try {
+    await conn.query('BEGIN');
+    const { rows: cRows } = await conn.query(`SELECT id, type, total_value_usd, original_currency FROM contracts WHERE id=$1 AND deleted_at IS NULL`, [contract_id]);
+    if (!cRows.length) { await conn.query('ROLLBACK'); return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Contrato no encontrado' }) }; }
+    const contract = cRows[0];
+    const isProject = contract.type === 'project';
+
+    let { rows: existing } = await conn.query(`SELECT * FROM revenue_periods WHERE contract_id=$1 AND yyyymm=$2 FOR UPDATE`, [contract_id, yyyymm]);
+    if (!existing.length && (contract.type === 'capacity' || contract.type === 'resell')) {
+      const { rows: created } = await conn.query(`INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, created_by, updated_by) VALUES ($1,$2,0,$3,$3) RETURNING *`, [contract_id, yyyymm, user.id]);
+      existing = created;
+    }
+    if (!existing.length) { await conn.query('ROLLBACK'); return { statusCode: 409, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Aún no hay plan declarado para este mes.' }) }; }
+
+    let finalRealPct = existing[0].real_pct != null ? Number(existing[0].real_pct) : null;
+    let finalRealUsd = existing[0].real_usd != null ? Number(existing[0].real_usd) : null;
+
+    if (isProject && Object.prototype.hasOwnProperty.call(body, 'real_pct')) {
+      const v = body.real_pct == null ? null : Number(body.real_pct);
+      if (v != null && (isNaN(v) || v < 0 || v > 1)) { await conn.query('ROLLBACK'); return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'real_pct debe estar entre 0 y 1' }) }; }
+      finalRealPct = v; finalRealUsd = null;
+      if (finalRealPct != null) {
+        const { rows: otherRows } = await conn.query(`SELECT yyyymm, real_pct FROM revenue_periods WHERE contract_id=$1 AND yyyymm<>$2 AND real_pct IS NOT NULL ORDER BY yyyymm ASC`, [contract_id, yyyymm]);
+        const merged = new Map(otherRows.map((r: any) => [String(r.yyyymm), Number(r.real_pct)]));
+        merged.set(yyyymm!, finalRealPct);
+        const sorted = [...merged.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+        for (let i = 1; i < sorted.length; i++) {
+          if (sorted[i][1] < sorted[i-1][1] - 1e-6) { await conn.query('ROLLBACK'); return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: `Mes ${sorted[i][0]}: real acumulado no puede ser menor que ${sorted[i-1][0]}.`, code: 'real_pct_not_monotonic' }) }; }
+        }
+        const totalValue = Number(contract.total_value_usd || 0);
+        let prevPct = 0;
+        for (const [m, pct] of sorted) {
+          const realUsd = (pct - prevPct) * totalValue;
+          if (m === yyyymm) { finalRealUsd = realUsd; }
+          else { await conn.query(`UPDATE revenue_periods SET real_usd=$3::numeric, updated_by=$4, updated_at=NOW() WHERE contract_id=$1 AND yyyymm=$2`, [contract_id, m, realUsd, user.id]); }
+          prevPct = pct;
+        }
+      }
+    } else if (!isProject) {
+      if (Object.prototype.hasOwnProperty.call(body, 'real_usd')) finalRealUsd = body.real_usd == null ? null : Number(body.real_usd);
+    }
+
+    const finalNotes = body.notes != null ? body.notes : existing[0].notes;
+    const { rows } = await conn.query(`UPDATE revenue_periods SET real_usd=$3::numeric, real_pct=$4::numeric, notes=$5, updated_by=$6, updated_at=NOW() WHERE contract_id=$1 AND yyyymm=$2 RETURNING *`, [contract_id, yyyymm, finalRealUsd, finalRealPct, finalNotes, user.id]);
+    await conn.query(`INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES ($1,'revenue_period_real_update','revenue_period',$2, jsonb_build_object('contract_id',$3::uuid,'yyyymm',$4::text,'real_usd',$5::numeric,'real_pct',$6::numeric)) ON CONFLICT DO NOTHING`, [user.id, contract_id, contract_id, yyyymm, rows[0].real_usd, rows[0].real_pct]).catch(() => {});
+    await conn.query('COMMIT');
+    return ok(rows[0]);
+  } catch (err) {
+    try { await conn.query('ROLLBACK'); } catch { /* ignore */ }
+    throw err;
+  } finally { conn.release(); }
+});
+
+/* ──────────── Revenue Period Close ──────────── */
+
+router.post('/api/revenue/:contract_id/:yyyymm/close', async (event, user) => {
+  requireAdmin(user);
+  const { contract_id, yyyymm } = event.pathParameters!;
+  if (!YYYYMM_RE.test(yyyymm!)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'yyyymm inválido' }) };
+  const body = JSON.parse(event.body || '{}');
+
+  const conn = await db.connect();
+  try {
+    await conn.query('BEGIN');
+    const { rows: cRows } = await conn.query(`SELECT id, type, total_value_usd FROM contracts WHERE id=$1 AND deleted_at IS NULL`, [contract_id]);
+    if (!cRows.length) { await conn.query('ROLLBACK'); return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Contrato no encontrado' }) }; }
+    const isProject = cRows[0].type === 'project';
+    const totalValue = Number(cRows[0].total_value_usd || 0);
+
+    let { rows: existing } = await conn.query(`SELECT * FROM revenue_periods WHERE contract_id=$1 AND yyyymm=$2 FOR UPDATE`, [contract_id, yyyymm]);
+    if (!existing.length && cRows[0].type === 'capacity') {
+      const { rows: created } = await conn.query(`INSERT INTO revenue_periods (contract_id, yyyymm, projected_usd, created_by, updated_by) VALUES ($1,$2,0,$3,$3) RETURNING *`, [contract_id, yyyymm, user.id]);
+      existing = created;
+    }
+    if (!existing.length) { await conn.query('ROLLBACK'); return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Período no existe' }) }; }
+
+    let newRealPct = existing[0].real_pct != null ? Number(existing[0].real_pct) : null;
+    let newRealUsd = existing[0].real_usd != null ? Number(existing[0].real_usd) : null;
+    if (isProject) {
+      if (body.real_pct != null) { newRealPct = Number(body.real_pct); newRealUsd = newRealPct * totalValue; }
+      else if (body.real_usd != null) { newRealUsd = Number(body.real_usd); }
+    } else if (body.real_usd != null) { newRealUsd = Number(body.real_usd); }
+
+    if (newRealUsd == null) { await conn.query('ROLLBACK'); return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: isProject ? 'real_pct es requerido' : 'real_usd es requerido' }) }; }
+
+    const { rows } = await conn.query(`UPDATE revenue_periods SET status='closed', real_usd=$3::numeric, real_pct=$4::numeric, notes=COALESCE($5,notes), closed_at=NOW(), closed_by=$6, updated_by=$6, updated_at=NOW() WHERE contract_id=$1 AND yyyymm=$2 RETURNING *`, [contract_id, yyyymm, newRealUsd, newRealPct, body.notes || null, user.id]);
+    await conn.query(`INSERT INTO audit_log (user_id, action, entity, entity_id, details) VALUES ($1,'revenue_period_close','revenue_period',$2, jsonb_build_object('contract_id',$3::uuid,'yyyymm',$4::text,'real_usd',$5::numeric,'real_pct',$6::numeric)) ON CONFLICT DO NOTHING`, [user.id, contract_id, contract_id, yyyymm, newRealUsd, newRealPct]).catch(() => {});
+    await conn.query('COMMIT');
+    return ok(rows[0]);
+  } catch (err) {
+    try { await conn.query('ROLLBACK'); } catch { /* ignore */ }
+    throw err;
+  } finally { conn.release(); }
+});
+
+/* ──────────── Capacity Projection ──────────── */
+
+const MONTH_LABELS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+router.get('/api/revenue/capacity-projection', async (event, _user) => {
+  const qs = event.queryStringParameters || {};
+  const contract_id = qs.contract_id;
+  if (!contract_id) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'contract_id es requerido' }) };
+
+  const { rows: cRows } = await db.query(`SELECT id, name, type FROM contracts WHERE id=$1 AND deleted_at IS NULL`, [contract_id]);
+  if (!cRows.length) return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Contrato no encontrado' }) };
+  const contract = cRows[0];
+  if (contract.type !== 'capacity') return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: `El contrato no es de tipo capacity (es '${contract.type}')` }) };
+
+  const { rows: asgRows } = await db.query(
+    `SELECT a.id, a.start_date, a.end_date, a.client_rate, a.client_rate_currency, e.first_name||' '||e.last_name AS employee_name FROM assignments a LEFT JOIN employees e ON e.id=a.employee_id WHERE a.contract_id=$1 AND a.deleted_at IS NULL AND a.status NOT IN ('cancelled') AND a.client_rate IS NOT NULL`,
+    [contract_id],
+  );
+  if (!asgRows.length) return ok({ contract_id, contract_name: contract.name, contract_type: 'capacity', months: [], grand_total: 0, currency_note: 'Sin asignaciones con tarifa.' });
+
+  const asgIds = asgRows.map((a: any) => a.id);
+  const rateHistoryByAsg = new Map<string, Array<{effective: Date; rate: number}>>();
+  if (asgIds.length) {
+    const { rows: rateRows } = await db.query(`SELECT assignment_id, effective_date, client_rate FROM assignment_rate_history WHERE assignment_id=ANY($1::uuid[]) ORDER BY assignment_id, effective_date ASC`, [asgIds]);
+    for (const r of rateRows as any[]) {
+      if (!rateHistoryByAsg.has(r.assignment_id)) rateHistoryByAsg.set(r.assignment_id, []);
+      rateHistoryByAsg.get(r.assignment_id)!.push({ effective: new Date(r.effective_date), rate: Number(r.client_rate) });
+    }
+  }
+
+  const today = new Date();
+  const horizonEnd = new Date(today.getFullYear(), today.getMonth() + 12, 0);
+  let rangeStart: Date | null = null; let rangeEnd: Date | null = null;
+  for (const a of asgRows as any[]) {
+    const s = new Date(a.start_date); const e = a.end_date ? new Date(a.end_date) : horizonEnd;
+    if (!rangeStart || s < rangeStart) rangeStart = s;
+    if (!rangeEnd || e > rangeEnd) rangeEnd = e;
+  }
+
+  const monthsMap = new Map<string, any>();
+  let cur = new Date(rangeStart!.getFullYear(), rangeStart!.getMonth(), 1);
+  const endMonth = new Date(rangeEnd!.getFullYear(), rangeEnd!.getMonth(), 1);
+
+  while (cur <= endMonth) {
+    const year = cur.getFullYear(); const month = cur.getMonth() + 1;
+    const yyyymm = `${year}${String(month).padStart(2,'0')}`;
+    const dim = new Date(year, month, 0).getDate();
+    const monthStart = new Date(year, month-1, 1); const monthEndDay = new Date(year, month, 0);
+    const assignmentRows: any[] = [];
+    for (const a of asgRows as any[]) {
+      const aStart = new Date(a.start_date); const aEnd = a.end_date ? new Date(a.end_date) : horizonEnd;
+      if (aStart > monthEndDay || aEnd < monthStart) continue;
+      const activeStart = aStart > monthStart ? aStart : monthStart;
+      const activeEnd = aEnd < monthEndDay ? aEnd : monthEndDay;
+      const history = rateHistoryByAsg.get(a.id);
+      const hasHistory = !!(history && history.length > 0);
+      const fallbackRate = Number(a.client_rate);
+      let amount = 0;
+      if (hasHistory && history!.length > 1) {
+        let curDay = new Date(activeStart);
+        while (curDay <= activeEnd) {
+          const dayRate = rateForDate(history!, curDay) || fallbackRate;
+          let streak = 1; const nextDay = new Date(curDay); nextDay.setDate(nextDay.getDate() + 1);
+          while (nextDay <= activeEnd) { if ((rateForDate(history!, nextDay) || fallbackRate) !== dayRate) break; streak++; nextDay.setDate(nextDay.getDate() + 1); }
+          amount += dayRate * streak / dim; curDay.setDate(curDay.getDate() + streak);
+        }
+      } else {
+        const rate = hasHistory ? history![0].rate : fallbackRate;
+        const daysActive = Math.round((activeEnd.getTime() - activeStart.getTime()) / 86400000) + 1;
+        amount = rate * daysActive / dim;
+      }
+      assignmentRows.push({ assignment_id: a.id, employee_name: a.employee_name, client_rate: fallbackRate, client_rate_currency: a.client_rate_currency || 'USD', days_active: Math.round((activeEnd.getTime()-activeStart.getTime())/86400000)+1, days_in_month: dim, prorated_amount: parseFloat(amount.toFixed(4)) });
+    }
+    if (assignmentRows.length > 0) {
+      const total = parseFloat(assignmentRows.reduce((s, r) => s + r.prorated_amount, 0).toFixed(4));
+      monthsMap.set(yyyymm, { yyyymm, label: `${MONTH_LABELS_ES[month-1]} ${year}`, assignments: assignmentRows, total });
+    }
+    cur = new Date(year, month, 1);
+  }
+
+  const months = Array.from(monthsMap.values()).sort((a, b) => a.yyyymm.localeCompare(b.yyyymm));
+  const grand_total = parseFloat(months.reduce((s, m) => s + m.total, 0).toFixed(4));
+  return ok({ contract_id, contract_name: contract.name, contract_type: 'capacity', months, grand_total, currency_note: 'Montos en la moneda de cada asignación.' });
+});
+
+/* ──────────── Admin Settings ──────────── */
+
+const SECRET_KEYS = new Set(['aws_secret_access_key', 'cron_secret']);
+
+function redactSecrets(obj: Record<string, unknown>, reveal: boolean): Record<string, unknown> {
+  if (reveal) return obj;
+  const out = { ...obj };
+  for (const k of SECRET_KEYS) { if (k in out && out[k]) out[k] = '••••••••'; }
+  return out;
+}
+
+router.get('/api/admin/settings', async (event, user) => {
+  requireSuperadmin(user);
+  const { rows } = await db.query('SELECT key, value FROM app_settings ORDER BY key');
+  const obj: Record<string, unknown> = {};
+  for (const r of rows as any[]) obj[r.key] = r.value;
+  const reveal = (event.queryStringParameters || {}).reveal === '1';
+  return ok({ data: redactSecrets(obj, reveal) });
+});
+
+router.get('/api/admin/settings/:key', async (event, user) => {
+  requireSuperadmin(user);
+  const key = event.pathParameters!.key!;
+  const { rows } = await db.query('SELECT value FROM app_settings WHERE key=$1', [key]);
+  if (!rows.length) return { statusCode: 404, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Clave no encontrada' }) };
+  const reveal = (event.queryStringParameters || {}).reveal === '1';
+  const value = reveal || !SECRET_KEYS.has(key) ? rows[0].value : '••••••••';
+  return ok({ key, value });
+});
+
+router.put('/api/admin/settings', async (event, user) => {
+  requireSuperadmin(user);
+  const updates = JSON.parse(event.body || '{}') as Record<string, unknown>;
+  const entries = Object.entries(updates);
+  if (!entries.length) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Sin claves para actualizar' }) };
+
+  const conn = await db.connect();
+  try {
+    await conn.query('BEGIN');
+    for (const [key, value] of entries) {
+      await conn.query(`INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES ($1,$2,NOW(),$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW(), updated_by=EXCLUDED.updated_by`, [String(key).trim(), value === null ? null : String(value), user.id]);
+    }
+    await conn.query('COMMIT');
+    return ok({ ok: true, updated: entries.length });
+  } catch (err) {
+    try { await conn.query('ROLLBACK'); } catch { /* ignore */ }
+    throw err;
+  } finally { conn.release(); }
+});
+
+router.put('/api/admin/settings/:key', async (event, user) => {
+  requireSuperadmin(user);
+  const key = event.pathParameters!.key!;
+  const body = JSON.parse(event.body || '{}');
+  const value = body.value !== undefined ? body.value : null;
+  await db.query(`INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES ($1,$2,NOW(),$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW(), updated_by=EXCLUDED.updated_by`, [key, value === null ? null : String(value), user.id]);
+  return ok({ ok: true, key });
 });
 
 /* ──────────── Lambda entry point ──────────── */
