@@ -324,7 +324,9 @@ router.get('/api/reports/deviations', async (event, _user) => {
     if (contractId) { asgParams.push(contractId); asgFilter = ` AND asg.contract_id = $${asgParams.length}`; }
 
     const { rows: assignments } = await db.query(
-      `SELECT asg.employee_id, asg.weekly_hours, asg.start_date, asg.end_date
+      `SELECT asg.employee_id, asg.weekly_hours,
+              to_char(asg.start_date, 'YYYY-MM-DD') AS start_date,
+              to_char(asg.end_date,   'YYYY-MM-DD') AS end_date
          FROM assignments asg
         WHERE asg.employee_id = ANY($1::uuid[])
           AND asg.deleted_at IS NULL
@@ -400,7 +402,9 @@ router.get('/api/reports/deviations', async (event, _user) => {
   if (areaId) { asgParams2.push(areaId); asgFilter2 = ` AND e.area_id = $${asgParams2.length}`; }
 
   const { rows: assignments2 } = await db.query(
-    `SELECT asg.contract_id, asg.weekly_hours, asg.start_date, asg.end_date
+    `SELECT asg.contract_id, asg.weekly_hours,
+            to_char(asg.start_date, 'YYYY-MM-DD') AS start_date,
+            to_char(asg.end_date,   'YYYY-MM-DD') AS end_date
        FROM assignments asg
        ${areaId ? 'JOIN employees e ON e.id = asg.employee_id' : ''}
       WHERE asg.contract_id = ANY($1::uuid[])
