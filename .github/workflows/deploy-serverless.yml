@@ -1,0 +1,249 @@
+name: Deploy Serverless (CDK)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'serverless/**'
+      - 'client/src/**'
+      - 'client/public/**'
+      - '.github/workflows/deploy-serverless.yml'
+  workflow_dispatch:
+    inputs:
+      stack:
+        description: 'Stack to deploy (blank = all)'
+        required: false
+
+concurrency:
+  group: serverless-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: mx-central-1
+  NODE_VERSION: '20'
+
+jobs:
+  # ── Tests ───────────────────────────────────────────────────────
+  test:
+    name: Test serverless modules
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: quoter_test
+          POSTGRES_USER: quoter
+          POSTGRES_PASSWORD: quoter_test
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd="pg_isready -U quoter"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: serverless/package-lock.json
+      - name: Install dependencies
+        working-directory: serverless
+        run: npm ci
+      - name: Run tests
+        working-directory: serverless
+        env:
+          DB_HOST: localhost
+          DB_PORT: '5433'
+          DB_NAME: quoter_test
+          DB_USER: quoter
+          DB_PASSWORD: quoter_test
+          DB_SSL: 'false'
+          JWT_SECRET: test-jwt-secret-for-ci
+        run: npm test -- --reporter=verbose
+
+  # ── Client build ────────────────────────────────────────────────
+  build-client:
+    name: Build React SPA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+      - name: Build
+        working-directory: client
+        env:
+          REACT_APP_API_URL: https://api.forge.doublevpartners.com
+          REACT_APP_GIT_SHA: ${{ github.sha }}
+          REACT_APP_GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+        run: npx react-scripts build
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-build
+          path: client/build/
+          retention-days: 1
+
+  # ── CDK Deploy ──────────────────────────────────────────────────
+  deploy-infra:
+    name: CDK Deploy
+    runs-on: ubuntu-latest
+    needs: [test, build-client]
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: serverless/package-lock.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_CDK_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_CDK_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install CDK dependencies
+        working-directory: serverless
+        run: npm ci
+
+      - name: CDK synth
+        working-directory: serverless
+        run: npx cdk synth --quiet
+
+      - name: CDK diff
+        working-directory: serverless
+        run: npx cdk diff --no-fail 2>&1 || true
+
+      - name: CDK deploy
+        working-directory: serverless
+        run: |
+          STACK="${{ github.event.inputs.stack }}"
+          if [ -n "$STACK" ]; then
+            npx cdk deploy "$STACK" --require-approval never --outputs-file cdk-outputs.json
+          else
+            npx cdk deploy --all --require-approval never --outputs-file cdk-outputs.json
+          fi
+
+      - name: Upload CDK outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdk-outputs
+          path: serverless/cdk-outputs.json
+          retention-days: 7
+
+  # ── Deploy Frontend to S3 + invalidate CloudFront ───────────────
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    needs: deploy-infra
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_CDK_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_CDK_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Download client build
+        uses: actions/download-artifact@v4
+        with:
+          name: client-build
+          path: client-build/
+
+      - name: Get stack outputs
+        id: outputs
+        run: |
+          BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name QuoterFrontend \
+            --query "Stacks[0].Outputs[?OutputKey=='BucketName'].OutputValue" \
+            --output text)
+          DIST_ID=$(aws cloudformation describe-stacks \
+            --stack-name QuoterFrontend \
+            --query "Stacks[0].Outputs[?OutputKey=='DistributionId'].OutputValue" \
+            --output text)
+          echo "bucket=$BUCKET" >> $GITHUB_OUTPUT
+          echo "distribution_id=$DIST_ID" >> $GITHUB_OUTPUT
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync client-build/ s3://${{ steps.outputs.outputs.bucket }}/ \
+            --delete \
+            --cache-control "public, max-age=31536000, immutable" \
+            --exclude "index.html" \
+            --exclude "asset-manifest.json" \
+            --exclude "service-worker.js"
+          aws s3 cp client-build/index.html s3://${{ steps.outputs.outputs.bucket }}/index.html \
+            --cache-control "no-cache, no-store, must-revalidate"
+          aws s3 cp client-build/asset-manifest.json s3://${{ steps.outputs.outputs.bucket }}/asset-manifest.json \
+            --cache-control "no-cache, no-store, must-revalidate"
+
+      - name: Invalidate CloudFront
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ steps.outputs.outputs.distribution_id }} \
+            --paths "/index.html" "/asset-manifest.json"
+
+  # ── Run DB migrations ──────────────────────────────────────────
+  migrate:
+    name: Run Migrations
+    runs-on: ubuntu-latest
+    needs: deploy-infra
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_CDK_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_CDK_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get DB credentials
+        id: db
+        run: |
+          SECRET=$(aws secretsmanager get-secret-value \
+            --secret-id quoter/db-credentials \
+            --query SecretString --output text)
+          echo "::add-mask::$(echo $SECRET | jq -r .password)"
+          echo "host=$(echo $SECRET | jq -r .host)" >> $GITHUB_OUTPUT
+          echo "port=$(echo $SECRET | jq -r .port)" >> $GITHUB_OUTPUT
+          echo "username=$(echo $SECRET | jq -r .username)" >> $GITHUB_OUTPUT
+          echo "password=$(echo $SECRET | jq -r .password)" >> $GITHUB_OUTPUT
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm ci --omit=dev
+
+      - name: Run migrations
+        working-directory: server
+        env:
+          PGHOST: ${{ steps.db.outputs.host }}
+          PGPORT: ${{ steps.db.outputs.port }}
+          PGUSER: ${{ steps.db.outputs.username }}
+          PGPASSWORD: ${{ steps.db.outputs.password }}
+          PGDATABASE: quoter
+          PGSSLMODE: require
+        run: node database/migrate.js

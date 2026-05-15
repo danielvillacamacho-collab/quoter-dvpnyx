@@ -2645,6 +2645,15 @@ const SPEC_PRJ_HEALTH_01_SQL = `
   ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS wbs_package_id UUID NULL REFERENCES wbs_packages(id);
 `;
 
+-- Moneda del monto estimado en oportunidades (mayo 2026).
+-- Permite registrar el monto en la moneda original del deal (COP, MXN, EUR…)
+-- tal como aparece en la tabla de tasas de cambio. Por defecto USD para
+-- compatibilidad con registros existentes.
+const SPEC_OPP_CURRENCY_SQL = `
+  ALTER TABLE opportunities
+    ADD COLUMN IF NOT EXISTS amount_currency VARCHAR(3) NOT NULL DEFAULT 'USD';
+`;
+
 const migrate = async () => {
   let client;
   try {
@@ -2669,6 +2678,7 @@ const migrate = async () => {
       ['SPEC_EMP_00',              SPEC_EMP_00_SQL],
       ['SPEC_RM_00',               SPEC_RM_00_SQL],
       ['SPEC_PRJ_HEALTH_01',       SPEC_PRJ_HEALTH_01_SQL],
+      ['SPEC_OPP_CURRENCY',        SPEC_OPP_CURRENCY_SQL],
     ];
     for (const [label, sql] of blocks) {
       try {

@@ -60,7 +60,7 @@ export default function MiPerfil() {
 /* ── Completeness ─────────────────────────────────────────────────── */
 
 function CompletenessBar({ pct, checks }) {
-  const missing = checks.filter((c) => !c.done).map((c) => c.key);
+  const missing = (checks || []).filter((c) => !c.done).map((c) => c.key);
   const LABELS = { bio: 'Bio', city: 'Ciudad', linkedin: 'LinkedIn', skills: '3+ skills', education: 'Educación', languages: 'Idiomas' };
   return (
     <div className={cx.completenessWrap}>
@@ -92,6 +92,7 @@ function ProfileCard({ profile, onSave }) {
       github_url: profile.github_url || '',
       portfolio_url: profile.portfolio_url || '',
       city: profile.city || '',
+      languages: Array.isArray(profile.languages) ? profile.languages.join(', ') : '',
     });
     setEditing(true);
   };
@@ -99,7 +100,14 @@ function ProfileCard({ profile, onSave }) {
   const save = async () => {
     setSaving(true);
     try {
-      const updated = await apiPut('/api/me/profile', form);
+      const payload = {
+        ...form,
+        languages: form.languages
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+      const updated = await apiPut('/api/me/profile', payload);
       onSave(updated);
       setEditing(false);
     } catch (e) {
@@ -134,6 +142,15 @@ function ProfileCard({ profile, onSave }) {
             <div className={cx.field}>
               <label className={cx.label}>Portfolio</label>
               <input className={cx.input} value={form.portfolio_url} placeholder="https://..." onChange={(e) => setForm({ ...form, portfolio_url: e.target.value })} />
+            </div>
+            <div className={cx.field}>
+              <label className={cx.label}>Idiomas</label>
+              <input
+                className={cx.input}
+                value={form.languages}
+                placeholder="Español, Inglés, Portugués"
+                onChange={(e) => setForm({ ...form, languages: e.target.value })}
+              />
             </div>
           </div>
           <div className={cx.field}>
@@ -242,7 +259,6 @@ function SkillsCard({ skills, catalog, onRefresh }) {
               <FilterableSelect
                 value={form.skill_id}
                 onChange={(e) => setForm({ ...form, skill_id: e.target.value })}
-                inputStyle={cx.input}
                 placeholder="Seleccionar..."
                 options={Object.keys(grouped).sort().flatMap((cat) =>
                   grouped[cat].map((s) => ({ id: String(s.id), label: `${cat} — ${s.name}` }))
@@ -254,7 +270,6 @@ function SkillsCard({ skills, catalog, onRefresh }) {
               <FilterableSelect
                 value={form.proficiency}
                 onChange={(e) => setForm({ ...form, proficiency: e.target.value })}
-                inputStyle={cx.input}
                 placeholder="— Selecciona nivel —"
                 options={Object.entries(PROF_LABELS).map(([k, v]) => ({ id: k, label: v }))}
               />

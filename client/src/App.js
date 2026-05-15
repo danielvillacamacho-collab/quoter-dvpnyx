@@ -532,7 +532,7 @@ function QuotationHistory() {
   const [loading, setLoading] = useState(true);
   const nav = useNavigate();
 
-  useEffect(() => { api.getQuotations().then(setQuots).catch(console.error).finally(() => setLoading(false)); }, []);
+  useEffect(() => { api.getQuotations().then(r => setQuots(Array.isArray(r) ? r : (r?.data || []))).catch(console.error).finally(() => setLoading(false)); }, []);
 
   const statusLabel = { draft: 'Borrador', sent: 'Enviada', approved: 'Aprobada', rejected: 'Rechazada', expired: 'Expirada' };
 

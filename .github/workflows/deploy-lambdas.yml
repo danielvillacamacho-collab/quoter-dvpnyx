@@ -1,0 +1,184 @@
+name: Deploy Lambda Functions
+
+on:
+  push:
+    branches:
+    - claude/nostalgic-goodall-53be46
+    paths:
+      - 'serverless/packages/**'
+      - 'serverless/package.json'
+      - 'serverless/package-lock.json'
+      - '.github/workflows/deploy-lambdas.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: lambda-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: mx-central-1
+  NODE_VERSION: '20'
+  PROJECT_NAME: forge
+  TF_ENVIRONMENT: dev
+  S3_BUCKET: dvpnyx-quoter-terraform-state
+  S3_PREFIX: lambdas
+
+jobs:
+  # ── 1. Detecta qué módulos desplegar ──────────────────────────────
+  detect:
+    name: Detectar cambios
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Construir matriz de módulos
+        id: build-matrix
+        run: |
+          ALL="assignments capacity clients contracts crm employees internal-ops opportunities platform project-health quotations reports resource-requests revenue time-tracking"
+
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+
+          # Obtener diff exacto del push (todos los commits incluidos, no solo HEAD~1)
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || echo "")
+          else
+            CHANGED=""
+          fi
+
+          MODULES=""
+
+          if [ -n "$CHANGED" ]; then
+            # Si cambió shared o las dependencias → reconstruir todo
+            if echo "$CHANGED" | grep -qE "serverless/packages/shared/|serverless/package(-lock)?\.json"; then
+              echo "📦 Cambio en shared o dependencias — desplegando todos los módulos"
+              MODULES="$ALL"
+            else
+              # Solo los módulos que cambiaron
+              for mod in $ALL; do
+                if echo "$CHANGED" | grep -q "serverless/packages/$mod/"; then
+                  MODULES="$MODULES $mod"
+                fi
+              done
+              MODULES=$(echo $MODULES | xargs)
+            fi
+          fi
+
+          # Fallback: sin cambios detectados (workflow_dispatch, primer push, estado raro) → todos
+          if [ -z "$MODULES" ]; then
+            echo "⚠️ Sin módulos específicos detectados — desplegando todos como fallback"
+            MODULES="$ALL"
+          fi
+
+          echo "🔨 Módulos a desplegar: $MODULES"
+          JSON=$(echo "$MODULES" | tr ' ' '\n' | jq -R . | jq -sc '{"module":.}')
+          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+
+  # ── 2. Compila y despliega cada módulo en paralelo ─────────────────
+  build-and-deploy:
+    name: "${{ matrix.module }}"
+    needs: detect
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: serverless/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: serverless
+        run: npm ci
+
+      - name: Compilar ${{ matrix.module }}
+        working-directory: serverless
+        run: |
+          MOD="${{ matrix.module }}"
+          WORK="$(pwd)/dist/lambda-build/$MOD"
+          ZIP="$(pwd)/dist/lambda-build/$MOD.zip"
+
+          mkdir -p "$WORK"
+          npx esbuild "packages/$MOD/handler.ts" \
+            --bundle \
+            --platform=node \
+            --target=node20 \
+            --format=cjs \
+            --sourcemap \
+            --tsconfig=tsconfig.json \
+            --external:pdfkit \
+            --outfile="$WORK/index.js"
+
+          # pdfkit no se puede bundlear con esbuild (lee archivos .afm desde disco).
+          # Copiamos pdfkit + TODAS sus dependencias transitivas al ZIP.
+          if grep -q "pdfkit" "packages/$MOD/handler.ts" 2>/dev/null; then
+            mkdir -p "$WORK/node_modules"
+            PDFDEPS=$(node -e "
+              const fs = require('fs'), path = require('path');
+              const nm = 'node_modules';
+              const seen = new Set();
+              function collect(name) {
+                if (seen.has(name)) return;
+                seen.add(name);
+                const p = path.join(nm, name, 'package.json');
+                if (!fs.existsSync(p)) return;
+                const deps = JSON.parse(fs.readFileSync(p,'utf8')).dependencies || {};
+                Object.keys(deps).forEach(collect);
+              }
+              collect('pdfkit');
+              console.log([...seen].join(' '));
+            ")
+            for dep in $PDFDEPS; do
+              if [ -d "node_modules/$dep" ]; then
+                DEST_DIR=$(dirname "$WORK/node_modules/$dep")
+                mkdir -p "$DEST_DIR"
+                cp -r "node_modules/$dep" "$DEST_DIR/"
+              fi
+            done
+            echo "📦 pdfkit + $(echo $PDFDEPS | wc -w) deps copiadas al bundle de $MOD"
+          fi
+
+          (cd "$WORK" && zip -qr "$ZIP" .)
+          echo "ZIP_PATH=$ZIP" >> $GITHUB_ENV
+          echo "✅ $MOD.zip — $(du -sh "$ZIP" | cut -f1)"
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Subir ZIP a S3
+        run: |
+          MOD="${{ matrix.module }}"
+          SHA="${{ github.sha }}"
+          S3_KEY="${{ env.S3_PREFIX }}/${{ env.TF_ENVIRONMENT }}/${MOD}/${SHA}.zip"
+          aws s3 cp "${{ env.ZIP_PATH }}" "s3://${{ env.S3_BUCKET }}/$S3_KEY" \
+            --metadata "commit=${SHA},module=${MOD},env=${{ env.TF_ENVIRONMENT }}"
+          echo "S3_KEY=$S3_KEY" >> $GITHUB_ENV
+
+      - name: Desplegar a Lambda
+        run: |
+          MOD="${{ matrix.module }}"
+          FUNCTION="${{ env.PROJECT_NAME }}-${MOD}-${{ env.TF_ENVIRONMENT }}"
+          aws lambda update-function-code \
+            --function-name "$FUNCTION" \
+            --s3-bucket "${{ env.S3_BUCKET }}" \
+            --s3-key "${{ env.S3_KEY }}" \
+            --publish \
+            --output json | jq '{FunctionName, CodeSize, LastModified}'
+          aws lambda wait function-updated --function-name "$FUNCTION"
+          echo "✅ $FUNCTION actualizado"

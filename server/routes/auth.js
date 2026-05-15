@@ -9,37 +9,49 @@ const { serverError } = require('../utils/http');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+// FIX-AUTH-04: wrapped in a transaction so a failed employee-link
+// doesn't leave an orphan user row behind.
 async function provisionStaffUser(email, googleId, name) {
-  const { rows: empRows } = await pool.query(
-    `SELECT id, first_name, last_name FROM employees
-      WHERE deleted_at IS NULL
-        AND (LOWER(corporate_email)=$1 OR LOWER(personal_email)=$1)
-      LIMIT 1`,
-    [email.toLowerCase()],
-  );
-  if (!empRows.length) return null;
-  const emp = empRows[0];
-  const displayName = name || `${emp.first_name} ${emp.last_name}`;
-  const { rows } = await pool.query(
-    `INSERT INTO users (email, name, role, active)
-      VALUES ($1, $2, 'staff', true)
-      RETURNING *`,
-    [email.toLowerCase(), displayName],
-  );
-  const user = rows[0];
-  if (googleId) {
-    await pool.query('UPDATE users SET google_id=$1 WHERE id=$2', [googleId, user.id]);
-    user.google_id = googleId;
+  const conn = await pool.connect();
+  try {
+    await conn.query('BEGIN');
+    const { rows: empRows } = await conn.query(
+      `SELECT id, first_name, last_name FROM employees
+        WHERE deleted_at IS NULL
+          AND (LOWER(corporate_email)=$1 OR LOWER(personal_email)=$1)
+        LIMIT 1`,
+      [email.toLowerCase()],
+    );
+    if (!empRows.length) { await conn.query('ROLLBACK'); return null; }
+    const emp = empRows[0];
+    const displayName = name || `${emp.first_name} ${emp.last_name}`;
+    const { rows } = await conn.query(
+      `INSERT INTO users (email, name, role, active)
+        VALUES ($1, $2, 'staff', true)
+        RETURNING *`,
+      [email.toLowerCase(), displayName],
+    );
+    const user = rows[0];
+    if (googleId) {
+      await conn.query('UPDATE users SET google_id=$1 WHERE id=$2', [googleId, user.id]);
+      user.google_id = googleId;
+    }
+    await conn.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [user.id, emp.id]);
+    await conn.query('COMMIT');
+    return user;
+  } catch (err) {
+    await conn.query('ROLLBACK');
+    throw err;
+  } finally {
+    conn.release();
   }
-  await pool.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [user.id, emp.id]);
-  return user;
 }
 
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ error: 'Email y contraseña requeridos' });
-    const { rows } = await pool.query('SELECT * FROM users WHERE email=$1 AND active=true', [email.toLowerCase()]);
+    const { rows } = await pool.query('SELECT * FROM users WHERE email=$1 AND active=true AND deleted_at IS NULL', [email.toLowerCase()]);
     if (!rows.length) return res.status(401).json({ error: 'Credenciales inválidas' });
     const user = rows[0];
     const valid = await bcrypt.compare(password, user.password_hash);
@@ -75,12 +87,12 @@ router.post('/google', async (req, res) => {
     }
 
     let { rows } = await pool.query(
-      'SELECT * FROM users WHERE google_id=$1 AND active=true', [googleId]
+      'SELECT * FROM users WHERE google_id=$1 AND active=true AND deleted_at IS NULL', [googleId]
     );
 
     if (!rows.length) {
       ({ rows } = await pool.query(
-        'SELECT * FROM users WHERE email=$1 AND active=true', [email.toLowerCase()]
+        'SELECT * FROM users WHERE email=$1 AND active=true AND deleted_at IS NULL', [email.toLowerCase()]
       ));
       if (rows.length) {
         await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, rows[0].id]);
@@ -120,22 +132,23 @@ router.post('/google-callback', express.urlencoded({ extended: false }), async (
 
     const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId });
     const payload = ticket.getPayload();
-    const { sub: googleId, email, hd } = payload;
+    // FIX-AUTH-05: desestructurar name igual que en POST /google.
+    const { sub: googleId, email, name: payloadName, hd } = payload;
 
     const allowedDomain = process.env.GOOGLE_ALLOWED_DOMAIN;
     if (allowedDomain && hd !== allowedDomain) {
       return res.redirect('/login?error=domain_not_allowed');
     }
 
-    let { rows } = await pool.query('SELECT * FROM users WHERE google_id=$1 AND active=true', [googleId]);
+    let { rows } = await pool.query('SELECT * FROM users WHERE google_id=$1 AND active=true AND deleted_at IS NULL', [googleId]);
     if (!rows.length) {
-      ({ rows } = await pool.query('SELECT * FROM users WHERE email=$1 AND active=true', [email.toLowerCase()]));
+      ({ rows } = await pool.query('SELECT * FROM users WHERE email=$1 AND active=true AND deleted_at IS NULL', [email.toLowerCase()]));
       if (rows.length) {
         await pool.query('UPDATE users SET google_id=$1, updated_at=NOW() WHERE id=$2', [googleId, rows[0].id]);
       }
     }
     if (!rows.length) {
-      const name = payload.name || email.split('@')[0];
+      const name = payloadName || email.split('@')[0];
       const staffUser = await provisionStaffUser(email, googleId, name);
       if (!staffUser) return res.redirect('/login?error=no_account');
       rows = [staffUser];
@@ -195,6 +208,12 @@ router.get('/me', auth, async (req, res) => {
       );
       if (match.length) {
         await pool.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [row.id, match[0].id]);
+        // FIX-AUTH-06: audit trail for automatic user↔employee link.
+        await pool.query(
+          `INSERT INTO audit_log (user_id, action, entity, entity_id, details)
+             VALUES ($1, 'auto_link_employee', 'employee', $2, $3)`,
+          [row.id, match[0].id, JSON.stringify({ user_email: row.email })],
+        );
         empRows = match;
       }
     }

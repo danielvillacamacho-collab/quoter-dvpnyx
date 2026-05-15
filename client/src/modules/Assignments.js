@@ -866,7 +866,7 @@ export default function Assignments() {
               )}
               {state.data.map((a) => (
                 <tr key={a.id}>
-                  <td style={{ ...s.td, fontWeight: 600 }}>{a.employee_first_name} {a.employee_last_name}</td>
+                  <td style={{ ...s.td, fontWeight: 600 }}>{a.employee_name}</td>
                   <td style={{ ...s.td, fontSize: 12 }}>{a.contract_name || '—'}</td>
                   <td style={{ ...s.td, fontSize: 12 }}>{a.request_role_title || a.role_title || '—'}</td>
                   <td style={{ ...s.td, textAlign: 'center' }}>{Number(a.weekly_hours)}</td>
@@ -879,12 +879,12 @@ export default function Assignments() {
                     <button
                       style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, marginRight: 4 }}
                       onClick={() => { setEditing(a); setShowForm(true); }}
-                      aria-label={`Editar asignación de ${a.employee_first_name} ${a.employee_last_name}`}
+                      aria-label={`Editar asignación de ${a.employee_name}`}
                     >Editar</button>
                     <button
                       style={{ ...s.btnOutline, padding: '4px 10px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }}
                       onClick={() => onDelete(a)}
-                      aria-label={`Eliminar asignación de ${a.employee_first_name} ${a.employee_last_name}`}
+                      aria-label={`Eliminar asignación de ${a.employee_name}`}
                     >Eliminar</button>
                   </td>
                 </tr>

@@ -148,6 +148,7 @@ export default function Users() {
 
   /* change role -------------------------------------------------- */
   const handleRoleChange = async (id, role) => {
+    if (!role) return;
     try {
       const updated = await api.updateUser(id, { role });
       setUsers(prev => prev.map(u => u.id === id ? { ...u, role: updated.role } : u));
