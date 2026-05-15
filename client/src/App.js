@@ -308,8 +308,9 @@ function Login() {
     const error = params.get('error');
     if (error) {
       const msgs = {
-        domain_not_allowed: 'Solo cuentas corporales pueden iniciar sesión',
+        domain_not_allowed: 'Solo cuentas corporativas pueden iniciar sesión.',
         no_account: 'No existe una cuenta asociada a este correo. Contacta al administrador.',
+        account_disabled: 'Tu cuenta está desactivada. Contacta al administrador.',
         google_auth_failed: 'Error al autenticar con Google. Intenta de nuevo.',
         google_not_configured: 'Google OAuth no está configurado.',
       };
