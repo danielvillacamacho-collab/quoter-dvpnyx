@@ -327,6 +327,193 @@ router.get('/api/employee-costs', async (event, user) => {
   return ok({ period, data, summary });
 });
 
+// ── Employee Costs: Export ───────────────────────────────────────────
+const EXPORT_HEADERS = ['Nombre', 'Nivel', 'Área', 'País', 'Moneda', 'Costo bruto', 'Costo USD', 'Teórico USD', 'Estado', 'Notas'];
+const EXPORT_KEYS = ['nombre', 'nivel', 'area', 'pais', 'moneda', 'costo_bruto', 'costo_usd', 'teorico_usd', 'estado', 'notas'] as const;
+
+router.get('/api/employee-costs/export', async (event, user) => {
+  requireAdmin(user);
+  const qs = event.queryStringParameters || {};
+  const d = new Date();
+  const period = String(qs.period || `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`).trim();
+  const format = String(qs.format || 'csv').toLowerCase();
+
+  if (!PERIOD_RE.test(period)) return error(400, { error: 'period inválido (formato YYYYMM)' });
+  if (!['csv', 'xlsx', 'pdf'].includes(format)) return error(400, { error: 'format debe ser csv, xlsx o pdf' });
+
+  const pFirst = `${period.slice(0, 4)}-${period.slice(4, 6)}-01`;
+  const pLast = `(DATE '${pFirst}' + INTERVAL '1 month - 1 day')::date`;
+  const periodLabel = `${period.slice(0, 4)}-${period.slice(4, 6)}`;
+
+  const [{ rows: employees }, { rows: costs }, { rows: params }] = await Promise.all([
+    db.query(
+      `SELECT e.id, e.first_name, e.last_name, e.level, e.country, a.name AS area_name
+         FROM employees e
+         LEFT JOIN areas a ON a.id = e.area_id
+        WHERE e.deleted_at IS NULL
+          AND e.start_date <= ${pLast}
+          AND (e.end_date IS NULL OR e.end_date >= DATE '${pFirst}')
+          AND e.status IN ('active','on_leave','bench')
+        ORDER BY e.first_name, e.last_name`,
+    ),
+    db.query(`SELECT * FROM employee_costs WHERE period = $1`, [period]),
+    db.query(`SELECT key, value FROM parameters WHERE category IN ('cost_per_level','level_costs') ORDER BY key`),
+  ]);
+
+  const costsByEmp = new Map((costs as Record<string, unknown>[]).map(c => [c.employee_id as string, c]));
+  const theoretical = new Map<string, number>();
+  for (const p of params as Record<string, unknown>[]) {
+    let lvl = String(p.key).trim().toUpperCase();
+    if (/^[0-9]+$/.test(lvl)) lvl = `L${lvl}`;
+    theoretical.set(lvl, Number(p.value));
+  }
+
+  type ExportRow = Record<typeof EXPORT_KEYS[number], string>;
+  const rows: ExportRow[] = (employees as Record<string, unknown>[]).map(emp => {
+    const cost = costsByEmp.get(emp.id as string);
+    const theoreticalUsd = theoretical.get(emp.level as string) ?? null;
+    return {
+      nombre: `${emp.first_name} ${emp.last_name}`,
+      nivel: String(emp.level || ''),
+      area: String(emp.area_name || ''),
+      pais: String(emp.country || ''),
+      moneda: cost ? String(cost.currency || '') : '',
+      costo_bruto: cost?.gross_cost != null ? String(cost.gross_cost) : '',
+      costo_usd: cost?.cost_usd != null ? String(cost.cost_usd) : '',
+      teorico_usd: theoreticalUsd != null ? String(theoreticalUsd) : '',
+      estado: cost?.locked ? 'Cerrado' : (cost ? 'Abierto' : 'Sin costo'),
+      notas: cost ? String(cost.notes || '') : '',
+    };
+  });
+
+  const filename = `costos-equipo-${period}`;
+  const CORS = '*';
+
+  // ── CSV ─────────────────────────────────────────────────────────────
+  if (format === 'csv') {
+    const esc = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
+    const lines = [
+      EXPORT_HEADERS.map(esc).join(','),
+      ...rows.map(r => EXPORT_KEYS.map(k => esc(r[k])).join(',')),
+    ];
+    return {
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${filename}.csv"`,
+        'Access-Control-Allow-Origin': CORS,
+      },
+      body: '﻿' + lines.join('\r\n'),
+    };
+  }
+
+  // ── XLSX ─────────────────────────────────────────────────────────────
+  if (format === 'xlsx') {
+    const ExcelJS = (await import('exceljs')).default;
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'DVPNYX Quoter';
+    const ws = wb.addWorksheet(`Costos ${periodLabel}`);
+
+    ws.columns = EXPORT_HEADERS.map((h, i) => ({
+      header: h,
+      key: EXPORT_KEYS[i],
+      width: [22, 8, 16, 10, 9, 13, 13, 13, 10, 20][i],
+    }));
+
+    // Style header row
+    const headerRow = ws.getRow(1);
+    headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF6B46C1' } };
+    headerRow.alignment = { vertical: 'middle' };
+
+    rows.forEach(r => ws.addRow(EXPORT_KEYS.map(k => r[k])));
+
+    // Freeze header and auto-filter
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    ws.autoFilter = { from: 'A1', to: `${String.fromCharCode(64 + EXPORT_HEADERS.length)}1` };
+
+    const buf = Buffer.from(await wb.xlsx.writeBuffer() as ArrayBuffer);
+    return {
+      statusCode: 200,
+      headers: {
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${filename}.xlsx"`,
+        'Access-Control-Allow-Origin': CORS,
+      },
+      body: buf.toString('base64'),
+      isBase64Encoded: true,
+    };
+  }
+
+  // ── PDF ──────────────────────────────────────────────────────────────
+  const PDFDocument = (await import('pdfkit')).default;
+  const COL_WIDTHS = [140, 44, 88, 55, 44, 68, 64, 64, 54, 111]; // sum = 732 for landscape A4
+  const ROW_H = 15;
+  const HEADER_H = 18;
+  const PAGE_MARGIN = 30;
+  const PAGE_HEIGHT = 595; // A4 landscape points
+  const PAGE_WIDTH = 842;
+  const TABLE_WIDTH = PAGE_WIDTH - PAGE_MARGIN * 2;
+
+  const pdfBuf = await new Promise<Buffer>((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', layout: 'landscape', margin: PAGE_MARGIN, autoFirstPage: true });
+    const chunks: Buffer[] = [];
+    doc.on('data', (c: Buffer) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    // Title
+    doc.fontSize(13).font('Helvetica-Bold').fillColor('#6B46C1')
+      .text(`Costos del equipo — ${periodLabel}`, PAGE_MARGIN, PAGE_MARGIN, { width: TABLE_WIDTH, align: 'center' });
+    doc.fontSize(8).font('Helvetica').fillColor('#888888')
+      .text(`Generado: ${new Date().toLocaleDateString('es')} · ${rows.length} empleados`, PAGE_MARGIN, undefined, { width: TABLE_WIDTH, align: 'center' });
+    doc.moveDown(0.6);
+
+    const drawHeaderRow = (y: number) => {
+      let x = PAGE_MARGIN;
+      EXPORT_HEADERS.forEach((h, i) => {
+        doc.rect(x, y, COL_WIDTHS[i], HEADER_H).fill('#6B46C1');
+        doc.fillColor('#FFFFFF').font('Helvetica-Bold').fontSize(7)
+          .text(h, x + 2, y + 5, { width: COL_WIDTHS[i] - 4, lineBreak: false });
+        x += COL_WIDTHS[i];
+      });
+      return y + HEADER_H;
+    };
+
+    let rowY = drawHeaderRow(doc.y);
+
+    rows.forEach((r, ri) => {
+      if (rowY + ROW_H > PAGE_HEIGHT - PAGE_MARGIN) {
+        doc.addPage({ size: 'A4', layout: 'landscape', margin: PAGE_MARGIN });
+        rowY = drawHeaderRow(PAGE_MARGIN);
+      }
+      const bg = ri % 2 === 0 ? '#F5F3FF' : '#FFFFFF';
+      let x = PAGE_MARGIN;
+      EXPORT_KEYS.forEach((k, i) => {
+        doc.rect(x, rowY, COL_WIDTHS[i], ROW_H).fill(bg);
+        doc.rect(x, rowY, COL_WIDTHS[i], ROW_H).stroke('#D1D5DB');
+        doc.fillColor('#1a1a2e').font('Helvetica').fontSize(7)
+          .text(r[k] || '—', x + 2, rowY + 4, { width: COL_WIDTHS[i] - 4, lineBreak: false, ellipsis: true });
+        x += COL_WIDTHS[i];
+      });
+      rowY += ROW_H;
+    });
+
+    doc.end();
+  });
+
+  return {
+    statusCode: 200,
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${filename}.pdf"`,
+      'Access-Control-Allow-Origin': CORS,
+    },
+    body: pdfBuf.toString('base64'),
+    isBase64Encoded: true,
+  };
+});
+
 router.post('/api/employee-costs/bulk/commit', async (event, user) => {
   requireAdmin(user);
   const body = JSON.parse(event.body || '{}');

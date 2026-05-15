@@ -16,7 +16,7 @@
  */
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { apiGet, apiPost } from '../utils/apiV2';
+import { apiGet, apiPost, apiDownload } from '../utils/apiV2';
 import FilterableSelect from '../shell/FilterableSelect';
 import NumberInput from '../shell/NumberInput';
 import { useAuth } from '../AuthContext';
@@ -59,6 +59,7 @@ export default function EmployeeCosts() {
   const [drafts, setDrafts] = useState({});
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
+  const [exporting, setExporting] = useState(false);
   // Modal de proyección a futuro.
   const [projectModal, setProjectModal] = useState(null); // null | { monthsAhead, growthPct, basePeriod, preview }
 
@@ -227,6 +228,21 @@ export default function EmployeeCosts() {
     } finally { setBusy(false); }
   };
 
+  const handleExport = async (fmt) => {
+    setExporting(true);
+    try {
+      const ext = { csv: 'csv', xlsx: 'xlsx', pdf: 'pdf' }[fmt] || fmt;
+      await apiDownload(
+        `/api/employee-costs/export?period=${period}&format=${fmt}`,
+        `costos-equipo-${period}.${ext}`,
+      );
+    } catch (e) {
+      setToast({ ok: false, msg: e.message || 'Error al exportar' });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const periodOptions = useMemo(() => recentPeriods(18), []);
   const withoutCostList = useMemo(
     () => data.data.filter((r) => !r.cost && !drafts[r.employee.id]),
@@ -337,6 +353,38 @@ export default function EmployeeCosts() {
         <Link to="/admin/employee-costs/import" style={{ ...s.btnOutline, textDecoration: 'none', display: 'inline-flex', alignItems: 'center' }}>
           ⤓ Importar CSV
         </Link>
+        <div
+          style={{ display: 'inline-flex', border: '1px solid var(--purple-dark)', borderRadius: 8, overflow: 'hidden', opacity: exporting ? 0.6 : 1 }}
+          title="Exportar costos del equipo"
+        >
+          <span style={{ padding: '7px 10px', fontSize: 12, fontWeight: 700, color: 'var(--purple-dark)', borderRight: '1px solid var(--purple-dark)', display: 'flex', alignItems: 'center', gap: 4, userSelect: 'none' }}>
+            {exporting ? '⏳' : '⬇'} Exportar
+          </span>
+          {['csv', 'xlsx', 'pdf'].map((fmt, i, arr) => (
+            <button
+              key={fmt}
+              type="button"
+              style={{
+                background: 'transparent',
+                color: 'var(--purple-dark)',
+                border: 'none',
+                borderRight: i < arr.length - 1 ? '1px solid var(--purple-dark)' : 'none',
+                padding: '7px 11px',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: exporting ? 'not-allowed' : 'pointer',
+                textTransform: 'uppercase',
+                letterSpacing: 0.4,
+                fontFamily: 'Montserrat',
+              }}
+              onClick={() => handleExport(fmt)}
+              disabled={exporting}
+              aria-label={`Exportar como ${fmt.toUpperCase()}`}
+            >
+              {fmt}
+            </button>
+          ))}
+        </div>
         <div style={{ flex: 1 }} />
         <button
           type="button"

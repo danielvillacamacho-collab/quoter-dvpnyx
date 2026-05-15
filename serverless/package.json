@@ -25,6 +25,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/pg": "^8.11.10",
+    "@types/pdfkit": "^0.13.6",
     "aws-cdk": "^2.170.0",
     "aws-cdk-lib": "^2.170.0",
     "constructs": "^10.4.2",
@@ -38,8 +39,10 @@
   "dependencies": {
     "@aws-sdk/client-secrets-manager": "^3.758.0",
     "bcryptjs": "^2.4.3",
+    "exceljs": "^4.4.0",
     "google-auth-library": "^10.6.2",
     "jsonwebtoken": "^9.0.2",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "pdfkit": "^0.15.0"
   }
 }
