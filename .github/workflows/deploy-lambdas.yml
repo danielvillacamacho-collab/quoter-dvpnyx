@@ -121,12 +121,33 @@ jobs:
             --external:pdfkit \
             --outfile="$WORK/index.js"
 
-          # pdfkit lee archivos .afm de fuentes desde disco — no se puede bundlear.
-          # Si el handler lo usa, copiamos node_modules/pdfkit al ZIP.
+          # pdfkit no se puede bundlear con esbuild (lee archivos .afm desde disco).
+          # Copiamos pdfkit + TODAS sus dependencias transitivas al ZIP.
           if grep -q "pdfkit" "packages/$MOD/handler.ts" 2>/dev/null; then
             mkdir -p "$WORK/node_modules"
-            cp -r node_modules/pdfkit "$WORK/node_modules/"
-            echo "📦 pdfkit copiado al bundle de $MOD"
+            PDFDEPS=$(node -e "
+              const fs = require('fs'), path = require('path');
+              const nm = 'node_modules';
+              const seen = new Set();
+              function collect(name) {
+                if (seen.has(name)) return;
+                seen.add(name);
+                const p = path.join(nm, name, 'package.json');
+                if (!fs.existsSync(p)) return;
+                const deps = JSON.parse(fs.readFileSync(p,'utf8')).dependencies || {};
+                Object.keys(deps).forEach(collect);
+              }
+              collect('pdfkit');
+              console.log([...seen].join(' '));
+            ")
+            for dep in $PDFDEPS; do
+              if [ -d "node_modules/$dep" ]; then
+                DEST_DIR=$(dirname "$WORK/node_modules/$dep")
+                mkdir -p "$DEST_DIR"
+                cp -r "node_modules/$dep" "$DEST_DIR/"
+              fi
+            done
+            echo "📦 pdfkit + $(echo $PDFDEPS | wc -w) deps copiadas al bundle de $MOD"
           fi
 
           (cd "$WORK" && zip -qr "$ZIP" .)
