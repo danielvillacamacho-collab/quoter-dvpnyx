@@ -4,7 +4,8 @@ name: Deploy Lambda Functions
 # También se puede correr manualmente para forzar el deploy de módulos específicos.
 on:
   push:
-    branches: [main]
+    branches: 
+        - claude/nostalgic-goodall-53be46
     paths:
       - 'serverless/packages/**'
       - 'serverless/package.json'
