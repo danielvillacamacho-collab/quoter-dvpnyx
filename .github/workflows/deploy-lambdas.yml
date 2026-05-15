@@ -93,14 +93,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          # Quitamos el cache temporalmente para evitar conflictos con archivos corruptos
           
-      - name: Instalar dependencias (Modo Forzado)
+      - name: Instalar dependencias
         working-directory: serverless
         run: |
-          echo "🚀 Instalando dependencias sin depender de un lockfile estricto..."
-          # Si npm ci falla, borramos el lock y hacemos install limpio
-          npm ci || (rm -f package-lock.json && npm install)
+          echo "Borrando package-lock.json corrupto para forzar instalación limpia..."
+          rm -f package-lock.json
+          echo "Ejecutando npm install..."
+          npm install
 
       - name: Compilar ${{ matrix.module }}
         working-directory: serverless
@@ -155,7 +155,7 @@ jobs:
       - name: Estado del deploy
         run: |
           if [ "${{ needs.detect.outputs.has_changes }}" = "false" ]; then
-            echo "ℹ️ Sin cambios."
+            echo "ℹ️ Sin cambios en las lambdas."
           elif [ "${{ needs.build-and-deploy.result }}" = "success" ]; then
             echo "✅ Desplegado con éxito."
           else
