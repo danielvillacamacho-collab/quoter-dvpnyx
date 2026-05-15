@@ -92,6 +92,7 @@ function ProfileCard({ profile, onSave }) {
       github_url: profile.github_url || '',
       portfolio_url: profile.portfolio_url || '',
       city: profile.city || '',
+      languages: Array.isArray(profile.languages) ? profile.languages.join(', ') : '',
     });
     setEditing(true);
   };
@@ -99,7 +100,14 @@ function ProfileCard({ profile, onSave }) {
   const save = async () => {
     setSaving(true);
     try {
-      const updated = await apiPut('/api/me/profile', form);
+      const payload = {
+        ...form,
+        languages: form.languages
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+      const updated = await apiPut('/api/me/profile', payload);
       onSave(updated);
       setEditing(false);
     } catch (e) {
@@ -134,6 +142,15 @@ function ProfileCard({ profile, onSave }) {
             <div className={cx.field}>
               <label className={cx.label}>Portfolio</label>
               <input className={cx.input} value={form.portfolio_url} placeholder="https://..." onChange={(e) => setForm({ ...form, portfolio_url: e.target.value })} />
+            </div>
+            <div className={cx.field}>
+              <label className={cx.label}>Idiomas</label>
+              <input
+                className={cx.input}
+                value={form.languages}
+                placeholder="Español, Inglés, Portugués"
+                onChange={(e) => setForm({ ...form, languages: e.target.value })}
+              />
             </div>
           </div>
           <div className={cx.field}>

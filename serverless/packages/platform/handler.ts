@@ -222,13 +222,23 @@ router.put('/api/me/profile', async (event, user) => {
   const { bio, linkedin_url, github_url, portfolio_url, languages, city } = body;
   const empId = await getEmployeeId(user.id);
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
+
+  let languagesParam: string | null = null;
+  if (languages !== undefined && languages !== null) {
+    if (!Array.isArray(languages) || !languages.every((l) => typeof l === 'string')) {
+      return error(400, { error: 'languages debe ser un array de strings' });
+    }
+    const normalized = languages.map((l) => l.trim()).filter(Boolean);
+    languagesParam = JSON.stringify(normalized);
+  }
+
   const { rows } = await db.query(
     `UPDATE employees SET
         bio           = COALESCE($1, bio),
         linkedin_url  = COALESCE($2, linkedin_url),
         github_url    = COALESCE($3, github_url),
         portfolio_url = COALESCE($4, portfolio_url),
-        languages     = COALESCE($5, languages),
+        languages     = COALESCE($5::jsonb, languages),
         city          = COALESCE($6, city),
         updated_at    = NOW()
       WHERE id = $7
@@ -238,7 +248,7 @@ router.put('/api/me/profile', async (event, user) => {
       linkedin_url ?? null,
       github_url ?? null,
       portfolio_url ?? null,
-      languages ? JSON.stringify(languages) : null,
+      languagesParam,
       city ?? null,
       empId,
     ],
