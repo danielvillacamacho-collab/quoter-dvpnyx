@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -29,7 +29,7 @@ router.get('/api/contacts/by-opportunity/:opportunityId', async (event) => {
 });
 
 router.post('/api/contacts/opportunity-link', async (event) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await contactSvc.linkOpportunity(body));
 });
 
@@ -47,9 +47,9 @@ router.get('/api/contacts', async (event) => {
 
 router.get('/api/contacts/:id', async (event) => ok(await contactSvc.getById(event.pathParameters!.id!)));
 
-router.post('/api/contacts', async (event, user) => created(await contactSvc.create(JSON.parse(event.body || '{}'), user)));
+router.post('/api/contacts', async (event, user) => created(await contactSvc.create(parseBody(event), user)));
 
-router.put('/api/contacts/:id', async (event, user) => ok(await contactSvc.update(event.pathParameters!.id!, JSON.parse(event.body || '{}'), user)));
+router.put('/api/contacts/:id', async (event, user) => ok(await contactSvc.update(event.pathParameters!.id!, parseBody(event), user)));
 
 router.delete('/api/contacts/:id', async (event, user) => {
   requireAdmin(user);
@@ -80,8 +80,8 @@ router.get('/api/activities', async (event) => {
 });
 
 router.get('/api/activities/:id', async (event) => ok(await activitySvc.getById(event.pathParameters!.id!)));
-router.post('/api/activities', async (event, user) => created(await activitySvc.create(JSON.parse(event.body || '{}'), user)));
-router.put('/api/activities/:id', async (event, user) => ok(await activitySvc.update(event.pathParameters!.id!, JSON.parse(event.body || '{}'), user)));
+router.post('/api/activities', async (event, user) => created(await activitySvc.create(parseBody(event), user)));
+router.put('/api/activities/:id', async (event, user) => ok(await activitySvc.update(event.pathParameters!.id!, parseBody(event), user)));
 
 router.delete('/api/activities/:id', async (event, user) => {
   await activitySvc.softDelete(event.pathParameters!.id!, user);

@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, paginated } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -38,17 +38,17 @@ router.get('/api/time-entries/:id', async (event, user) => {
 });
 
 router.post('/api/time-entries', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await entryService.create(body, user));
 });
 
 router.post('/api/time-entries/copy-week', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await entryService.copyWeek(body, user));
 });
 
 router.put('/api/time-entries/:id', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await entryService.update(event.pathParameters!.id!, body, user));
 });
 
@@ -185,7 +185,7 @@ router.get('/api/time-allocations', async (event, user) => {
 });
 
 router.put('/api/time-allocations/bulk', async (event, user) => {
-  const body = JSON.parse(event.body || '{}') as Record<string, unknown>;
+  const body = parseBody(event);
   const weekStart = String(body.week_start_date || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
     return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'week_start_date inválido (YYYY-MM-DD)' }) };

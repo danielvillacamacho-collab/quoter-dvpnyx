@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -330,7 +330,7 @@ router.get('/api/revenue/plan/:contract_id', async (event) => {
 
 router.put('/api/revenue/plan/:contract_id', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const contractId = event.pathParameters!.contract_id!;
   const yyyymm = body.yyyymm as string;
   const period = await revenueSvc.updatePlan(contractId, yyyymm, body, user);
@@ -383,7 +383,7 @@ router.get('/api/admin/exchange-rates', async (event) => {
 
 router.post('/api/admin/exchange-rates', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const rate = await exchangeRateRepo.upsert(body, user.id);
 
   await events.emit(db, {
@@ -399,7 +399,7 @@ router.post('/api/admin/exchange-rates', async (event, user) => {
 
 router.put('/api/admin/exchange-rates/:yyyymm/:currency', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const yyyymm = event.pathParameters!.yyyymm!;
   const currency = event.pathParameters!.currency!;
   const rate = await exchangeRateRepo.upsert({ ...body, yyyymm, currency }, user.id);
@@ -469,13 +469,13 @@ router.get('/api/budgets/:id', async (event) => {
 
 router.post('/api/budgets', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await budgetSvc.create(body, user));
 });
 
 router.put('/api/budgets/:id', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await budgetSvc.update(event.pathParameters!.id!, body, user));
 });
 
@@ -491,7 +491,7 @@ router.put('/api/revenue/:contract_id/:yyyymm', async (event, user) => {
   requireAdmin(user);
   const { contract_id, yyyymm } = event.pathParameters!;
   if (!YYYYMM_RE.test(yyyymm!)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'yyyymm inválido' }) };
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
 
   const conn = await db.connect();
   try {
@@ -553,7 +553,7 @@ router.post('/api/revenue/:contract_id/:yyyymm/close', async (event, user) => {
   requireAdmin(user);
   const { contract_id, yyyymm } = event.pathParameters!;
   if (!YYYYMM_RE.test(yyyymm!)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'yyyymm inválido' }) };
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
 
   const conn = await db.connect();
   try {
@@ -706,7 +706,7 @@ router.get('/api/admin/settings/:key', async (event, user) => {
 
 router.put('/api/admin/settings', async (event, user) => {
   requireSuperadmin(user);
-  const updates = JSON.parse(event.body || '{}') as Record<string, unknown>;
+  const updates = parseBody(event);
   const entries = Object.entries(updates);
   if (!entries.length) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Sin claves para actualizar' }) };
 
@@ -727,7 +727,7 @@ router.put('/api/admin/settings', async (event, user) => {
 router.put('/api/admin/settings/:key', async (event, user) => {
   requireSuperadmin(user);
   const key = event.pathParameters!.key!;
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const value = body.value !== undefined ? body.value : null;
   await db.query(`INSERT INTO app_settings (key, value, updated_at, updated_by) VALUES ($1,$2,NOW(),$3) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW(), updated_by=EXCLUDED.updated_by`, [key, value === null ? null : String(value), user.id]);
   return ok({ ok: true, key });

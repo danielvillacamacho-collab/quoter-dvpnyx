@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -34,12 +34,12 @@ router.get('/api/clients/:id', async (event) => {
 });
 
 router.post('/api/clients', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await service.create(body, user));
 });
 
 router.put('/api/clients/:id', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.update(event.pathParameters!.id!, body, user));
 });
 

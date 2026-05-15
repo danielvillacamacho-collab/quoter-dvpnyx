@@ -1,6 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { AppError } from '@shared/errors';
-import { createRouter, getEventMethod, getEventPath, type RouterEvent } from '@shared/http/router';
+import { createRouter, getEventMethod, getEventPath, parseBody, type RouterEvent } from '@shared/http/router';
 import { ok, created, message, error } from '@shared/http/response';
 import { withAuth } from '@shared/auth/middleware';
 import { requireAdmin, requireSuperadmin } from '@shared/auth/rbac';
@@ -27,7 +27,7 @@ const router = createRouter();
  * ================================================================== */
 
 router.post('/api/auth/login', async (event, _user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await authService.login(body.email, body.password));
 });
 
@@ -51,13 +51,13 @@ router.get('/api/auth/me', async (_event, user) => {
 });
 
 router.post('/api/auth/change-password', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   await authService.changePassword(user.id, body.current_password, body.new_password);
   return message('Contraseña actualizada');
 });
 
 router.put('/api/auth/me/preferences', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await authService.updatePreferences(user.id, body));
 });
 
@@ -84,7 +84,7 @@ router.get('/api/users/:id', async (event, user) => {
 
 router.post('/api/users', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const result = await usersRepo.create(body, user);
 
   await events.emit(db, {
@@ -100,7 +100,7 @@ router.post('/api/users', async (event, user) => {
 
 router.put('/api/users/:id', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const result = await usersRepo.update(event.pathParameters!.id!, body, user);
 
   await events.emit(db, {
@@ -177,7 +177,7 @@ router.get('/api/parameters', async (_event, _user) => {
 
 router.put('/api/parameters/:id', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { value, label, note } = body;
 
   const { rows } = await db.query(
@@ -218,7 +218,7 @@ router.get('/api/me/profile', async (_event, user) => {
 });
 
 router.put('/api/me/profile', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { bio, linkedin_url, github_url, portfolio_url, languages, city } = body;
   const empId = await getEmployeeId(user.id);
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
@@ -304,7 +304,7 @@ router.post('/api/me/skills', async (event, user) => {
   const empId = await getEmployeeId(user.id);
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
 
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { skill_id, proficiency, years_experience, notes } = body as Record<string, unknown>;
   if (!skill_id) return error(400, { error: 'skill_id es requerido' });
 
@@ -359,7 +359,7 @@ router.post('/api/me/education', async (event, user) => {
   const empId = await getEmployeeId(user.id);
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
 
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { institution, degree, field_of_study, start_year, end_year, description } = body;
 
   const { rows } = await db.query(
@@ -385,7 +385,7 @@ router.put('/api/me/education/:id', async (event, user) => {
   const empId = await getEmployeeId(user.id);
   if (!empId) return error(404, { error: 'No tienes un perfil de empleado vinculado' });
 
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { institution, degree, field_of_study, start_year, end_year, description } = body;
 
   const { rows } = await db.query(
@@ -657,7 +657,7 @@ router.post('/api/ai-interactions/:id/decision', async (event, user) => {
   const id = event.pathParameters!.id!;
   if (!isValidUUID(id)) return error(400, { error: 'id no es un UUID válido' });
 
-  const body = JSON.parse(event.body || '{}') as Record<string, unknown>;
+  const body = parseBody(event);
   const decision = String(body.decision || '').trim();
   const feedback = (body.feedback as string | undefined) || null;
 

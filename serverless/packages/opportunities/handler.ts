@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -200,13 +200,13 @@ router.get('/api/opportunities/:id', async (event) => {
 
 /* ---- CREATE ---- */
 router.post('/api/opportunities', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await service.create(body, user));
 });
 
 /* ---- UPDATE ---- */
 router.put('/api/opportunities/:id', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.update(event.pathParameters!.id!, body, user));
 });
 
@@ -219,13 +219,13 @@ router.delete('/api/opportunities/:id', async (event, user) => {
 
 /* ---- STATUS TRANSITION ---- */
 router.put('/api/opportunities/:id/status', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.changeStatus(event.pathParameters!.id!, body, user));
 });
 
 /* ---- CHECK MARGIN ---- */
 router.post('/api/opportunities/:id/check-margin', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.checkMargin(
     event.pathParameters!.id!,
     body.estimated_cost_usd ?? null,

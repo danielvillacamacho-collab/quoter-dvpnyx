@@ -81,3 +81,10 @@ export function createRouter() {
     resolve,
   };
 }
+
+export function parseBody(event: RouterEvent): Record<string, unknown> {
+  const raw = (event as { isBase64Encoded?: boolean }).isBase64Encoded
+    ? Buffer.from(event.body || '', 'base64').toString('utf-8')
+    : (event.body || '{}');
+  return JSON.parse(raw || '{}') as Record<string, unknown>;
+}

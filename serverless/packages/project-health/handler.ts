@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created } from '@shared/http/response';
 import { withAuth } from '@shared/auth/middleware';
 import { requireAdmin, requireRole } from '@shared/auth/rbac';
@@ -48,7 +48,7 @@ router.get('/api/projects/:contract_id/baseline', async (event, _user) => {
 
 router.post('/api/projects/:contract_id/baseline', async (event, user) => {
   requireRole('superadmin', 'admin', 'lead')(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(
     await service.createBaseline(event.pathParameters!.contract_id!, body, user),
   );
@@ -58,7 +58,7 @@ router.post('/api/projects/:contract_id/baseline', async (event, user) => {
 
 router.post('/api/projects/:contract_id/baseline/rebase', async (event, user) => {
   requireRole('superadmin', 'admin', 'director')(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(
     await service.rebase(event.pathParameters!.contract_id!, body, user),
   );
@@ -72,7 +72,7 @@ router.get('/api/projects/:contract_id/status-reports', async (event, _user) => 
 
 router.post('/api/projects/:contract_id/status-reports', async (event, user) => {
   requireRole('superadmin', 'admin', 'lead')(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(
     await service.submitStatusReport(event.pathParameters!.contract_id!, body, user),
   );
@@ -106,7 +106,7 @@ router.post('/api/projects/:contract_id/backfill-bac-cost', async (event, user) 
 
 router.post('/api/projects/:contract_id/closeout', async (event, user) => {
   requireRole('superadmin', 'admin', 'director')(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(
     await service.closeout(event.pathParameters!.contract_id!, body.narrative || null, user),
   );

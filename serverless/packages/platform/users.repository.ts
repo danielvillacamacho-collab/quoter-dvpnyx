@@ -73,6 +73,22 @@ export function createUsersRepository(db: Pool): UsersRepository {
         return rows[0];
       } catch (err: unknown) {
         if ((err as { code?: string }).code === '23505') {
+          // Check if the conflict is with a soft-deleted user — reactivate it instead.
+          const { rows: existing } = await db.query(
+            `SELECT id FROM users WHERE LOWER(email)=$1 AND (deleted_at IS NOT NULL OR active=false) LIMIT 1`,
+            [data.email.toLowerCase()],
+          );
+          if (existing.length) {
+            const { rows: reactivated } = await db.query(
+              `UPDATE users
+                 SET name=$1, role=$2, function=$3, password_hash=$4,
+                     active=true, deleted_at=NULL, must_change_password=true, updated_at=NOW()
+               WHERE id=$5
+               RETURNING id, email, name, role, function, active, must_change_password, created_at`,
+              [data.name, data.role, data.function || null, hash, existing[0].id],
+            );
+            return reactivated[0];
+          }
           throw new Conflict('Email ya registrado');
         }
         throw err;

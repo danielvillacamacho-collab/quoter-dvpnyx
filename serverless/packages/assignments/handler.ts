@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated, error } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -54,17 +54,17 @@ router.get('/api/assignments/:id', async (event) => {
 });
 
 router.post('/api/assignments', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await service.create(body, user));
 });
 
 router.post('/api/assignments/validate', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.validate(body));
 });
 
 router.put('/api/assignments/:id', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.update(event.pathParameters!.id!, body, user));
 });
 
@@ -91,7 +91,7 @@ router.get('/api/assignments/:id/rate-history', async (event) => {
 
 router.post('/api/assignments/:id/rate-history', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { effective_date, client_rate, client_rate_currency, reason } = body;
 
   if (!effective_date) return error(400, { error: 'effective_date es requerido' });

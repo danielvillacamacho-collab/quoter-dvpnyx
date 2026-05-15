@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -99,7 +99,7 @@ router.get('/api/contracts/export.csv', async (event, _user) => {
 /* -------- CREATE FROM QUOTATION (admin+) -------- */
 router.post('/api/contracts/from-quotation/:qid', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await service.createFromQuotation(event.pathParameters!.qid!, body, user));
 });
 
@@ -111,14 +111,14 @@ router.get('/api/contracts/:id', async (event, _user) => {
 /* -------- CREATE (admin+) -------- */
 router.post('/api/contracts', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await service.create(body, user));
 });
 
 /* -------- UPDATE (admin+) -------- */
 router.put('/api/contracts/:id', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.update(event.pathParameters!.id!, body, user));
 });
 
@@ -132,13 +132,13 @@ router.delete('/api/contracts/:id', async (event, user) => {
 /* -------- STATUS TRANSITION (admin+) -------- */
 router.put('/api/contracts/:id/status', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.changeStatus(event.pathParameters!.id!, body.new_status, user));
 });
 
 /* -------- KICK-OFF -------- */
 router.post('/api/contracts/:id/kick-off', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const qs = event.queryStringParameters || {};
   const force = qs.force === '1' || body.force === true;
   const result = await service.kickOff(event.pathParameters!.id!, body.kick_off_date, user, force);

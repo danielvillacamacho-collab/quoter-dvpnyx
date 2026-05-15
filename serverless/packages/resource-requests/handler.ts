@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated, error } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -65,12 +65,12 @@ router.get('/api/resource-requests/:id/candidates', async (event) => {
 });
 
 router.post('/api/resource-requests', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return created(await service.create(body, user));
 });
 
 router.put('/api/resource-requests/:id', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   return ok(await service.update(event.pathParameters!.id!, body, user));
 });
 
@@ -147,7 +147,7 @@ async function sumHoursForWeek(conn: any, employeeId: string, weekMonday: string
 /* ── POST /api/rm/assignments/bulk ── */
 router.post('/api/rm/assignments/bulk', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { assignments, dry_run } = body;
   if (!Array.isArray(assignments) || !assignments.length) {
     return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Se requiere un array de assignments' }) };
@@ -200,7 +200,7 @@ router.post('/api/rm/assignments/bulk', async (event, user) => {
 /* ── POST /api/rm/assignments/bulk-extend ── */
 router.post('/api/rm/assignments/bulk-extend', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { employee_ids, contract_id, source_week, target_weeks, weekly_hours, overwrite_existing } = body;
   if (!Array.isArray(employee_ids) || !employee_ids.length) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'employee_ids requerido' }) };
   if (employee_ids.length > MAX_BULK_EMPLOYEES) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: `Máximo ${MAX_BULK_EMPLOYEES} empleados` }) };
@@ -260,7 +260,7 @@ router.post('/api/rm/assignments/bulk-extend', async (event, user) => {
 /* ── POST /api/rm/assignments/bulk-remove ── */
 router.post('/api/rm/assignments/bulk-remove', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { employee_ids, contract_id, week_from, week_to } = body;
   if (!Array.isArray(employee_ids) || !employee_ids.length || !contract_id || !week_from || !week_to) {
     return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'employee_ids, contract_id, week_from y week_to son requeridos' }) };
@@ -295,7 +295,7 @@ router.get('/api/rm/locks', async (event, _user) => {
 /* ── POST /api/rm/locks ── */
 router.post('/api/rm/locks', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { employee_id, week_starting, lock_reason } = body;
   if (!employee_id || !week_starting) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'employee_id y week_starting son requeridos' }) };
   const conn = await db.connect();
@@ -317,7 +317,7 @@ router.post('/api/rm/locks', async (event, user) => {
 /* ── DELETE /api/rm/locks/:id ── */
 router.delete('/api/rm/locks/:id', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const conn = await db.connect();
   try {
     await conn.query('BEGIN');

@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated } from '@shared/http/response';
 import { parsePagination } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -46,7 +46,7 @@ router.get('/api/internal-initiatives/:id', async (event, _user) => {
 
 router.post('/api/internal-initiatives', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
 
   const conn = await db.connect();
   try {
@@ -72,7 +72,7 @@ router.post('/api/internal-initiatives', async (event, user) => {
 });
 
 router.put('/api/internal-initiatives/:id', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const id = event.pathParameters!.id!;
 
   const before = await initiativesRepo.findById(id);
@@ -102,7 +102,7 @@ router.put('/api/internal-initiatives/:id', async (event, user) => {
 
 router.post('/api/internal-initiatives/:id/transitions', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const id = event.pathParameters!.id!;
 
   const conn = await db.connect();
@@ -131,7 +131,7 @@ router.post('/api/internal-initiatives/:id/transitions', async (event, user) => 
 router.delete('/api/internal-initiatives/:id', async (event, user) => {
   requireAdmin(user);
   const id = event.pathParameters!.id!;
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const reason = body.reason || null;
 
   const conn = await db.connect();
@@ -180,7 +180,7 @@ router.get('/api/novelties/:id', async (event, _user) => {
 });
 
 router.post('/api/novelties', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const novelty = await noveltiesRepo.create(body, user);
 
   await events.emit(db, {
@@ -195,7 +195,7 @@ router.post('/api/novelties', async (event, user) => {
 });
 
 router.put('/api/novelties/:id', async (event, user) => {
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const novelty = await noveltiesRepo.update(event.pathParameters!.id!, body, user);
 
   await events.emit(db, {
@@ -224,7 +224,7 @@ router.delete('/api/novelties/:id', async (event, user) => {
 });
 
 router.post('/api/novelties/:id/cancel', async (event, user) => {
-  const reason = (JSON.parse(event.body || '{}') as Record<string, unknown>).cancellation_reason as string | null;
+  const reason = (parseBody(event)).cancellation_reason as string | null;
   if (!reason || String(reason).trim().length < 5) {
     return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'cancellation_reason requerido (≥5 chars)' }) };
   }
@@ -480,7 +480,7 @@ router.get('/api/idle-time/aggregate', async (event, _user) => {
 
 router.post('/api/idle-time/calculate', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const period_yyyymm = normalizePeriod(body.period_yyyymm);
   if (!parseIdlePeriod(period_yyyymm)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'period_yyyymm requerido (YYYY-MM)' }) };
 
@@ -607,7 +607,7 @@ router.get('/api/idle-time/users/:employee_id/periods/:yyyymm', async (event, us
 
 router.post('/api/idle-time/finalize', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const period_yyyymm = normalizePeriod(body.period_yyyymm);
   if (!parseIdlePeriod(period_yyyymm)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'period_yyyymm requerido (YYYY-MM)' }) };
 
@@ -622,7 +622,7 @@ router.post('/api/idle-time/finalize', async (event, user) => {
 
 router.post('/api/idle-time/recalculate', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const period_yyyymm = normalizePeriod(body.period_yyyymm);
   if (!parseIdlePeriod(period_yyyymm)) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'period_yyyymm inválido' }) };
   if (!body.reason || String(body.reason).trim().length < 10) return { statusCode: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'reason requerido (≥10 chars)' }) };
@@ -685,7 +685,7 @@ router.get('/api/holidays', async (event, _user) => {
 
 router.post('/api/holidays', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const holiday = await holidaysRepo.create(body, user.id);
 
   await events.emit(db, {
@@ -701,7 +701,7 @@ router.post('/api/holidays', async (event, user) => {
 
 router.put('/api/holidays/:id', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const holiday = await holidaysRepo.update(event.pathParameters!.id!, body);
 
   await events.emit(db, {

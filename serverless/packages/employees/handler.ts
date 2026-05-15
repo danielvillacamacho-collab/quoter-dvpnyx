@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEvent } from 'aws-lambda';
-import { createRouter } from '@shared/http/router';
+import { createRouter, parseBody } from '@shared/http/router';
 import { ok, created, message, paginated, error } from '@shared/http/response';
 import { parsePagination, parseSort } from '@shared/http/pagination';
 import { withAuth } from '@shared/auth/middleware';
@@ -49,12 +49,12 @@ router.get('/api/employees/:id', async (event) => ok(await empSvc.getById(event.
 
 router.post('/api/employees', async (event, user) => {
   requireAdmin(user);
-  return created(await empSvc.create(JSON.parse(event.body || '{}'), user));
+  return created(await empSvc.create(parseBody(event), user));
 });
 
 router.put('/api/employees/:id', async (event, user) => {
   requireAdmin(user);
-  return ok(await empSvc.update(event.pathParameters!.id!, JSON.parse(event.body || '{}'), user));
+  return ok(await empSvc.update(event.pathParameters!.id!, parseBody(event), user));
 });
 
 router.delete('/api/employees/:id', async (event, user) => {
@@ -68,7 +68,7 @@ router.get('/api/employees/:id/skills', async (event) => ok({ data: await empSvc
 /* Individual skill assignment (matches monolith POST /:id/skills) */
 router.post('/api/employees/:id/skills', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const { skill_id, proficiency, years_experience, notes } = body;
   if (!skill_id) return error(400, { error: 'skill_id es requerido' });
 
@@ -98,7 +98,7 @@ router.post('/api/employees/:id/skills', async (event, user) => {
 /* Individual skill update (matches monolith PUT /:id/skills/:skillId) */
 router.put('/api/employees/:id/skills/:skillId', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const VALID_PROFICIENCY = ['beginner', 'intermediate', 'advanced', 'expert'];
   if (body.proficiency && !VALID_PROFICIENCY.includes(body.proficiency)) return error(400, { error: 'proficiency inválido' });
 
@@ -129,7 +129,7 @@ router.delete('/api/employees/:id/skills/:skillId', async (event, user) => {
 /* Bulk skill set (lambda-only helper, keep for any internal use) */
 router.put('/api/employees/:id/skills', async (event, user) => {
   requireAdmin(user);
-  const { skill_ids } = JSON.parse(event.body || '{}');
+  const { skill_ids } = parseBody(event);
   return ok({ data: await empSvc.setSkills(event.pathParameters!.id!, skill_ids || [], user) });
 });
 
@@ -147,12 +147,12 @@ router.get('/api/areas/:id', async (event) => {
 
 router.post('/api/areas', async (event, user) => {
   requireAdmin(user);
-  return created(await areaRepo.create(JSON.parse(event.body || '{}')));
+  return created(await areaRepo.create(parseBody(event)));
 });
 
 router.put('/api/areas/:id', async (event, user) => {
   requireAdmin(user);
-  const area = await areaRepo.update(event.pathParameters!.id!, JSON.parse(event.body || '{}'));
+  const area = await areaRepo.update(event.pathParameters!.id!, parseBody(event));
   if (!area) throw new NotFound('Área', event.pathParameters!.id!);
   return ok(area);
 });
@@ -196,12 +196,12 @@ router.get('/api/skills/:id', async (event) => {
 
 router.post('/api/skills', async (event, user) => {
   requireAdmin(user);
-  return created(await skillRepo.create(JSON.parse(event.body || '{}')));
+  return created(await skillRepo.create(parseBody(event)));
 });
 
 router.put('/api/skills/:id', async (event, user) => {
   requireAdmin(user);
-  const skill = await skillRepo.update(event.pathParameters!.id!, JSON.parse(event.body || '{}'));
+  const skill = await skillRepo.update(event.pathParameters!.id!, parseBody(event));
   if (!skill) throw new NotFound('Skill', event.pathParameters!.id!);
   return ok(skill);
 });
@@ -516,7 +516,7 @@ router.get('/api/employee-costs/export', async (event, user) => {
 
 router.post('/api/employee-costs/bulk/commit', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const period = String(body.period || '');
   if (!PERIOD_RE.test(period)) return error(400, { error: 'period inválido (formato YYYYMM)' });
   const items: Record<string, unknown>[] = Array.isArray(body.items) ? body.items : [];
@@ -585,7 +585,7 @@ router.post('/api/employee-costs/bulk/commit', async (event, user) => {
 
 router.post('/api/employee-costs/copy-from-previous', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const period = String(body.period || '');
   if (!PERIOD_RE.test(period)) return error(400, { error: 'period inválido (formato YYYYMM)' });
   const prev = previousPeriod(period);
@@ -708,7 +708,7 @@ function employeeActiveInPeriod(emp: Record<string, unknown>, targetPeriod: stri
 
 router.post('/api/employee-costs/project-to-future', async (event, user) => {
   requireAdmin(user);
-  const body = JSON.parse(event.body || '{}');
+  const body = parseBody(event);
   const dryRun = body.dry_run === true;
 
   const monthsAhead = Number(body.months_ahead);
