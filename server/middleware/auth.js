@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const pool = require('../database/pool');
 
 /**
  * Auth middleware — verifies JWT and populates req.user.
@@ -7,8 +8,14 @@ const jwt = require('jsonwebtoken');
  *   - req.user gains `function` and `squad_id` when present in the JWT.
  *   - Legacy role 'preventa' is accepted as equivalent to 'member' with
  *     function='preventa' during the migration grace period.
+ *
+ * FIX-AUTH-01: After verifying the JWT signature, we do a lightweight DB
+ * check (SELECT active, deleted_at) to ensure the user hasn't been
+ * deactivated or deleted since the token was issued. This closes the
+ * window where a valid token could still work after account removal.
+ * For a ~30-person team the extra indexed query per request is negligible.
  */
-const auth = (req, res, next) => {
+const auth = async (req, res, next) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'Token requerido' });
   try {
@@ -17,6 +24,14 @@ const auth = (req, res, next) => {
     if (decoded.role === 'preventa' && !decoded.function) {
       decoded.function = 'preventa';
       decoded.role = 'member';
+    }
+    // DB check: reject tokens for deactivated or deleted users.
+    const { rows } = await pool.query(
+      'SELECT active, deleted_at FROM users WHERE id=$1',
+      [decoded.id],
+    );
+    if (!rows.length || !rows[0].active || rows[0].deleted_at) {
+      return res.status(401).json({ error: 'Token inválido o expirado' });
     }
     req.user = decoded;
     next();

@@ -192,9 +192,14 @@ router.delete('/:id', async (req, res) => {
       });
     }
 
-    // Soft-delete preserves audit trail
+    // Soft-delete preserves audit trail.
+    // FIX-AUTH-03: also unlink the employee so deleted user_id doesn't linger.
     await pool.query(
       'UPDATE users SET deleted_at = NOW(), active = false WHERE id = $1',
+      [req.params.id],
+    );
+    await pool.query(
+      'UPDATE employees SET user_id = NULL, updated_at = NOW() WHERE user_id = $1',
       [req.params.id],
     );
     await pool.query(
