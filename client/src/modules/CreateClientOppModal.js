@@ -34,7 +34,7 @@ export default function CreateClientOppModal({ mode, clientId, clientName, onCre
 
   const isClientMode = mode === 'client';
 
-  const useExistingClient = async () => {
+  const handleUseExisting = async () => {
     if (!existingClient) return;
     setBusy(true);
     setErr('');
@@ -163,7 +163,7 @@ export default function CreateClientOppModal({ mode, clientId, clientName, onCre
               <button
                 type="button"
                 style={{ ...s.btn('var(--teal-mid)'), marginTop: 8, width: '100%' }}
-                onClick={useExistingClient}
+                onClick={handleUseExisting}
                 disabled={busy}
               >
                 {busy ? 'Vinculando…' : `Usar "${existingClient.name}" (cliente existente)`}
