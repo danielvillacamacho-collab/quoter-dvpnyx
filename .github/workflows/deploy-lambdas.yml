@@ -23,28 +23,68 @@ env:
   S3_PREFIX: lambdas
 
 jobs:
+  # ── 1. Detecta qué módulos desplegar ──────────────────────────────
+  detect:
+    name: Detectar cambios
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Construir matriz de módulos
+        id: build-matrix
+        run: |
+          ALL="assignments capacity clients contracts crm employees internal-ops opportunities platform project-health quotations reports resource-requests revenue time-tracking"
+
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+
+          # Obtener diff exacto del push (todos los commits incluidos, no solo HEAD~1)
+          if [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null || echo "")
+          else
+            CHANGED=""
+          fi
+
+          MODULES=""
+
+          if [ -n "$CHANGED" ]; then
+            # Si cambió shared o las dependencias → reconstruir todo
+            if echo "$CHANGED" | grep -qE "serverless/packages/shared/|serverless/package(-lock)?\.json"; then
+              echo "📦 Cambio en shared o dependencias — desplegando todos los módulos"
+              MODULES="$ALL"
+            else
+              # Solo los módulos que cambiaron
+              for mod in $ALL; do
+                if echo "$CHANGED" | grep -q "serverless/packages/$mod/"; then
+                  MODULES="$MODULES $mod"
+                fi
+              done
+              MODULES=$(echo $MODULES | xargs)
+            fi
+          fi
+
+          # Fallback: sin cambios detectados (workflow_dispatch, primer push, estado raro) → todos
+          if [ -z "$MODULES" ]; then
+            echo "⚠️ Sin módulos específicos detectados — desplegando todos como fallback"
+            MODULES="$ALL"
+          fi
+
+          echo "🔨 Módulos a desplegar: $MODULES"
+          JSON=$(echo "$MODULES" | tr ' ' '\n' | jq -R . | jq -sc '{"module":.}')
+          echo "matrix=$JSON" >> $GITHUB_OUTPUT
+
+  # ── 2. Compila y despliega cada módulo en paralelo ─────────────────
   build-and-deploy:
     name: "${{ matrix.module }}"
+    needs: detect
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      matrix:
-        module:
-          - assignments
-          - capacity
-          - clients
-          - contracts
-          - crm
-          - employees
-          - internal-ops
-          - opportunities
-          - platform
-          - project-health
-          - quotations
-          - reports
-          - resource-requests
-          - revenue
-          - time-tracking
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
     permissions:
       id-token: write
       contents: read
