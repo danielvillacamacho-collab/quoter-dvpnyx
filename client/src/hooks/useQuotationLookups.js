@@ -48,7 +48,7 @@ export default function useQuotationLookups(clientId) {
         try {
           const existing = await apiGet(`/api/clients/${mountedClientId}`);
           if (existing && existing.id) loadedClients = [existing, ...loadedClients];
-        } catch (_) { /* best-effort: skip if fetch fails */ }
+        } catch { /* best-effort: skip if fetch fails */ }
       }
       setClients(loadedClients);
       setCommercials(Array.isArray(commercialsRes) ? commercialsRes : []);
