@@ -97,7 +97,7 @@ export function createAuthService(db: Pool): AuthService {
       if (!email || !password) throw new BadRequest('Email y contrasena requeridos');
 
       const { rows } = await db.query(
-        'SELECT * FROM users WHERE email=$1 AND active=true',
+        'SELECT * FROM users WHERE email=$1 AND active=true AND deleted_at IS NULL',
         [email.toLowerCase()],
       );
       if (!rows.length) throw new Unauthorized('Credenciales invalidas');
@@ -148,16 +148,28 @@ export function createAuthService(db: Pool): AuthService {
         );
 
         if (employee.rows.length) {
-          const displayName = identity.name || `${employee.rows[0].first_name} ${employee.rows[0].last_name}`.trim();
-          const created = await db.query(
-            `INSERT INTO users (email, name, role, active, google_id, must_change_password)
-             VALUES ($1, $2, 'staff', true, $3, false)
-             RETURNING *`,
-            [identity.email, displayName, identity.googleId],
-          );
-          const createdUser = created.rows[0] as Record<string, unknown>;
-          user = createdUser;
-          await db.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [createdUser.id, employee.rows[0].id]);
+          // FIX-AUTH-04: wrap INSERT user + UPDATE employee in a transaction
+          // so a failed link doesn't leave an orphan user row.
+          const conn = await db.connect();
+          try {
+            await conn.query('BEGIN');
+            const displayName = identity.name || `${employee.rows[0].first_name} ${employee.rows[0].last_name}`.trim();
+            const created = await conn.query(
+              `INSERT INTO users (email, name, role, active, google_id, must_change_password)
+               VALUES ($1, $2, 'staff', true, $3, false)
+               RETURNING *`,
+              [identity.email, displayName, identity.googleId],
+            );
+            const createdUser = created.rows[0] as Record<string, unknown>;
+            await conn.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [createdUser.id, employee.rows[0].id]);
+            await conn.query('COMMIT');
+            user = createdUser;
+          } catch (err) {
+            await conn.query('ROLLBACK').catch(() => {});
+            throw err;
+          } finally {
+            conn.release();
+          }
         }
       }
 
@@ -216,6 +228,12 @@ export function createAuthService(db: Pool): AuthService {
         );
         if (match.length) {
           await db.query('UPDATE employees SET user_id=$1, updated_at=NOW() WHERE id=$2', [row.id, match[0].id]);
+          // FIX-AUTH-06: audit trail for automatic user↔employee link.
+          await db.query(
+            `INSERT INTO audit_log (user_id, action, entity, entity_id, details)
+               VALUES ($1, 'auto_link_employee', 'employee', $2, $3)`,
+            [row.id, match[0].id, JSON.stringify({ user_email: row.email })],
+          ).catch(() => undefined);
           empRows = match;
         }
       }

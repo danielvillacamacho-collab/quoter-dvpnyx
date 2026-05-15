@@ -150,6 +150,11 @@ export function createUsersRepository(db: Pool): UsersRepository {
         'UPDATE users SET deleted_at = NOW(), active = false WHERE id = $1',
         [id],
       );
+      // FIX-AUTH-03: unlink employee so the deleted user_id doesn't linger.
+      await db.query(
+        'UPDATE employees SET user_id = NULL, updated_at = NOW() WHERE user_id = $1',
+        [id],
+      );
     },
 
     async resetPassword(id) {
