@@ -73,6 +73,7 @@ const EMPTY = {
   // SPEC-CRM-00 v1.1 PR2 — defaults para revenue model + funding + flags.
   revenue_type: 'one_time',
   one_time_amount_usd: '', mrr_usd: '', contract_length_months: '',
+  amount_currency: 'USD',
   champion_identified: false, economic_buyer_identified: false,
   funding_source: 'client_direct', funding_amount_usd: '',
   drive_url: '',
@@ -128,7 +129,7 @@ const BRIEF_SECTIONS = [
 
 const fmtUsd = (n) => `USD ${Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
-function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) {
+function OpportunityForm({ initial, clients, users, currencies, onSave, onCancel, saving }) {
   const [form, setForm] = useState({ ...EMPTY, ...(initial || {}) });
   const [err, setErr] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -229,13 +230,23 @@ function OpportunityForm({ initial, clients, users, onSave, onCancel, saving }) 
 
       {/* Monto estimado — valoración del pipeline. Se refina con la cotización final. */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'end' }}>
-        <div style={{ flex: 1, minWidth: 200 }}>
-          <label style={s.label}>Monto estimado (USD)</label>
+        <div style={{ minWidth: 110 }}>
+          <label style={s.label}>Moneda</label>
+          <FilterableSelect
+            value={form.amount_currency || 'USD'}
+            onChange={(e) => set('amount_currency', e.target.value || 'USD')}
+            aria-label="Moneda del monto estimado"
+            inputStyle={{ ...s.input, padding: '8px 10px' }}
+            options={currencies.map((c) => ({ id: c, label: c }))}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <label style={s.label}>Monto estimado</label>
           <NumberInput
             style={s.input}
             value={form.one_time_amount_usd}
             onChange={(e) => set('one_time_amount_usd', e.target.value)}
-            aria-label="Monto estimado USD"
+            aria-label="Monto estimado"
             placeholder="50,000"
           />
         </div>
@@ -534,6 +545,7 @@ export default function Opportunities() {
   const [dealTypeFilter, setDealTypeFilter] = useState('');
   const [clients, setClients] = useState([]);
   const [users, setUsers] = useState([]);
+  const [currencies, setCurrencies] = useState(['USD']);
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -579,9 +591,22 @@ export default function Opportunities() {
     }
   }, []);
 
+  const loadCurrencies = useCallback(async () => {
+    try {
+      const now = new Date();
+      const yyyymm = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const r = await apiGet(`/api/admin/exchange-rates?from=${yyyymm}&to=${yyyymm}`);
+      const fromApi = Array.isArray(r?.currencies) ? r.currencies : [];
+      setCurrencies(['USD', ...fromApi.filter((c) => c !== 'USD')]);
+    } catch {
+      setCurrencies(['USD']);
+    }
+  }, []);
+
   useEffect(() => { load(1); }, [load]);
   useEffect(() => { loadClients(); }, [loadClients]);
   useEffect(() => { loadUsers(); }, [loadUsers]);
+  useEffect(() => { loadCurrencies(); }, [loadCurrencies]);
 
   const onSave = async (form) => {
     setSaving(true);
@@ -614,6 +639,8 @@ export default function Opportunities() {
         context_pains: form.context_pains || null,
         context_requirements: form.context_requirements || null,
         context_politics: form.context_politics || null,
+        // Moneda del monto estimado
+        amount_currency: form.amount_currency || 'USD',
       };
       if (editing?.id) {
         await apiPut(`/api/opportunities/${editing.id}`, payload);
@@ -822,6 +849,7 @@ export default function Opportunities() {
               initial={editing}
               clients={clients}
               users={users}
+              currencies={currencies}
               saving={saving}
               onCancel={() => { setShowForm(false); setEditing(null); }}
               onSave={onSave}

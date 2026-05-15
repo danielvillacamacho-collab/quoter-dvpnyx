@@ -113,6 +113,8 @@ const EDITABLE_FIELDS = [
   'deal_type', 'co_owner_id', 'contract_type',
   // Opportunity Brief — insumo estructurado para preventa (5 secciones de texto libre)
   'context_client', 'context_scope', 'context_pains', 'context_requirements', 'context_politics',
+  // Moneda del monto estimado
+  'amount_currency',
 ];
 
 /* -------- LIST -------- */
@@ -452,6 +454,8 @@ router.post('/', async (req, res) => {
     contract_type: contractTypeIn,
     // Opportunity Brief
     context_client, context_scope, context_pains, context_requirements, context_politics,
+    // Moneda del monto estimado
+    amount_currency: amountCurrencyIn,
   } = req.body || {};
 
   if (!client_id) return res.status(400).json({ error: 'client_id es requerido' });
@@ -488,6 +492,9 @@ router.post('/', async (req, res) => {
   if (contract_type && !VALID_CONTRACT_TYPES_CREATE.includes(contract_type)) {
     return res.status(400).json({ error: `contract_type inválido: ${contract_type}` });
   }
+  const amount_currency = /^[A-Z]{3}$/.test(String(amountCurrencyIn || '').toUpperCase())
+    ? String(amountCurrencyIn).toUpperCase()
+    : 'USD';
 
   try {
     // Verify the client exists and is not soft-deleted. We also pull the
@@ -555,10 +562,11 @@ router.post('/', async (req, res) => {
           champion_identified, economic_buyer_identified,
           funding_source, funding_amount_usd, drive_url, booking_amount_usd,
           deal_type, co_owner_id, contract_type,
-          context_client, context_scope, context_pains, context_requirements, context_politics)
+          context_client, context_scope, context_pains, context_requirements, context_politics,
+          amount_currency)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
                $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,
-               $26,$27,$28,$29,$30)
+               $26,$27,$28,$29,$30,$31)
        RETURNING *`,
       [
         client_id,
@@ -591,6 +599,7 @@ router.post('/', async (req, res) => {
         context_pains || null,
         context_requirements || null,
         context_politics || null,
+        amount_currency,
       ],
     );
     const opp = rows[0];
@@ -709,6 +718,7 @@ router.put('/:id', async (req, res) => {
           context_pains             = COALESCE($23, context_pains),
           context_requirements      = COALESCE($24, context_requirements),
           context_politics          = COALESCE($25, context_politics),
+          amount_currency           = COALESCE($27, amount_currency),
           updated_at                = NOW()
         WHERE id=$9 AND deleted_at IS NULL
         RETURNING *`,
@@ -739,6 +749,7 @@ router.put('/:id', async (req, res) => {
         body.context_requirements ?? null,
         body.context_politics ?? null,
         body.contract_type ?? null,
+        body.amount_currency ? String(body.amount_currency).toUpperCase() : null,
       ],
     );
     const after = rows[0];
