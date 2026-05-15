@@ -9,6 +9,12 @@ client/build/
 letsencrypt/
 deploy-history.log
 .claude/
+# Lambda build artifacts (generados por CI, no versionar)
+serverless/dist/
+serverless/packages/infra/src/*.js
+serverless/packages/infra/src/*.js.map
+serverless/packages/infra/src/*.zip
+
 # Test coverage artifacts
 coverage/
 .nyc_output/

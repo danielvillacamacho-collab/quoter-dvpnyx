@@ -38,6 +38,7 @@ router.get('/api/employees/lookup', async (event) => {
   return ok({ data: rows });
 });
 
+// ci-test-2026-05-14
 router.get('/api/employees', async (event) => {
   const qs = event.queryStringParameters || {};
   const { page, limit, offset } = parsePagination(qs, { maxLimit: 1000 });
