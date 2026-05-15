@@ -117,7 +117,16 @@ jobs:
             --format=cjs \
             --sourcemap \
             --tsconfig=tsconfig.json \
+            --external:pdfkit \
             --outfile="$WORK/index.js"
+
+          # pdfkit lee archivos .afm de fuentes desde disco — no se puede bundlear.
+          # Si el handler lo usa, copiamos node_modules/pdfkit al ZIP.
+          if grep -q "pdfkit" "packages/$MOD/handler.ts" 2>/dev/null; then
+            mkdir -p "$WORK/node_modules"
+            cp -r node_modules/pdfkit "$WORK/node_modules/"
+            echo "📦 pdfkit copiado al bundle de $MOD"
+          fi
 
           (cd "$WORK" && zip -qr "$ZIP" .)
           echo "ZIP_PATH=$ZIP" >> $GITHUB_ENV
