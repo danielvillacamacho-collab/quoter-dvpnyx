@@ -122,24 +122,23 @@ describe('SPEC-CRM-00 v1.1 PR4: RBAC scoping', () => {
     expect(sql).not.toMatch(/account_owner_id/);
   });
 
-  it('lead only sees opportunities from their squad', async () => {
+  it('lead sees all opportunities (no squad filter after RBAC simplification)', async () => {
     mockCurrentUser = { id: 'u2', role: 'lead', squad_id: 's7' };
     queryQueue.push({ rows: [{ total: 0 }] });
     queryQueue.push({ rows: [] });
     await client.call('GET', '/api/opportunities');
     const sql = issuedQueries[0].sql;
-    expect(sql).toMatch(/o\.squad_id =/);
-    expect(issuedQueries[0].params).toContain('s7');
+    expect(sql).not.toMatch(/o\.squad_id =/);
   });
 
-  it('member only sees own opportunities (account_owner or presales_lead)', async () => {
+  it('member sees all opportunities (no owner filter after RBAC simplification)', async () => {
     mockCurrentUser = { id: 'u3', role: 'member' };
     queryQueue.push({ rows: [{ total: 0 }] });
     queryQueue.push({ rows: [] });
     await client.call('GET', '/api/opportunities');
     const sql = issuedQueries[0].sql;
-    expect(sql).toMatch(/account_owner_id/);
-    expect(sql).toMatch(/presales_lead_id/);
+    expect(sql).not.toMatch(/AND.*account_owner_id.*u3/);
+    expect(sql).not.toMatch(/AND.*presales_lead_id.*u3/);
   });
 
   it('external role gets 403 on GET /', async () => {
