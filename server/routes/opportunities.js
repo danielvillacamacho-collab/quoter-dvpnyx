@@ -156,16 +156,9 @@ router.get('/', async (req, res) => {
       wheres.push(`o.contract_type = ${add(req.query.contract_type)}`);
     }
 
-    // SPEC-CRM-00 v1.1 PR4 — RBAC scoping.
+    // RBAC scoping: externos no tienen acceso; todos los demás ven todas las oportunidades.
     if (req.user.role === 'external') {
       return res.status(403).json({ error: 'Acceso restringido para usuarios externos' });
-    }
-    if (!SEE_ALL_ROLES.has(req.user.role)) {
-      if (req.user.role === 'lead' && req.user.squad_id) {
-        wheres.push(`o.squad_id = ${add(req.user.squad_id)}`);
-      } else {
-        wheres.push(`(o.account_owner_id = ${add(req.user.id)} OR o.presales_lead_id = ${add(req.user.id)})`);
-      }
     }
 
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
@@ -224,16 +217,9 @@ router.get('/kanban', async (req, res) => {
     if (req.query.to_expected_close)   wheres.push(`o.expected_close_date <= ${add(req.query.to_expected_close)}`);
     if (req.query.min_amount_usd) wheres.push(`o.booking_amount_usd >= ${add(Number(req.query.min_amount_usd) || 0)}`);
 
-    // SPEC-CRM-00 v1.1 PR4 — RBAC scoping (same logic as GET /).
+    // RBAC scoping: externos no tienen acceso; todos los demás ven todas las oportunidades.
     if (req.user.role === 'external') {
       return res.status(403).json({ error: 'Acceso restringido para usuarios externos' });
-    }
-    if (!SEE_ALL_ROLES.has(req.user.role)) {
-      if (req.user.role === 'lead' && req.user.squad_id) {
-        wheres.push(`o.squad_id = ${add(req.user.squad_id)}`);
-      } else {
-        wheres.push(`(o.account_owner_id = ${add(req.user.id)} OR o.presales_lead_id = ${add(req.user.id)})`);
-      }
     }
 
     const where = wheres.length ? 'WHERE ' + wheres.join(' AND ') : '';
